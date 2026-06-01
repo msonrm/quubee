@@ -73,3 +73,12 @@ Phase 3 ローダ disk + テスト COM の再生成: `bash tools/dos_loader/buil
 - 開発者向けガイド: [CLAUDE.md](CLAUDE.md)
 - 構成詳細: [docs/structure.md](docs/structure.md)
 - 進捗: [CHANGELOG.md](CHANGELOG.md) / [TODO.md](TODO.md)
+
+## ライセンス
+
+- **配布物（`np2kai_core.wasm` を含むアプリ全体）: GNU GPL v2 or later**（[LICENSE](LICENSE)）。
+  同梱する DOSBox 由来の FPU エミュレータ（`fpemul_dosbox*.c`, GPLv2-or-later）が結合物全体に GPL を及ぼすため。
+- **QuuBee 独自のソース**（`native/` の `qb_*`/`bridge`/`dos_*`、`web/player/`、`tools/`、`emscripten/`、`docs/` 等、
+  msonrm 著作の部分）は **`MIT OR GPL-2.0-or-later` のデュアル**（[LICENSE-MIT](LICENSE-MIT)）。FPU を除けば MIT 部分のみで再利用可。
+- 第三者コンポーネントの内訳（NP2kai=MIT / i386c=BSD / DOSBox FPU=GPLv2 / font.bmp=修正BSD / FreeDOS=GPL）は [CREDITS.md](CREDITS.md)。
+- 「著作権クリーン」は NEC BIOS / MS-DOS 等の proprietary を**同梱しない**意味で、GPL（オープンソース）は公開ホスティングと両立する。

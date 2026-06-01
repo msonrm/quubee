@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: MIT OR GPL-2.0-or-later */
 /*
  * Phase 3 ローダ — INT 21h ハンドラ実装 (T1-T5 範囲、~35 fn)。
  *

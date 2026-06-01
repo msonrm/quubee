@@ -1,8 +1,27 @@
 # CREDITS / サードパーティ ライセンス表記
 
-QB が同梱・配布する第三者アセットおよびコンポーネントの著作権表示。
-（QB 自身が再配布・ホスティングするのは下記。ゲーム/ソフト本体はユーザーが用意するフリーソフトであり、
-QB は配布しない。）
+QuuBee が同梱・配布する第三者アセットおよびコンポーネントの著作権表示。
+（QuuBee 自身が再配布・ホスティングするのは下記。ゲーム/ソフト本体はユーザーが用意するフリーソフトであり、
+QuuBee は配布しない。）
+
+---
+
+## プロジェクト全体のライセンス
+
+- **配布物（`np2kai_core.wasm` を含むアプリ全体）: GNU GPL v2 or later**（`LICENSE`）。
+  理由は下記の DOSBox 由来 FPU エミュレータ（GPLv2-or-later）が結合物全体に GPL を及ぼすため。
+- **QuuBee 独自のソース（msonrm 著作の部分）: `MIT OR GPL-2.0-or-later` のデュアル**（`LICENSE-MIT`）。
+- 「著作権クリーン」＝ NEC BIOS / MS-DOS 等 proprietary を**同梱しない**意味であり、GPL（オープンソース）
+  は公開ホスティングと両立する（ソース公開済み＝GPL 遵守の条件を満たす）。
+
+| コンポーネント | ライセンス |
+|---|---|
+| QuuBee 独自コード（`native/` の `qb_*`/`bridge`/`dos_*`、`web/player/`、`tools/`、`docs/` 等） | MIT OR GPL-2.0-or-later |
+| NP2kai ラッパ本体（AZO234） | MIT |
+| i386c CPU コア（NONAKA Kimihiro 他） | BSD（2条項） |
+| **FPU `fpemul_dosbox*.c`（DOSBox Team）** | **GPLv2 or later**（← 全体を GPL 化する要因） |
+| `web/assets/font.bmp` | 修正 BSD |
+| `web/assets/boot.d88`（FreeDOS(98)・未使用同梱） | GPL |
 
 ---
 
@@ -44,14 +63,33 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ## エミュレータコア — NP2kai (`core/np2kai`, git submodule)
 
-AZO234 / Neko Project II kai。**MIT License**（全文は `core/np2kai` 内のライセンスファイルを参照）。
-QB がビルドする WebAssembly には NP2kai が静的リンクされる。NP2kai が内蔵する各コンポーネント
-（fmgen / opngen、mamebsd、VERMOUTH 等）のライセンスは `core/np2kai` 配下の各ディレクトリを参照。
+AZO234 / Neko Project II kai。ラッパ本体の `LICENSE` は **MIT**（Copyright (c) 2017 AZO）。
+QuuBee がビルドする WebAssembly には NP2kai が静的リンクされる。NP2kai は複数ライセンスの集合体で、
+QuuBee のビルドに含まれる主なものは:
+
+- **i386c CPU コア**（`i386c/`, Copyright NONAKA Kimihiro 他）— **修正 BSD**（permissive）。
+- **FPU エミュレータ**（`i386c/ia32/instructions/fpu/fpemul_dosbox.c` / `fpemul_dosbox2.c`,
+  Copyright (C) 2002–2015 The DOSBox Team）— **GNU GPL v2 or later**。QuuBee は `SUPPORT_FPU_DOSBOX2`
+  でこれをコンパイルするため、**配布される結合バイナリ全体が GPL v2-or-later となる**（GPL の伝播）。
+- 音源（fmgen / opngen）、mamebsd、VERMOUTH 等のライセンスは `core/np2kai` 配下の各ディレクトリを参照。
+
+各ファイルの著作権ヘッダは改変・削除せず温存している。
 
 ---
 
-## QB 自身
+## FreeDOS — `web/assets/boot.d88`
 
-QB のブリッジ層・フロントエンド・ツール群（`native/`, `web/`, `tools/`, `emscripten/`）は本リポジトリの
-ライセンスに従う。BIOS は NEC の ROM を使用せず NP2kai の合成 BIOS を用い、DOS は MS-DOS を使用せず
-INT 21h を独自に HLE 実装している（著作権クリーンな構成）。
+FreeDOS(98) の 2HD フロッピーイメージ（**GPL**、再配布可）。現状はブートが完走しないため**未使用**だが
+開発の名残として同梱。FreeDOS は自由ソフトウェアで再配布に問題はない（帰属: The FreeDOS Project）。
+不要なら削除可（`.gitignore` に追加すればよい）。
+
+---
+
+## QuuBee 自身
+
+QuuBee のブリッジ層・フロントエンド・ツール群（`native/` の `qb_*`/`bridge`/`dos_*`、`web/player/`、
+`web/index.html`、`tools/`、`emscripten/`、`docs/` 等、msonrm 著作の部分）は
+**`MIT OR GPL-2.0-or-later` のデュアルライセンス**（`LICENSE-MIT`）。FPU を除けば MIT 部分のみで再利用できる。
+ただし上記 DOSBox FPU を含む**配布バイナリ全体は GPL v2-or-later**（`LICENSE`）。
+BIOS は NEC の ROM を使用せず NP2kai の合成 BIOS を用い、DOS は MS-DOS を使用せず INT 21h を独自に
+HLE 実装している（proprietary 非同梱という意味で「著作権クリーン」）。

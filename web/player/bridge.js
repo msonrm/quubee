@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR GPL-2.0-or-later
 const canvas = document.getElementById('screen');
 const ctx    = canvas.getContext('2d');
 // ドライブ UI 要素
