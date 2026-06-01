@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
-<title>QB — PC-98 Player</title>
+<title>QuuBee — PC-98 フリーソフトプレイヤー</title>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body {
@@ -100,20 +100,8 @@ body {
 <body>
 <canvas id="screen" width="640" height="400"></canvas>
 <div id="drives">
-    <div class="drive" data-drive="0" data-kind="fdd" title="A: FDD (新規ブート、リセットあり)">
-        <span class="label">A:</span><span class="name">…</span>
-    </div>
-    <div class="drive" data-drive="1" data-kind="fdd" title="B: FDD (ゲーム中の差し替え用、リセットなし)">
-        <span class="label">B:</span><span class="name">(empty)</span>
-    </div>
-    <div class="drive" data-drive="0" data-kind="hdd" title="C: HDD (HDI/THD/NHD/HDD raw、挿入後リセット)">
-        <span class="label">C:</span><span class="name">(empty)</span>
-    </div>
-    <div class="drive" data-drive="1" data-kind="hdd" title="D: HDD (HDI/THD/NHD/HDD raw、挿入後リセット)">
-        <span class="label">D:</span><span class="name">(empty)</span>
-    </div>
-    <div class="drive run-slot" data-drive="0" data-kind="run" title="アーカイブ (.lzh/.zip) を D&D かクリックで投入し、Run で起動">
-        <span class="label">Run</span><span class="name">(empty)</span>
+    <div class="drive run-slot" data-drive="0" data-kind="run" title="フリーソフト書庫 (.lzh/.zip) を D&D かクリックで投入し、Run で起動 (ブートではなく展開してファイル実行)">
+        <span class="label">書庫</span><span class="name">(.lzh / .zip をドロップ)</span>
     </div>
 </div>
 <div id="run-config" hidden>
@@ -124,8 +112,8 @@ body {
     <button id="stop-button" hidden>■ Stop</button>
     <span id="run-status"></span>
 </div>
-<div id="hint">画面クリックでマウスキャプチャ (ESC で解除) ・ 各スロットへ D&D かクリックでディスク挿入</div>
-<input id="file-input" type="file" accept=".d88,.d98,.88d,.98d,.fdi,.hdm,.xdf,.dup,.2hd,.img,.fdd,.tfd,.hdi,.thd,.nhd,.hdd,.lzh,.zip,.com,.exe">
+<div id="hint">お手元のフリーソフト書庫 (.lzh / .zip) を上の枠へ D&D かクリックで投入 → Run で起動。ゲームは同梱していません。 ／ 画面クリックでマウスキャプチャ (ESC で解除)</div>
+<input id="file-input" type="file" accept=".lzh,.zip,.com,.exe">
 
 <script src="np2kai_core.js"></script>
 <script src="player/archive.js"></script>

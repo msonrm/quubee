@@ -1,5 +1,18 @@
 # CHANGELOG
 
+## [MVP 公開準備 — ディスクイメージ・ブート UI を撤去 (コンセプト準拠) + .zip を書庫展開化 + HELLO QuuBee] — 2026-06-01
+
+コンセプト（ユーザーのディスクイメージから *ブート* させない／窓口は書庫一本）に沿って公開 UI を調整:
+- **A/B/C/D ドライブスロットを UI から撤去**（`web/index.html`）。残すのは「書庫」(Run) スロットのみ。
+  内部のローダ用 `loader.d88` ブートは保持（concept「内部利用は OK・窓口だけ絞る、コアはそのまま」）。
+- **`.zip` を「中の .fdi を A: にブート」→「書庫として `/run/` へ展開 → 中の EXE/COM を実行」へ変更**。
+  `extractLzhToFs` を `extractArchiveToFs` に汎用化（`.zip` は `parseZip` 経由）。**ディスクイメージのブート経路を
+  公開 UI から完全排除**。ディスクイメージの「コンテナ展開」（FAT12 リーダ）は未実装＝当面 `.lzh`/`.zip` のみ受付
+  （concept「任意・将来」。ドロップされたディスクイメージは「未対応」表示）。
+- `file-input` の accept を `.lzh,.zip,.com,.exe` に限定。
+- 起動スプラッシュ表示を **「HELLO NP2KAI」→「HELLO QuuBee」**（`boot.asm`、同字数で中央位置不変、nasm 再アセンブル →
+  `np2kai_boot.d88` 再生成）。ディスクラベルも `QUUBEE BOOT`。`index.html` の `<title>`/hint も QuuBee・書庫案内に更新。
+
 ## [プロジェクト改称 QB → QuuBee + 公開は新リポジトリで (書庫ローカル限定の継続)] — 2026-06-01
 
 **改称:** プロダクト正式名称を **QuuBee**（読み「きゅーびー」）に確定。由来は **QB = Q + Bee（蜂 = はち）

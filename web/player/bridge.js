@@ -331,12 +331,10 @@ NP2KaiModule().then(async function (M) {
         const entry = gamesDb.games[file.name];
         const ext = (file.name.split('.').pop() || '').toLowerCase();
         // 未登録ファイルは拡張子で kind を推定:
-        //   .lzh = Phase 3 ローダ経路 (展開 → MZ/COM 自動判定)
-        //   .zip = Phase 2 FDD 経路 (中の .fdi を A:)
-        //   .com = Phase 3 ローダで直接実行 (T1 テスト用)
-        //   .exe = Phase 3 ローダ MZ 経路 (T3 テスト用)
+        //   .lzh / .zip = 書庫として /run/ へ全展開 → 中の EXE/COM を実行 (ブートしない)
+        //   .com / .exe = ローダで直接実行
         const kind = entry?.kind || (ext === 'lzh' ? 'lzh'
-                                  :  ext === 'zip' ? 'zip-fdi'
+                                  :  ext === 'zip' ? 'zip'
                                   :  ext === 'com' ? 'com'
                                   :  ext === 'exe' ? 'exe'
                                   : 'unknown');
@@ -376,9 +374,12 @@ NP2KaiModule().then(async function (M) {
         }
     }
 
-    async function extractLzhToFs(file) {
+    async function extractArchiveToFs(file) {
         const bytes = new Uint8Array(await file.arrayBuffer());
-        const entries = qbArchive.parseLzh(bytes);
+        // .zip は deflate 展開、それ以外 (.lzh) は LZH デコーダ。どちらもブートせず /run/ へ展開する。
+        const entries = /\.zip$/i.test(file.name)
+            ? await qbArchive.parseZip(bytes)
+            : qbArchive.parseLzh(bytes);
         clearRunDir();
         // 原ケースのまま /run 配下へ展開し、LZH 内のサブディレクトリも再現する。
         // DOS は大小を区別しないので、case の吸収は C 側 dos_path_to_host の
@@ -489,8 +490,8 @@ NP2KaiModule().then(async function (M) {
                 const bytes = new Uint8Array(await runQueued.file.arrayBuffer());
                 await stageAndRunImage(bytes, cmdline, runQueued.file.name,
                                        runQueued.kind === 'exe');
-            } else if (runQueued.kind === 'lzh') {
-                const entries = await extractLzhToFs(runQueued.file);
+            } else if (runQueued.kind === 'lzh' || runQueued.kind === 'zip') {
+                const entries = await extractArchiveToFs(runQueued.file);
                 // entry を決定: DB 指定 > 拡張子で .exe/.com を自動選択
                 let entryName = runQueued.entry;
                 if (!entryName) {
@@ -498,24 +499,14 @@ NP2KaiModule().then(async function (M) {
                               || entries.find(e => /\.com$/i.test(e.name));
                     entryName = exec ? exec.name : null;
                 }
-                if (!entryName) throw new Error('LZH 内に .exe/.com が見つからない');
+                if (!entryName) throw new Error('書庫内に .exe/.com が見つからない');
                 const entry = entries.find(e => e.name.toLowerCase() === entryName.toLowerCase());
-                if (!entry) throw new Error(`entry "${entryName}" が LZH 内にない`);
+                if (!entry) throw new Error(`entry "${entryName}" が書庫内にない`);
                 const isExe = /\.exe$/i.test(entryName);
                 const totalKb = (entries.reduce((a, e) => a + e.data.length, 0) / 1024) | 0;
                 runStatusEl.textContent =
                     `展開完了: ${entries.length} files / ${totalKb} KB → /run/。${entryName} を起動…`;
                 await stageAndRunImage(entry.data, cmdline, entryName, isExe);
-            } else if (runQueued.kind === 'zip-fdi') {
-                // ZIP 内の .fdi を抜いて A: に挿入 (既存 Phase 2 経路を再利用)
-                const bytes = new Uint8Array(await runQueued.file.arrayBuffer());
-                const entries = await qbArchive.parseZip(bytes);
-                const fdi = entries.find(e => /\.fdi$/i.test(e.name));
-                if (!fdi) throw new Error('ZIP 内に .fdi が見つからない');
-                const fdiFile = new File([fdi.data], fdi.name);
-                runStatusEl.textContent = `loading ${fdi.name} → A:…`;
-                await loadDiskFromBlob(fdiFile, 'fdd', 0);
-                runStatusEl.textContent = `${fdi.name} を A: に挿入完了 (${(fdi.data.length/1024)|0} KB)`;
             } else {
                 runStatusEl.textContent = `(未対応 kind: ${runQueued.kind})`;
             }
@@ -523,7 +514,7 @@ NP2KaiModule().then(async function (M) {
             runStatusEl.textContent = `ERROR: ${e.message}`;
             console.error(e);
         } finally {
-            // polling を開始しなかった経路 (zip-fdi / unknown / stage 前の throw) では
+            // polling を開始しなかった経路 (unknown / stage 前の throw) では
             // ここで Run ボタンを戻す。polling 中はその onExit (stageAndRunImage) が
             // 戻すので、currentPoll が立っている間は触らない。
             if (currentPoll === null) {

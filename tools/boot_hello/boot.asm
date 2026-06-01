@@ -1,4 +1,4 @@
-; PC-98 2HD boot sector: "HELLO NP2KAI" を text VRAM に書いてループ
+; PC-98 2HD boot sector: "HELLO QuuBee" を text VRAM に書いてループ
 ; assemble: nasm -f bin boot.asm -o boot.bin
 
 BITS 16
@@ -62,7 +62,7 @@ start:
     hlt
     jmp .halt
 
-msg:     db "HELLO NP2KAI"
+msg:     db "HELLO QuuBee"
 msg_len  equ $ - msg
 
 ; 1024バイトにパディング (N=3 sector = 1024 bytes)

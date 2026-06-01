@@ -18,7 +18,7 @@ def make_d88(boot_bin_path, output_path):
     N_CODE       = 3
 
     # d88 header
-    disk_name = b'NP2KAI BOOT\x00\x00\x00\x00\x00\x00'  # 17 bytes
+    disk_name = b'QUUBEE BOOT\x00\x00\x00\x00\x00\x00'  # 17 bytes
     reserved  = b'\x00' * 9
     wp        = b'\x00'
     disk_type = b'\x20'  # 2HD
