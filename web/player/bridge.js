@@ -110,12 +110,14 @@ async function loadDisk(M, url, fsPath) {
     return true;
 }
 
-// emscripten の stdout/stderr ルーティング。自前ローダ/INT21h の逐次ログ ([dos_loader]/[int21h…]) は
-// 既定で抑制する (Chrome が stderr を console.error=赤で表示し、無害なのに「エラー」に見えるため)。
-// 再表示: URL に ?debug を付けるか、コンソールで window.QB_VERBOSE = true。本物のエラーは常に表示。
+// emscripten の stdout/stderr ルーティング。自前 C 側の逐次ログは全て [tag] 形式
+// ([dos_loader] / [int21h…] / [tty] / [mcb] 等) なので「先頭が [小文字 の行」をまとめて既定抑制する
+// (Chrome が stderr を console.error=赤で表示し、無害なのに「エラー」に見えるため)。本物の emscripten
+// エラーは Aborted/RuntimeError 等で先頭が [小文字 にならないので残る。
+// 再表示: URL に ?debug を付けるか、コンソールで window.QB_VERBOSE = true。
 const qbVerbose = () => typeof window !== 'undefined' &&
     (window.QB_VERBOSE || /[?&]debug\b/.test(location.search));
-const qbChatter = /^\[(dos_loader|int2[01])/;
+const qbChatter = /^\[[a-z]/;
 NP2KaiModule({
     print:    (t) => { if (qbVerbose() || !qbChatter.test(t)) console.log(t); },
     printErr: (t) => { if (qbChatter.test(t)) { if (qbVerbose()) console.log(t); }

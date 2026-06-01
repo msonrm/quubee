@@ -24,4 +24,5 @@ rm -rf "$DIST/assets/freepats" "$DIST/assets/boot.d88"   # MIDI(33MB)・未使�
 find "$DIST" -name '*.map' -delete
 
 echo "dist 生成: $DIST ($(du -sh "$DIST" | cut -f1))"
-echo "アップロード: npx wrangler pages deploy $DIST --project-name quubee --branch main"
+echo "アップロード: npx wrangler pages deploy $DIST --project-name quubee --branch main --commit-dirty=true --commit-message \"QuuBee deploy\""
+echo "  (--commit-message は ASCII 必須。日本語の git コミットメッセージだと Cloudflare API が 8000111 で弾く)"
