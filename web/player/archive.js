@@ -21,7 +21,7 @@
             if (!e) break;
             // 未対応メソッドは e.data===null で返る (呼び出し側が skip)。ヘッダは読めているので
             // e.next で必ず次エントリへ進める → 混在書庫でも対応エントリは取りこぼさない。
-            if (e.name) out.push({ name: e.name, data: e.data, method: e.method });
+            if (e.name) out.push({ name: e.name, data: e.data, method: e.method, mtime: e.mtime });
             pos = e.next;
         }
         return out;
@@ -36,10 +36,13 @@
         const origSize = readU32(buf, base + 11);
         const level    = buf[base + 20];
 
-        let name, dataStart;
+        let name, dataStart, mtime = null;
         if (level === 0 || level === 1) {
             const nameLen = buf[base + 21];
             name = decodeName(buf, base + 22, nameLen);
+            // +15..18 = DOS 形式の更新日時 (low word=time, high word=date)
+            const dosT = readU32(buf, base + 15);
+            mtime = dosDateTime(dosT & 0xffff, (dosT >>> 16) & 0xffff);
             // basic header 終端 (バイト 0,1 含めず headerSize 個)
             const basicEnd = base + 2 + headerSize;
             let p = basicEnd;
@@ -64,6 +67,9 @@
             // size==0 で終端 (L1 は「次サイズ」が各ヘッダ末尾、L2 は先頭)。
             const hdrSize = buf[base] | (buf[base + 1] << 8);
             dataStart = base + hdrSize;
+            // L2 の +15..18 = Unix time_t (秒)
+            const unixT = readU32(buf, base + 15);
+            mtime = unixT ? new Date(unixT * 1000) : null;
             let fname = '', dir = '';
             let p = base + 24;  // basic header 末尾 (= 最初の ext header)
             while (p + 2 <= buf.length) {
@@ -98,7 +104,7 @@
             data = lh1Decode(buf.subarray(dataStart, dataStart + compSize), origSize);
         }
 
-        return { name, data, method, next: dataStart + compSize };
+        return { name, data, method, mtime, next: dataStart + compSize };
     }
 
     function decodeName(buf, off, len) {
@@ -111,6 +117,15 @@
 
     function readU32(buf, off) {
         return (buf[off] | (buf[off + 1] << 8) | (buf[off + 2] << 16) | (buf[off + 3] << 24)) >>> 0;
+    }
+
+    // DOS 形式の date/time word → JS Date (date=0 は「無し」→ null)。
+    // date: bit15-9=年-1980 / 8-5=月 / 4-0=日、time: bit15-11=時 / 10-5=分 / 4-0=秒/2
+    function dosDateTime(time, date) {
+        if (!date) return null;
+        const y = 1980 + ((date >> 9) & 0x7f), mo = (date >> 5) & 0x0f, d = date & 0x1f;
+        const h = (time >> 11) & 0x1f, mi = (time >> 5) & 0x3f, s = (time & 0x1f) * 2;
+        return new Date(y, mo - 1, d, h, mi, s);
     }
 
     // ---- LH4/5/6/7 デコーダ (静的 Huffman + スライド窓) ----
@@ -322,6 +337,8 @@
             if (sig !== ZIP_LFH_SIG) break;  // central directory に到達 (or 終端)
             const flags    = buf[pos + 6] | (buf[pos + 7] << 8);
             const method   = buf[pos + 8] | (buf[pos + 9] << 8);
+            const mtime    = dosDateTime(buf[pos + 10] | (buf[pos + 11] << 8),
+                                         buf[pos + 12] | (buf[pos + 13] << 8));
             const compSize = readU32(buf, pos + 18);
             const origSize = readU32(buf, pos + 22);
             const nameLen  = buf[pos + 26] | (buf[pos + 27] << 8);
@@ -345,7 +362,7 @@
             } else {
                 throw new Error('ZIP method 未対応: ' + method + ' (' + name + ')');
             }
-            out.push({ name, data });
+            out.push({ name, data, mtime });
             pos = dataStart + compSize;
         }
         return out;

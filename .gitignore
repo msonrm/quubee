@@ -8,6 +8,9 @@
 # デプロイ用に生成する静的ディレクトリ (tools/deploy.sh の出力)
 /dist/
 
+# wrangler のローカルキャッシュ/状態
+/.wrangler/
+
 # NP2kai build artifacts
 /core/np2kai/build/
 

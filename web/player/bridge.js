@@ -21,8 +21,9 @@ ctx.imageSmoothingEnabled = false;
 //   css    = bitmap / dpr      (CSS→物理 が bitmap = physical になる)
 // 結果: 1 ソース px = N 物理 px (ブラウザ/OS による追加スケーリングなし)
 function fitCanvas(w, h) {
-    const maxW = window.innerWidth  - 2;
-    const maxH = window.innerHeight - 32;
+    const wrap = document.getElementById('canvas-wrap');
+    const maxW = (wrap ? wrap.clientWidth  : window.innerWidth)      - 2;
+    const maxH = (wrap ? wrap.clientHeight : window.innerHeight - 32) - 2;
     const dpr  = window.devicePixelRatio || 1;
     // CSS が表示領域に収まる最大の N を選ぶ
     const N = Math.max(1, Math.floor(Math.min(maxW * dpr / w, maxH * dpr / h)));
@@ -321,42 +322,122 @@ NP2KaiModule({
         if (kind === 'hdd' || drive === 0) reset(handle);
     }
 
-    // ---- Run スロット (Phase 3: アーカイブから直接実行) ----
-    // games DB を best-effort で読み込む (失敗時は空 DB として続行)。
-    let gamesDb = { games: {} };
-    try {
-        const res = await fetch('db/games.json');
-        if (res.ok) gamesDb = await res.json();
-    } catch (_) { /* DB なしで継続 */ }
-
-    const runConfig   = document.getElementById('run-config');
-    const runTitleEl  = document.getElementById('run-title');
+    // ---- filer (書庫を /run/ に展開し、一覧/テキスト表示/エントリ選択) ----
     const runEntryEl  = document.getElementById('run-entry');
     const runCmdline  = document.getElementById('run-cmdline');
     const runButton   = document.getElementById('run-button');
     const stopButton  = document.getElementById('stop-button');
     const runStatusEl = document.getElementById('run-status');
+    const arcNameEl   = document.getElementById('arc-name');
+    const fileListEl  = document.getElementById('file-list');
+    const textBodyEl  = document.getElementById('text-body');
+    const textHeadEl  = document.getElementById('text-head');
 
-    let runQueued = null;  // { file, entry, kind, title }
+    let loadedEntries  = [];   // { name(=/run 相対), data, mtime }  path は last-wins
+    let selectedEntry  = null; // 実行対象の EXE/COM
+    let loadedArchives = [];   // 表示用の投入書庫名
 
-    function handleRunDrop(file) {
-        const entry = gamesDb.games[file.name];
-        const ext = (file.name.split('.').pop() || '').toLowerCase();
-        // 未登録ファイルは拡張子で kind を推定:
-        //   .lzh / .zip = 書庫として /run/ へ全展開 → 中の EXE/COM を実行 (ブートしない)
-        //   .com / .exe = ローダで直接実行
-        const kind = entry?.kind || (ext === 'lzh' ? 'lzh'
-                                  :  ext === 'zip' ? 'zip'
-                                  :  ext === 'com' ? 'com'
-                                  :  ext === 'exe' ? 'exe'
-                                  : 'unknown');
-        runConfig.hidden = false;
-        runTitleEl.textContent = entry?.title || file.name;
-        runEntryEl.textContent = entry?.entry || '(auto)';
-        runCmdline.value       = entry?.cmdline ?? '';
-        runStatusEl.textContent = '';
-        runQueued = { file, entry: entry?.entry, kind, title: entry?.title };
-        setDriveName('run', 0, `${file.name} (${(file.size/1024)|0} KB)`);
+    const sjis = new TextDecoder('shift_jis');
+    const isExecName = (n) => /\.(exe|com)$/i.test(n);
+    const isTextName = (n) =>
+        /\.(txt|doc|me|1st|asc|bat|ini|cfg|nfo|faq|hlp|dic|wri)$/i.test(n) ||
+        /readme|read\.me|どきゅめんと|説明|よみ/i.test(n);
+    const isReadme   = (n) => /readme|read\.me|よみ|説明|どきゅめんと/i.test(n);
+    const fmtSize = (n) => n >= 1024 ? `${(n / 1024) | 0}K` : `${n}`;
+    const fmtTime = (d) => {
+        if (!d) return '';
+        const p = (x) => String(x).padStart(2, '0');
+        return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+    };
+    const escapeHtml = (s) =>
+        s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+    // path 重複は last-wins でマージ (パッチ書庫を後から重ねる用途)
+    function mergeEntries(entries) {
+        for (const ent of entries) {
+            const key = ent.name.toLowerCase();
+            const i = loadedEntries.findIndex((e) => e.name.toLowerCase() === key);
+            if (i >= 0) loadedEntries[i] = ent; else loadedEntries.push(ent);
+        }
+    }
+
+    function renderFileList() {
+        arcNameEl.textContent = loadedArchives.length
+            ? `書庫: ${loadedArchives.join(' + ')}` : '書庫をドロップ';
+        const rank = (n) => isReadme(n) ? 0 : isTextName(n) ? 1 : isExecName(n) ? 2 : 3;
+        const sorted = loadedEntries.slice().sort((a, b) =>
+            rank(a.name) - rank(b.name) ||
+            a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
+        fileListEl.textContent = '';
+        for (const ent of sorted) {
+            const row = document.createElement('div');
+            row.className = 'frow' + (isExecName(ent.name) ? ' exec' : isTextName(ent.name) ? ' text' : '') +
+                            (ent === selectedEntry ? ' sel' : '');
+            const tag = isExecName(ent.name) ? '▶ ' : isTextName(ent.name) ? '・' : '  ';
+            row.innerHTML =
+                `<span class="fn">${tag}${escapeHtml(ent.name)}</span>` +
+                `<span class="fsz">${fmtSize(ent.data.length)}</span>` +
+                `<span class="fdt">${fmtTime(ent.mtime)}</span>`;
+            row.addEventListener('click', () =>
+                isExecName(ent.name) ? selectEntry(ent) : openText(ent));
+            fileListEl.appendChild(row);
+        }
+    }
+
+    function openText(ent) {
+        textHeadEl.textContent = ent.name;
+        // DOS EOF (Ctrl-Z=0x1A) 以降は本文ではない。生バイトで切る
+        // (0x1A は SJIS の trail バイト範囲外なので常に単独制御＝安全。
+        //  デコード後の符号位置は環境依存なのでバイトで判定する)。
+        let bytes = ent.data;
+        const eof = bytes.indexOf(0x1a);
+        if (eof >= 0) bytes = bytes.subarray(0, eof);
+        textBodyEl.textContent = sjis.decode(bytes).replace(/\r\n?/g, "\n");
+        textBodyEl.scrollTop = 0;
+    }
+
+    function selectEntry(ent) {
+        selectedEntry = ent;
+        runEntryEl.textContent = ent.name;
+        runButton.disabled = false;
+        renderFileList();   // ハイライト更新
+    }
+
+    // ドロップ/選択された 1 ファイルを開く。append=true で /run/ に重ねて展開。
+    async function openDropped(file, append) {
+        document.body.classList.remove('panel-hidden');   // 投入時はパネルを表示
+        runStatusEl.textContent = `読み込み中: ${file.name}…`;
+        try {
+            if (!append) { clearRunDir(); loadedEntries = []; loadedArchives = []; selectedEntry = null; }
+            if (/\.(lzh|zip)$/i.test(file.name)) {
+                mergeEntries(await extractArchiveToFs(file, true));   // /run/ クリアは上で実施済
+            } else if (isExecName(file.name)) {
+                ensureRunDir();
+                const data = new Uint8Array(await file.arrayBuffer());
+                M.FS.writeFile('/run/' + file.name, data);
+                mergeEntries([{ name: file.name, data, mtime: file.lastModified ? new Date(file.lastModified) : null }]);
+            } else {
+                runStatusEl.textContent = `未対応のファイル: ${file.name} (.lzh/.zip/.com/.exe)`;
+                return;
+            }
+            loadedArchives.push(file.name);
+            // 既定エントリ自動選択 (.exe > .com) — ユーザーは一覧クリックで上書き可
+            if (!selectedEntry) {
+                const def = loadedEntries.find((e) => /\.exe$/i.test(e.name))
+                         || loadedEntries.find((e) => /\.com$/i.test(e.name));
+                if (def) selectEntry(def);
+            }
+            renderFileList();
+            // readme 系を自動で開く (③敬意: 作者の声をまず見せる)
+            const readme = loadedEntries.find((e) => isReadme(e.name) && isTextName(e.name))
+                        || loadedEntries.find((e) => /\.doc$/i.test(e.name))
+                        || loadedEntries.find((e) => isTextName(e.name));
+            if (readme) openText(readme);
+            runStatusEl.textContent = '';   // ファイル数は一覧自体が示すので表示しない
+        } catch (e) {
+            runStatusEl.textContent = `ERROR: ${e.message}`;
+            console.error(e);
+        }
     }
 
     // ---- アーカイブを Emscripten FS に展開 ----
@@ -386,13 +467,13 @@ NP2KaiModule({
         }
     }
 
-    async function extractArchiveToFs(file) {
+    async function extractArchiveToFs(file, append) {
         const bytes = new Uint8Array(await file.arrayBuffer());
         // .zip は deflate 展開、それ以外 (.lzh) は LZH デコーダ。どちらもブートせず /run/ へ展開する。
         const entries = /\.zip$/i.test(file.name)
             ? await qbArchive.parseZip(bytes)
             : qbArchive.parseLzh(bytes);
-        clearRunDir();
+        if (!append) clearRunDir();
         // 原ケースのまま /run 配下へ展開し、LZH 内のサブディレクトリも再現する。
         // DOS は大小を区別しないので、case の吸収は C 側 dos_path_to_host の
         // case-insensitive リゾルバに任せる (旧実装の「両側で強制小文字化」は廃止)。
@@ -489,94 +570,91 @@ NP2KaiModule({
     });
 
     runButton.addEventListener('click', async () => {
-        if (!runQueued) return;
-        if (runButton.disabled) return;
+        if (!selectedEntry || runButton.disabled) return;
         runButton.disabled = true;   // ポーリング終了まで連打を抑止 (重複 stage 防止)
-        // ★重要: focus を外す。これをしないと Start Game の Enter キーが
-        // Run ボタンの再 click を引き起こして同じ EXE が再 stage されてしまう。
-        runButton.blur();
+        runButton.blur();            // Enter で Run が再 click されないよう focus を外す
         const cmdline = runCmdline.value;
-        runStatusEl.textContent = 'extracting…';
+        const isExe = /\.exe$/i.test(selectedEntry.name);
         try {
-            if (runQueued.kind === 'com' || runQueued.kind === 'exe') {
-                const bytes = new Uint8Array(await runQueued.file.arrayBuffer());
-                await stageAndRunImage(bytes, cmdline, runQueued.file.name,
-                                       runQueued.kind === 'exe');
-            } else if (runQueued.kind === 'lzh' || runQueued.kind === 'zip') {
-                const entries = await extractArchiveToFs(runQueued.file);
-                // entry を決定: DB 指定 > 拡張子で .exe/.com を自動選択
-                let entryName = runQueued.entry;
-                if (!entryName) {
-                    const exec = entries.find(e => /\.exe$/i.test(e.name))
-                              || entries.find(e => /\.com$/i.test(e.name));
-                    entryName = exec ? exec.name : null;
-                }
-                if (!entryName) throw new Error('書庫内に .exe/.com が見つからない');
-                const entry = entries.find(e => e.name.toLowerCase() === entryName.toLowerCase());
-                if (!entry) throw new Error(`entry "${entryName}" が書庫内にない`);
-                const isExe = /\.exe$/i.test(entryName);
-                const totalKb = (entries.reduce((a, e) => a + e.data.length, 0) / 1024) | 0;
-                runStatusEl.textContent =
-                    `展開完了: ${entries.length} files / ${totalKb} KB → /run/。${entryName} を起動…`;
-                await stageAndRunImage(entry.data, cmdline, entryName, isExe);
-            } else {
-                runStatusEl.textContent = `(未対応 kind: ${runQueued.kind})`;
-            }
+            runStatusEl.textContent = `${selectedEntry.name} を起動…`;
+            await stageAndRunImage(selectedEntry.data, cmdline, selectedEntry.name, isExe);
         } catch (e) {
             runStatusEl.textContent = `ERROR: ${e.message}`;
             console.error(e);
         } finally {
-            // polling を開始しなかった経路 (unknown / stage 前の throw) では
-            // ここで Run ボタンを戻す。polling 中はその onExit (stageAndRunImage) が
-            // 戻すので、currentPoll が立っている間は触らない。
-            if (currentPoll === null) {
-                runButton.disabled = false;
-                stopButton.hidden = true;
-            }
+            // polling 中は onExit (stageAndRunImage) が戻すので、currentPoll が立つ間は触らない。
+            if (currentPoll === null) { runButton.disabled = false; stopButton.hidden = true; }
         }
     });
 
-    // ファイル選択 (共有 input、target をクロージャで保持)
+    // ---- filer 配線: ファイル選択 / ＋追加 / クリア / ドロップ / 仕切り ----
     const fileInput = document.getElementById('file-input');
-    let pickerTarget = { kind: 'fdd', drive: 0 };
+    let pickerAppend = false;
     fileInput.addEventListener('change', () => {
         if (fileInput.files && fileInput.files[0]) {
-            const f = fileInput.files[0];
-            if (pickerTarget.kind === 'run') handleRunDrop(f);
-            else loadDiskFromBlob(f, pickerTarget.kind, pickerTarget.drive);
+            openDropped(fileInput.files[0], pickerAppend);
             fileInput.value = '';
         }
     });
+    document.getElementById('add-archive').addEventListener('click', () => {
+        pickerAppend = true; fileInput.click();      // 同じ /run/ に重ねて展開
+    });
+    arcNameEl.addEventListener('click', () => {
+        pickerAppend = false; fileInput.click();      // 新規 (クリアして展開)
+    });
+    document.getElementById('clear-run').addEventListener('click', () => {
+        clearRunDir();
+        loadedEntries = []; loadedArchives = []; selectedEntry = null;
+        runEntryEl.textContent = '—'; runButton.disabled = true;
+        textHeadEl.textContent = 'readme / テキスト'; textBodyEl.textContent = '';
+        renderFileList();
+        runStatusEl.textContent = 'クリアしました';
+    });
 
-    // 各ドライブスロットに click / D&D ハンドラを設定
-    driveEls.forEach((el) => {
-        const drive = +el.dataset.drive;
-        const kind  = el.dataset.kind;
-        el.addEventListener('click', () => {
-            pickerTarget = { kind, drive };
-            fileInput.click();
-        });
-        el.addEventListener('dragenter', (e) => {
-            e.preventDefault();
-            el.classList.add('dragover');
-        });
+    // ドロップ受け: 右パネルと canvas エリア。中身があれば追記、無ければ新規。
+    function wireDrop(el) {
         el.addEventListener('dragover', (e) => {
-            e.preventDefault();
-            e.dataTransfer.dropEffect = 'copy';
+            e.preventDefault(); el.classList.add('dragover'); e.dataTransfer.dropEffect = 'copy';
         });
         el.addEventListener('dragleave', (e) => {
-            // 子要素境界での誤発火を避けるため、relatedTarget が外なら解除
             if (!el.contains(e.relatedTarget)) el.classList.remove('dragover');
         });
         el.addEventListener('drop', (e) => {
-            e.preventDefault();
-            el.classList.remove('dragover');
+            e.preventDefault(); el.classList.remove('dragover');
             const f = e.dataTransfer.files && e.dataTransfer.files[0];
-            if (!f) return;
-            if (kind === 'run') handleRunDrop(f);
-            else loadDiskFromBlob(f, kind, drive);
+            if (f) openDropped(f, loadedEntries.length > 0);
         });
+    }
+    wireDrop(document.getElementById('panel'));
+    wireDrop(document.getElementById('canvas-wrap'));
+
+    // パネル幅の仕切りドラッグ (canvas は再フィット)
+    (function () {
+        const divider = document.getElementById('divider');
+        const app = document.getElementById('app');
+        let dragging = false;
+        divider.addEventListener('mousedown', (e) => {
+            dragging = true; e.preventDefault(); document.body.style.userSelect = 'none';
+        });
+        window.addEventListener('mousemove', (e) => {
+            if (!dragging) return;
+            const w = Math.min(Math.max(app.getBoundingClientRect().right - e.clientX, 260),
+                               window.innerWidth - 320);
+            document.documentElement.style.setProperty('--panel-w', w + 'px');
+            fitCanvas(offscreen.width || 640, offscreen.height || 400);
+        });
+        window.addEventListener('mouseup', () => {
+            if (dragging) { dragging = false; document.body.style.userSelect = ''; }
+        });
+    })();
+
+    // パネル表示/非表示トグル (没入用)。隠すと canvas が全幅に広がる。
+    document.getElementById('panel-toggle').addEventListener('click', () => {
+        document.body.classList.toggle('panel-hidden');
+        fitCanvas(offscreen.width || 640, offscreen.height || 400);
     });
+
+    renderFileList();   // 初期表示 (空一覧)
 
     // スロット外へのドロップは無視 (ブラウザのデフォルト動作 = ファイルを開く を抑止)
     window.addEventListener('dragover', (e) => e.preventDefault());
@@ -589,7 +667,11 @@ NP2KaiModule({
     // 押されている code を追跡 (オートリピートで重複 keydown を送らない)
     const pressed = new Set();
 
+    const inField = (e) => e.target && (e.target.tagName === 'INPUT' ||
+        e.target.tagName === 'TEXTAREA' || e.target.isContentEditable);
     window.addEventListener('keydown', (e) => {
+        // 入力欄 (Args 等) にフォーカス中はゲームへキーを送らない
+        if (inField(e)) return;
         // Ctrl 系のブラウザショートカット (Ctrl+R / Ctrl+W / Ctrl+Shift+I 等) は通す
         if (e.ctrlKey || e.metaKey || e.altKey) return;
         const code = PC98_KEYMAP[e.code];
@@ -601,6 +683,7 @@ NP2KaiModule({
     });
 
     window.addEventListener('keyup', (e) => {
+        if (inField(e)) return;
         const code = PC98_KEYMAP[e.code];
         if (code === undefined) return;
         if (KEY_PREVENT_DEFAULT.has(e.code)) e.preventDefault();

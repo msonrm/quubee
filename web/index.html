@@ -2,117 +2,168 @@
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>QuuBee — PC-98 フリーソフトプレイヤー</title>
 <style>
+:root { --panel-w: 480px; }
 * { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; }
 body {
-    background: #111;
-    color: #ccc;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    min-height: 100vh;
-    font-family: monospace;
+    background: #111; color: #ccc;
+    font-family: ui-monospace, "DejaVu Sans Mono", monospace;
+    font-size: 13px;
+    overflow: hidden;
 }
-#screen {
-    /* border ではなく outline を使う: outline はレイアウト外なので
-       box-sizing: border-box によって canvas の CSS サイズが縮まない */
-    outline: 1px solid #333;
-    image-rendering: pixelated;
-    display: block;
-    cursor: crosshair;
-    /* CSS サイズは JS の fitCanvas() が動的にセット */
+
+#app { display: flex; height: 100vh; width: 100%; }
+
+/* 左: ゲーム画面のみ */
+#stage { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
+#canvas-wrap {
+    position: relative;
+    flex: 1 1 auto; min-height: 0;
+    display: flex; align-items: center; justify-content: center;
+    overflow: hidden; background: #000;
 }
+#screen { outline: 1px solid #333; image-rendering: pixelated; display: block; cursor: crosshair; }
 #screen.captured { cursor: none; outline: 1px solid #6af; }
-#drives {
-    display: flex;
-    gap: 8px;
-    margin-top: 8px;
+#canvas-wrap.dragover { box-shadow: inset 0 0 0 2px #6af; }
+
+/* パネル表示/非表示トグル (canvas 右上、常時表示・通常は控えめ) */
+#panel-toggle {
+    position: absolute; top: 6px; right: 6px; z-index: 20;
+    background: #222; color: #9bd; border: 1px solid #456; border-radius: 3px;
+    padding: 2px 8px; font: inherit; cursor: pointer; opacity: .35;
 }
-.drive {
-    min-width: 260px;
-    padding: 4px 10px;
+#panel-toggle:hover { opacity: 1; }
+
+/* 仕切り */
+#divider { flex: 0 0 6px; cursor: col-resize; background: #222; }
+#divider:hover { background: #355; }
+body.panel-hidden #panel, body.panel-hidden #divider { display: none; }
+
+/* 右: filer (ヘッダ → 一覧 → Run バー → テキスト) */
+#panel {
+    flex: 0 0 var(--panel-w); min-width: 280px; max-width: 72vw;
+    display: flex; flex-direction: column; min-height: 0;
+    background: #141414; border-left: 1px solid #2a2a2a;
+}
+#panel.dragover { box-shadow: inset 0 0 0 2px #6af; }
+
+#panel-head {
+    flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between;
+    gap: 8px; padding: 6px 10px; background: #1c1c1c; border-bottom: 1px solid #2a2a2a;
+}
+#arc-name { color: #6af; font-weight: bold; cursor: pointer;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#panel-head button {
+    background: #222; color: #bbb; border: 1px solid #444; border-radius: 3px;
+    padding: 1px 8px; font: inherit; cursor: pointer; margin-left: 4px;
+}
+#panel-head button:hover { background: #2c2c2c; color: #ddd; }
+
+#file-list { flex: 1 1 45%; min-height: 60px; overflow: auto; }
+.frow {
+    display: flex; align-items: baseline; gap: 10px;
+    padding: 3px 10px; cursor: pointer; white-space: nowrap;
+    border-bottom: 1px solid #1c1c1c;
+}
+.frow:hover { background: #1f1f1f; }
+.frow.sel { background: #243018; }
+.frow .fn  { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; color: #ccc; }
+.frow.exec .fn { color: #cf9; }
+.frow.text .fn { color: #9cf; }
+.frow .fsz { flex: 0 0 auto; color: #999; min-width: 56px;  text-align: right; }
+.frow .fdt { flex: 0 0 auto; color: #888; min-width: 138px; text-align: right; }
+
+/* Run バー: 一覧とテキストの間。1 行目=Entry/Args/ボタン、2 行目=メッセージ */
+#run-bar {
+    flex: 0 0 auto; display: flex; flex-direction: column; gap: 4px;
+    padding: 6px 10px; background: #181818;
+    border-top: 1px solid #2a2a2a; border-bottom: 1px solid #2a2a2a;
     font-size: 12px;
-    color: #aaa;
-    background: #1a1a1a;
-    border: 1px dashed #333;
-    border-radius: 3px;
-    cursor: pointer;
-    user-select: none;
-    display: flex;
-    align-items: baseline;
-    gap: 8px;
 }
-.drive:hover { color: #ddd; background: #222; border-color: #555; }
-.drive.dragover {
-    color: #cfe;
-    background: rgba(20, 60, 120, 0.4);
-    border-color: #6af;
-    border-style: solid;
+.rb-line1 { display: flex; align-items: center; gap: 10px; }
+.rb-field { flex: 0 0 auto; color: #888; }
+.rb-field b { color: #cf9; font-weight: normal; }
+.rb-args { flex: 1 1 auto; min-width: 80px; display: flex; align-items: center; gap: 4px; color: #888; }
+#run-cmdline {
+    flex: 1 1 auto; width: auto; min-width: 60px;
+    background: #1a1a1a; color: #ddd; border: 1px solid #444;
+    border-radius: 3px; padding: 2px 6px; font: inherit;
 }
-.drive .label { color: #6af; font-weight: bold; }
-.drive .name  { color: inherit; }
-.drive.run-slot .label { color: #fa6; }
-.drive.run-slot.dragover { border-color: #fa6; background: rgba(120, 60, 20, 0.4); }
-#run-config {
-    display: flex;
-    gap: 8px;
-    margin-top: 6px;
-    font-size: 12px;
-    align-items: center;
-}
-#run-config[hidden] { display: none; }
-#run-config .field { color: #888; }
-#run-config .field b { color: #fa6; font-weight: normal; }
-#run-config input {
-    background: #1a1a1a;
-    color: #ddd;
-    border: 1px solid #444;
-    border-radius: 3px;
-    padding: 2px 6px;
-    font: inherit;
-    width: 180px;
-}
+.rb-right { flex: 0 0 auto; display: inline-flex; gap: 6px; }
 #run-button, #stop-button {
-    background: #2a3a1a;
-    color: #cf9;
-    border: 1px solid #5a7;
-    border-radius: 3px;
-    padding: 2px 10px;
-    font: inherit;
-    cursor: pointer;
+    border-radius: 3px; padding: 2px 12px; font: inherit; cursor: pointer;
+    background: #2a3a1a; color: #cf9; border: 1px solid #5a7;
 }
-#run-button:hover, #stop-button:hover { background: #3a4a2a; color: #df9; }
-#run-button:disabled { opacity: 0.5; cursor: default; }
+#run-button:hover, #stop-button:hover { background: #3a4a2a; }
+#run-button:disabled { opacity: .45; cursor: default; }
 #stop-button { background: #3a1a1a; color: #f99; border-color: #a55; }
-#stop-button:hover { background: #4a2a2a; color: #fbb; }
 #stop-button[hidden] { display: none; }
-#run-status { color: #888; font-size: 11px; }
-#hint {
-    color: #555;
-    font-size: 11px;
-    margin-top: 6px;
+#run-status { min-height: 15px; color: #888; font-size: 11px; }  /* 2 行目固定 (空でも高さ確保) */
+
+/* テキストビュー */
+#text-view {
+    flex: 1 1 55%; min-height: 60px; display: flex; flex-direction: column;
 }
-#file-input { display: none; }
+#text-head {
+    flex: 0 0 auto; padding: 3px 10px; background: #1c1c1c; color: #9cf;
+    font-size: 11px; border-bottom: 1px solid #2a2a2a;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+#text-body {
+    flex: 1 1 auto; overflow: auto; padding: 8px 10px;
+    /* 等幅 + CJK 対応 (AA・かな・標準罫線を崩さない) */
+    font-family: "Noto Sans Mono CJK JP", "Noto Sans CJK JP", "Migu 1M",
+                 "MS Gothic", "Osaka-Mono", ui-monospace, "DejaVu Sans Mono", monospace;
+    white-space: pre; tab-size: 8; color: #cdc8c0; line-height: 1.35;
+}
 </style>
 </head>
 <body>
-<canvas id="screen" width="640" height="400"></canvas>
-<div id="drives">
-    <div class="drive run-slot" data-drive="0" data-kind="run" title="フリーソフト書庫 (.lzh/.zip) を D&D かクリックで投入し、Run で起動 (ブートではなく展開してファイル実行)">
-        <span class="label">書庫</span><span class="name">(.lzh / .zip をドロップ)</span>
+<div id="app">
+    <div id="stage">
+        <div id="canvas-wrap">
+            <canvas id="screen" width="640" height="400"></canvas>
+            <button id="panel-toggle" title="パネルの表示/非表示">▦ パネル</button>
+        </div>
+    </div>
+    <div id="divider" title="ドラッグで幅を調整"></div>
+    <div id="panel">
+        <div id="panel-head">
+            <span id="arc-name">書庫をドロップ</span>
+            <span><button id="add-archive">＋追加</button><button id="clear-run">クリア</button></span>
+        </div>
+        <div id="file-list"></div>
+        <div id="run-bar">
+            <div class="rb-line1">
+                <span class="rb-field">Entry: <b id="run-entry">—</b></span>
+                <label class="rb-args">Args: <input id="run-cmdline" type="text" placeholder="(none)"></label>
+                <span class="rb-right">
+                    <button id="stop-button" hidden>■ Stop</button>
+                    <button id="run-button" disabled>▶ Run</button>
+                </span>
+            </div>
+            <div id="run-status"></div>
+        </div>
+        <div id="text-view">
+            <div id="text-head">readme / テキスト</div>
+            <pre id="text-body">QuuBee — PC-98 フリーソフトのブラウザプレイヤー
+
+フリーソフトの書庫 (.lzh / .zip) を、右のパネルかゲーム画面にドロップしてください。
+（「書庫をドロップ」をクリックでファイル選択も可）
+
+  ・ファイル一覧から readme などを開いて読みながら、
+  ・EXE / COM を選んで [▶ Run] で起動できます。
+  ・「＋追加」で別の書庫を同じ場所に重ねて展開（HD インストール風）。
+  ・右上「▦ パネル」でこの欄を隠すと画面が広がります。
+
+ゲームは同梱していません。お手元のフリーソフトをどうぞ。
+画面クリックでマウスキャプチャ（ESC で解除）。</pre>
+        </div>
     </div>
 </div>
-<div id="run-config" hidden>
-    <span class="field">Title: <b id="run-title">—</b></span>
-    <span class="field">Entry: <b id="run-entry">—</b></span>
-    <span class="field">Args: <input id="run-cmdline" type="text" placeholder="(none)"></span>
-    <button id="run-button">▶ Run</button>
-    <button id="stop-button" hidden>■ Stop</button>
-    <span id="run-status"></span>
-</div>
-<div id="hint">お手元のフリーソフト書庫 (.lzh / .zip) を上の枠へ D&D かクリックで投入 → Run で起動。ゲームは同梱していません。 ／ 画面クリックでマウスキャプチャ (ESC で解除)</div>
 <input id="file-input" type="file" accept=".lzh,.zip,.com,.exe">
 
 <script src="np2kai_core.js"></script>
