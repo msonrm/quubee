@@ -1,0 +1,46 @@
+# Emscripten build output
+/build/
+
+# Generated Wasm artifacts (produced by emscripten/build.sh)
+/web/np2kai_core.js
+/web/np2kai_core.wasm
+
+# NP2kai build artifacts
+/core/np2kai/build/
+
+# freepats (GUS パッチセット、~33MB)
+# tools/setup_freepats.sh でローカルに展開、リポジトリには含めない
+/web/assets/freepats/
+
+# ゲーム書庫 (.lzh/.zip/.rar 等) と派生イメージ。
+# 著作権者から再配布許可を得ていないため、公開リポジトリ (github.com) には含めない。
+# 検証用に「こちら側」(ローカル) のみ保持する。games/ 配下は .gitkeep を除き全て無視。
+/games/*
+!/games/.gitkeep
+
+# tools/dos_loader の派生物 (build.sh の出力)。
+# web/assets/loader.d88 はコミット (ブラウザが fetch するため)。
+/tools/dos_loader/boot.bin
+/tools/dos_loader/loader.d88
+/tools/dos_loader/hello.com
+/tools/dos_loader/args.com
+/tools/dos_loader/hello.exe
+/tools/dos_loader/sjistest.com
+
+# フォント配布アーカイブ (参照用・大きい。ライセンス文は CREDITS.md に取り込み済み)
+/sazanami-fontbmp.zip
+
+# Python __pycache__
+__pycache__/
+*.pyc
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# debug/作業用スクリーンショット (ユーザ共有のため一時的に置く)
+/Screenshot*.png

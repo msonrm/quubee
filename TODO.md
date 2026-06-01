@@ -1,0 +1,607 @@
+# QB 作業状況
+
+## Phase 1 完了 ✓ — Wasmビルドとブラウザ動作確認
+
+- [x] NP2kai core を Emscripten (apt版 3.1.69) でWasmビルド
+- [x] bridge.c / bridge.h: JS↔C ブリッジAPI実装
+- [x] Emscripten FS 経由でディスクイメージをロード
+- [x] `fdd_set()` 直接呼び出しでFDDマウント（`fdc.equip`ガードをバイパス）
+- [x] RGB16フレームバッファ → Canvas描画パイプライン確認
+- [x] **FreeDOS(98) がブラウザ上で起動・テキスト表示を確認** ✓
+
+---
+
+## Phase 2 進行中 — ゲームディスクのロードと動作
+
+### 達成済み (2026-05-25)
+
+- [x] **表示パイプラインのピクセルパーフェクト化** (非整数 dpr 対応、PAR 補正の整理)
+- [x] **標準キーボード入力**転送 (英数, 記号, 矢印, F1-F10, テンキー等)
+- [x] **CPU エミュレータを i386c (NP21) に切替** — 386+ 命令対応、FPU 装備、32MB EXTMEM
+- [x] **FPU エミュレータ (DOSBox2)** を有効化
+- [x] **自己起動最小ディスク** が画面表示まで動作確認 (`tools/boot_hello/`)
+- [x] **デバッグ API** (`qbDebug.*`) 実装 — ハング地点や CPU 状態を JS から覗ける
+- [x] **ディスク D&D / ファイル選択 UI** — 任意の .d88 をブラウザにドロップ or クリックでロード
+- [x] **A:/B: 2 ドライブ対応** — スロットごとに独立した D&D/click、B: は挿入時リセットなし
+- [x] **マウス入力** — Pointer Lock + 相対移動 + 左右ボタン、ESC で解除
+- [x] **実 PC-98 ゲームがプレイ可能** — ロードモナーク (.d88) がディスプレイ選択→タイトル→ゲーム本体まで動作、実機相当の速度
+- [x] **2 枚組ゲームが動作** — プリンセスメーカー / プリンセスメーカー 2 (.d88 ×2) がディスプレイ選択→名前入力→オープニングまで進行、CG 表示も綺麗
+- [x] **サウンド対応 (基本)** — qb_soundmng リングバッファ + AudioContext + ScriptProcessorNode、プリメ2 で FM 音源確認、テンポはほぼ正しい
+- [x] **サウンド品質向上 (AudioWorklet 移行)** — `web/player/audio-worklet.js` 新規。postMessage で Int16Array 転送、Worklet 内部リング ~680ms。実機聴感で微ノイズ・途切れが大幅減
+- [x] **テンポ・音質チューニング (2026-05-27)** — wall-clock 56Hz catch-up 駆動でテンポ正規化、RGB565→RGBA32 LUT 化で主スレッド負荷削減、ソフトクリップ + vol_master=65 + `usefmgen=0` (opngen 採用) で低音ビリビリ歪みを実用レベルまで低減
+- [~] **MIDI (VERMOUTH + freepats) 配線一式** — MPU98II → cmmidi → VERMOUTH → sound_streamregist の経路を構築、`tools/setup_freepats.sh` で freepats 128 楽器のロードまで動作確認。ただし **音質に課題** (FM 音源との加算で「ビリビリ」歪み、freepats のサンプル品質も含む)。デフォルト OFF (= `np2cfg.mpuenable=0`) で同梱、`np2kai_enable_midi(1)` で再開可能だが JS 側 UI は外してある。詳細は将来課題を参照
+- [~] **HDD スロット (C:/D:) と `np2kai_insert_hdd` ブリッジ (2026-05-27)** — SASI/IDE 4 ドライブのうち先頭 2 つを UI 露出。`.hdi/.thd/.nhd/.hdd` を `file-input` の accept に追加、ドロップ → `sxsi_devopen` → `pccore_reset` の流れで配線。`np2kai_eject_hdd` も追加。ただし **DOS 起動の HDD イメージは未確認** (BIOS ホールで FreeDOS と同じ壁にぶつかる可能性大、将来課題参照)
+
+### 次のステップ（優先順）
+
+1. **追加タイトルの動作確認**
+   - もう数本の自己起動 D88 で動作試験
+   - 失敗箇所が出たら `qbDebug.*` でハング箇所を特定 → 個別対処
+
+2. **PC-98 固有キーのマップ追加 (未対応)**
+   - `XFER` (変換) `0x35`
+   - `NFER` (無変換) `0x51`
+   - `KANA` `0x72`
+   - `GRPH` `0x73`
+   - `HELP` `0x3f`
+   - `COPY` `0x61`
+   - `STOP` `0x60`
+   - `VF1` 〜 `VF5` `0x52`〜`0x56`
+   - 物理キーが存在しない (US/JIS 標準配列) ものは、画面上のソフトキーまたは
+     キーバインド設定 UI を別途用意する必要あり
+
+3. **GitHub Actions CI**
+   - Emscripten 向けのビルドワークフロー作成
+   - ビルド成果物（.js/.wasm）をアーティファクトまたは GitHub Pages にデプロイ
+
+### 将来課題（優先度低）
+
+- **HDD からの DOS ブート (持ち越し)** — `np2kai_insert_hdd` で C:/D: にイメージは挿せて
+  リセットまで走るが、MS-DOS (PC-98) / FreeDOS をインストールした HDD は起動しない
+  と予想 (FreeDOS FDD と同じく `E869:075B` 付近の BIOS ROM `neccheck` 領域に飛び込んで
+  暴走するため)。**未検証**: 実 HDD イメージ + `qbDebug.sample(10, 300)` で PC をサンプ
+  リングし、FreeDOS と同じ番地で止まっているかを確認するのが再開時の第一歩。
+  解決路線:
+  1. **実機 NEC `bios.rom` 持ち込み対応** — UI に BIOS ファイル指定スロット追加、
+     `np2cfg.usebios=1`。`np2kai_set_bios_dir` は既に存在。一番工数小さい (1〜2時間) が
+     ユーザに ROM を用意してもらう必要あり (著作権)
+  2. **`nosyscode` 拡張で BIOS フック追加** — 呼ばれる番地ごとにハンドラを実装。
+     工数大 (数日〜) だが著作権クリーン
+  3. **自己起動 HDD ゲームに賭ける** — 元々少数派なので恩恵小
+
+- **MIDI 音質改善 (Phase 4 以降に再分類)** — VERMOUTH 経路は通電して `qbDebug` レベルでは
+  鳴ることを確認 (`peak ~5000` の妥当な振幅、ピアノ的エンベロープ)。が、FM 音源と合算
+  すると「ビリビリ」歪みが出る。Pixel 10 でも同様なので ChromeOS の Audio (CRAS) は無罪。
+  原因候補: (a) freepats の GUS パッチ品質、(b) `vermouth_getpcm` と他 cb の合計が
+  SINT16 範囲を超えるクリップ歪み (`>> 1` 程度では改善せず)、(c) `midiout_get` 内部の
+  preparepcm が呼ばれること自体の副作用 (no-op で症状消失)。再開時の選択肢:
+  1. VERMOUTH 出力を更に減衰 (`>> 2/3`) + クリップ抑制で改善するか試す
+  2. freepats を eawpats 等のリッチセットに差し替え
+  3. JS 側 SoundFont 合成 (sf2synth.js / spessasus) に経路を切り替える
+
+- **ゲーム側 MIDI 検出ロジックの解明 (Phase 4 以降に再分類)** — プリメ 2 で MPU98II を
+  `mpuopt=0` (IRQ 3) / `mpuopt=2` (IRQ 6 = PC-98 INT2 表記) のいずれで attach しても
+  音源選択メニューが出ず、`mpu98ii_o0/o2` への write も 0 件 (= **MIDI 検出されていない**)。
+  プリメ 2 マニュアルによれば「FM のみなら音源選択メニューは出ない」のが仕様で、
+  逆に言えばメニューが出ないこと自体が「MIDI 無し判定」のサイン。
+  検出経路は MPU port のステータス読みだけでなく、BIOS の音源 ID 領域 (`0x60100` 付近?)
+  や別の I/O port を見る可能性が高い。再開時は「ゲームから読まれる全 I/O port をログ」
+  「BIOS sound ID メモリの内容を確認」で検出経路を特定すべき。
+
+- **FreeDOS(98) の完走** — 現状は HMA buffer 確保まで進むが、BIOS 拡張ハンドラ不足で
+  `E869:075B` 付近に飛び込んで暴走。実機 `bios.rom` 利用 (著作権問題) か、
+  `nosyscode` ベースの BIOS フック拡張で解決可能。優先度は低い（ゲームは
+  自己起動のため DOS 不要のことが多い）
+
+- **セーブステート / 設定永続化** — np2kai のステート保存 API + IndexedDB
+
+---
+
+## Phase 3 計画 — ミニマル DOS ローダ
+
+### 目的
+
+DOS を介さず、`.lzh` などのアーカイブから直接 PC-98 ソフトを起動できるようにする。
+FreeDOS の完走を待たず、`bridge` 側に最小限の DOS 互換層 (ローダ + INT 21h ハンドラ)
+を実装し、ブラウザで .lzh をドロップしたら中の .EXE/.COM を即実行できる体験を作る。
+
+### ターゲットスコープ
+
+**フロッピーベース・2D・〜1998 年の PC-98 同人/フリーソフト** に絞る。
+
+- Vector の MS-DOS / 汎用 (PC-98) カテゴリ、コミケ同人ソフトの大半が射程
+- 期待カバー率:
+  - **フロッピー 2D 〜98 freeware に限定: 80〜90%**
+  - PC-98 freeware 全体: 55〜65%
+  - PC-98 商用ソフト全体: 30〜50% (HDD/extender が多いため低め)
+
+### 含むもの
+
+- LZH / ZIP 展開 (JS 側)  ※当初は `libarchive.wasm` 想定 → 実装は自前デコーダ採用 (下記「主な技術選択」)
+- MZ ヘッダ解釈・リロケーション・PSP 構築 (.EXE ローダ)
+- COM ローダ (org 0x100)
+- INT 21h ハンドラ (最小セット、下表)
+- MCB チェーンによるメモリマネージャ
+- ファイル I/O は Emscripten FS をバックエンドにラップ
+- PC-98 固有 BIOS パススルー (INT 18h 等は既存 NP2kai 経路を活用)
+- 既存マウス入力 (Pointer Lock) との接続 (INT 33h スタブ + 直接 I/O はそのまま)
+- PSP `80h` への CLI 引数文字列セット (ローダ UI 側で入力可能に。`zar FILE` /
+  `same [-options] [datfile]` 等で必須)
+
+### 含まないもの (将来課題 / Phase 4+)
+
+- **DOS Extender** (DOS/4GW, PMODE/W, GO32) — DPMI host 実装が必要 (+2〜4 週)
+- **CD-ROM ドライバ** (MSCDEX, ISO9660) — +1 週
+- **3D ポリゴン処理** — スコープ外 (商用寄り、同人少数派)
+- **N88-BASIC ROM 依存ソフト** — 著作権の壁
+- **MIDI ドライバ (RMDRV 等 TSR)** — 既存 MIDI 課題と統合 (Phase 4 以降)
+- **HDD インストール前提のソフト** — フロッピーで完結するもの限定
+- **ファイル管理/常駐系ツール全般** — 代表 1 本 (Ray) のみ対象
+- **RAR / 多重圧縮アーカイブ** — テストスイートのターゲット差し替えで不要化済
+  (Super Depth 2 Finalty .rar は対象外、オリジナル Super Depth .zip→.fdi を採用)
+
+### 必要な INT 21h 関数 (初期実装)
+
+| AH | 機能 | 用途 |
+|---|---|---|
+| 02h | Print Character | テキスト出力 (起動メッセージ等) |
+| 09h | Print String | 同上 |
+| 25h | Set Interrupt Vector | ゲームの割り込みフック |
+| 2Ah / 2Ch | Get Date / Time | 乱数シード等 |
+| 30h | Get DOS Version | バージョン分岐回避 |
+| 35h | Get Interrupt Vector | フック前の値保存用 |
+| 3Ch | Create File | セーブ書き出し |
+| 3Dh | Open File | データロード |
+| 3Eh | Close File | 〃 |
+| 3Fh | Read File | 〃 |
+| 40h | Write File | セーブ |
+| 42h | Seek File | ランダムアクセス |
+| 43h | Get/Set File Attributes | ファイル属性確認/設定 (Super Depth が使用) |
+| 44h | IOCTL (Get Device Info) | FH がファイル or デバイス判定 (Super Depth が使用) |
+| 48h | Allocate Memory | ローダ自身 + 一部ゲーム |
+| 49h | Free Memory | 〃 |
+| 4Ah | Resize Memory | EXE 起動時の自己縮小 |
+| 4Ch | Terminate with Code | 終了処理 |
+| 31h | Keep Process (TSR) | Ray の `rin.com` 常駐音源ドライバ。+α 扱い (`rin.com` 無しでも BEEP フォールバックで起動可) |
+
+互換性検証で不足が判明したら都度追加。
+
+### 工数見積もり
+
+合計 **約 2 週間 (実働 10〜12 日)**
+
+| Day | 内容 | 工数 |
+|---|---|---|
+| 0 | LZH/ZIP 展開 (JS、自前デコーダ) + Emscripten FS 配置 + IRQ 配送 (VSYNC) パス事前確認 | 0.5 日 |
+| 1〜2 | MZ/COM ローダ (ヘッダ・リロケーション・PSP・CS:IP・cmdline) | 1.5 日 |
+| 3〜4 | INT 21h 最小セット (上表 15 個程度) | 2 日 |
+| 5 | メモリマネージャ (MCB チェーン、Z/M ブロック) | 1 日 |
+| 5 | ファイル I/O ラッパ (Emscripten FS 経由) | 0.5 日 |
+| 6〜7 | PC-98 固有 (INT 18h パススルー、A20、INT DCh 主要 fn) | 1〜2 日 |
+| 8〜12 | 互換性デバッグ (テストスイート — Phase 3 ローダ 4 本) | 3〜5 日 |
+
+進捗は非線形 — Day 7 までに 1 本目が動き、そこから「不足 INT を見つけて埋める」サイクル。
+**70 点までは早く到達、90 点までは長い** という典型パターンを想定。
+
+### テストスイート (5 本)
+
+複雑度の昇順にバグ切り分けが綺麗になる順序で選定。
+**1 本 (Super Depth) は .fdi 配布なので Phase 2 FDD 経路で動作確認、4 本が Phase 3 ローダ対象**:
+
+| # | タイトル | アーカイブ | 形式 | 経路 | プロファイル | 主な検証ポイント |
+|---|---|---|---|---|---|---|
+| 1 | **さめがめ** | `sam98210.lzh` 32KB | LZH → MZ .exe | **Phase 3** | 静的パズル / マウス (任意) / 超小型 | ローダ + INT 33h スタブ / `-k` フォールバック + ファイル read + PSP cmdline |
+| 2 | **ザルバールの蒸留塔** | `zarfw.lzh` 188KB | LZH → MZ .exe | **Phase 3** | 動的物理パズル / マウス必須 (PC-98 native I/O) | INT 18×31 / INT DC×3 + マウス I/O 直叩き + セーブ (`ZARF.SCR`) |
+| 3 | **GO!GO! うさちゃん列車** | `rabbit31.lzh` 22KB | LZH → .com | **Phase 3** | 半リアルタイム / BEEP / レール+タイル | KEY/VSYNC IRQ 占有 + 裏 VRAM + ハイスコア (`RABBIT.HSC`) |
+| 4 | **Super Depth (.fdi)** | `Super Depth (Bio 100%).zip` 165KB | ZIP → **.fdi** (1.21MB) | **Phase 2 FDD** | 横スクロール STG / FM / キー | 既存パイプライン上で自己起動。Phase 3 ローダ不要 (B1 で確認済) |
+| 4.5 | **Super Depth (LZH)** | `DEPTH100.LZH` 75KB | LZH → MZ .exe + データ 10 本 | **Phase 3** | 同上 (DOS 版) / VSYNC+Timer IRQ / FM | **INT 21h ほぼ全部** (43h/44h 含む) + IRQ 配送 + FM port 直叩き + 大量データ read |
+| 5 | **Ray IV** | `ray_iv2a.lzh` 185KB | LZH → MZ .exe + `rin.com` (TSR) + .ray データ | **Phase 3** | AV ツール / FM+タイマ IRQ / 編集 | INT 1Ch hook + BEEP フォールバック起動 + (+α) TSR install で FM 演奏 |
+
+#### 各タイトル補足
+
+- **さめがめ** (kyoto & W.Yossy, 1993): MS-DOS 付属 `mouse.sys` / Microsoft 互換ドライバ経由で
+  マウス操作。Phase 3 で INT 33h スタブが間に合わない場合は `-k` オプションでキーボード操作に
+  フォールバック可。`same [-options] [datfile.kdt]` 形式で PSP cmdline 必須。
+- **ザルバールの蒸留塔** (onion software / T.Anazawa, 1995): 引力で流れ落ちる 2 液体を、マウスで
+  壁を破壊/構築して片方だけ抽出する蒸留パズル。面ごとに量・純度・時間制限と液体性質が変化。
+  **マウスドライバ不要** — PC-98 ネイティブ I/O port (`0x7FD9/DD/DF`) を直叩きするので、
+  NP2kai 既存マウス I/O 経路がそのまま機能する (INT 33h 実装不要)。
+  Turbo C++ + NASM + ANNEX ランタイム製。320KB 程度のフリーエリア要。
+- **GO!GO! うさちゃん列車** (KEN Takahashi, 1993): パネルにレールが描かれており、パネルを動かして
+  レールをつなげ、列車を目的地へ導く。通過したレールは消え、全部通過で面クリア。
+  **KEY 割り込み + VSYNC 割り込みを占有** (doc 明記)、裏 VRAM 使用、BEEP 音源のみ。
+  Day 0 で VSYNC IRQ 配送パスを確認しておかないとローダのバグか IRQ パスのバグか切り分け困難。
+- **Super Depth (.fdi)** (Bio 100%): .fdi 形式のフロッピーイメージとして配布されている自己起動ソフト。
+  **Phase 3 ローダの対象外** — `.fdi` を accept リストに追加済 (B1)、A: にドロップで動作試験する。
+  Phase 2 路線の動作確認サンプルとして残す。
+- **Super Depth (LZH 配布版, `DEPTH100.LZH` 75KB, 1991)**: 上記と同じゲームの **DOS 版バイナリ** 配布。
+  `depth.exe` (MZ, 70KB, 7 reloc, entry CS:IP=0000:E64A, SS:SP=11EC:1000, min_alloc 7KB) +
+  データ 10 本 (`.bgm/.efs/.scr` テキスト、`.bos/.cXX/.fnt` は BFNT 形式) で構成。
+  **doc 明記の前提**: MS-DOS 3.30+、PC-9801VM (286 10MHz)+、16 色、FM 音源、**VSYNC + Timer 割り込み使用**。
+  **INT 21h 実測結果** (MOV AH;INT 21 パターン 49 件): 25h/2Ah/2Ch/30h/35h/3Ch/3Dh/3Eh/3Fh/40h/42h/
+  **43h/44h** /48h/49h/4Ah/4Ch — **ほぼ計画通り** だが **43h (Get/Set Attr) と 44h (IOCTL Get Device Info)
+  を追加実装** する必要あり (上の INT 21h 初期実装表に反映済)。
+  INT 18h × 7、INT 1Ah × 1、INT DCh × 2 は既存 NP2kai 経路でカバー。
+  起動オプション `-X` `-G` (PSP cmdline 経由)。データファイル群は独自フォーマットだがゲーム側
+  が自前で `fopen` 経由読み込むだけなので、Emscripten FS へ `/run/` 展開すれば足りる。
+- **Ray IV** (ともゆき / Tomoyuki.U, 1988-95): FM 音源演奏 + 16 色グラフィック + ESC キャラアニメの
+  AV 統合ソフト。Ray データの再生・編集の両モードあり。LSI-C-86 v3.30 + 電波新聞社「FM音源音色
+  ライブラリ Vol.2」製。
+  **`rin.com` は常駐音源ドライバ (TSR)** — INT 21h AH=31h で先にインストールしてから `ray.exe` を
+  起動するのが本来のフロー。**`rin.com` 無しでも BEEP 擬似 3 重和音でフォールバック起動**できると
+  doc にあるので、まず BEEP モードでデモ動作のみ確認し、TSR 連携は +α 扱いとする。
+
+#### 実行順 (推奨)
+
+1. **Super Depth (.fdi)** (B1 確認時 / Phase 3 着手前) — 既存 Phase 2 で動くこと自体の確認
+2. **さめがめ** (Day 8) — 静的、最小負荷、ローダ妥当性確認
+3. **Super Depth (LZH)** (Day 8〜9) — INT 21h ほぼ全部 + IRQ + FM の中量級チェック。`.fdi` 版で
+   ゲーム動作自体は確認済なので、純粋にローダ/INT 21h/IRQ 配送の総合テストになる
+4. **ザルバールの蒸留塔** (Day 9〜10) — 動的物理 + マウス native I/O、固定画面
+5. **GO!GO! うさちゃん列車** (Day 10) — IRQ 占有 + 裏 VRAM
+6. **Ray IV (BEEP モード)** (Day 11) — ローダ単体での起動確認
+7. **(+α) Ray IV (rin.com TSR 連携)** (Day 12) — INT 21h AH=31h 経路の動作確認
+
+### 主な技術選択
+
+- **LZH/ZIP 展開は JS 側**: 当初は `libarchive.wasm` を想定したが、**自前の軽量デコーダを採用**
+  (`web/player/archive.js`)。LZH=LH4/5/6/7 + ヘッダ L0/1/2、ZIP=`DecompressionStream('deflate-raw')`。
+  数百 KB の Wasm 依存を増やさず、`tools/lh5_test.js` で `lha` とバイト比較検証できる利点を優先。
+  bridge 側では展開しない。RAR は本フェーズ対象外
+- **ファイル I/O は Emscripten FS**: bridge の INT 21h ハンドラから libc 経由で読む
+- **メモリレイアウト**: MCB を 0x0500 開始、PSP を 0x1000 付近、EXE をそのあと
+- **PSP は簡易版**: 0:DOS exit、80h: command line tail、env segment は空。
+  ローダ UI 側に「起動引数」入力欄を用意し、PSP `80h` (長さ 1B + 文字列 + 0x0D) にセット
+- **マウス**: INT 33h スタブ (same.exe 用) + PC-98 native I/O port (zar 用) の二系統。
+  どちらも NP2kai 既存マウス I/O 経路の上に配線
+
+### リスクと緩和
+
+| リスク | 影響 | 緩和 |
+|---|---|---|
+| DOS Extender 使用ソフトが多い | テスト本数中 N 本動かず | **テスト 5 本は事前調査で全本 extender 不使用と確認済** (2026-05-27) |
+| PC-98 固有 INT が想定より多い | 個別調査必要 | `qbDebug.sample()` でハング時の INT を特定 |
+| MZ 以外の形式 (NE/LE/LX) | 読み込み失敗 | スコープ外と判定、対象除外。**テスト 5 本は全本 MZ/COM** 確認済 |
+| マウスが DOS 経由か直接 I/O か未調査 | テスト時無反応 | **調査済** — same=INT 33h (`-k` で keyboard fallback)、zar=PC-98 native I/O |
+| rabbit の VSYNC IRQ 配送パス未確認 | 起動時にハング、原因切り分け困難 | Day 0 で IRQ 配送 (CRT IRQ ＝ NP2kai 既存経路) を bridge 経由で確認 |
+| Ray の `rin.com` TSR 連携 | INT 21h AH=31h 未実装で動かず | `rin.com` 無しで BEEP フォールバック起動を Phase 3 合格条件に、TSR 連携は +α |
+| 互換性の長尾が想定より長い | Day 12 で完了せず | 「Phase 3 ローダ 4 本中 3 本」で Phase 完了と定義、残りは Phase 4 へ |
+
+### Phase 3 完了の定義
+
+- **Phase 3 ローダ対象 4 本** (さめがめ / ザルバール / うさちゃん列車 / Ray) **のうち
+  3 本以上が「タイトル/メイン画面以降の操作が可能な状態」で動く** こと
+- **Super Depth (.fdi)** が Phase 2 経路で起動・操作可能であること (B1 で先行確認)
+- 1 本が技術的にスコープ外と判明した場合 (例: Ray の TSR 経路が想定外に複雑) は
+  除外して 3 本中 2 本で可。Ray の +α (TSR 連携) は合格条件外
+
+### 進捗チェックリスト
+
+**B1 (Phase 3 着手前の事前整備):** [完了]
+- [x] テストスイート 5 本のアーカイブ中身調査 (2026-05-27) — 全本 MZ/COM、extender 不使用
+- [x] `web/index.html` の accept リストに `.fdi` 追加 (Super Depth 用)
+- [x] Super Depth (`.fdi`) を Phase 2 FDD 経路で起動・操作確認 (2026-05-27)
+
+**Day 0 — scaffolding + 前提確認:** [完了 2026-05-27]
+- [x] **Day 0a:** LZH/LH5 デコーダ実装 (`web/player/archive.js`) — `tools/lh5_test.js` で
+  4 アーカイブ全 39 ファイル `lha xq` と byte-by-byte 一致
+- [x] **Day 0b:** ZIP-deflate 解凍 (`parseZip` + DecompressionStream) — Super Depth zip
+  → .fdi が byte-perfect
+- [x] **Day 0c:** VSYNC IRQ 配送パス確認 (`tools/vsync_test/`) — 56Hz で text VRAM
+  カウンタが回ることをユーザ目視確認
+- [x] Run スロット UI + cmdline 入力 (`web/index.html`/`bridge.js`) + `db/games.json` 配信
+- [x] LZH 展開 → Emscripten FS `/run/` 配置、ZIP-FDI → A: 挿入の 2 経路を Run ボタンに配線
+- [x] `qbDebug.{ls,read,readSize,fs}` を追加して FS を DevTools から確認可能に
+
+**Phase 3 ローダ実装 (Day 1-2 = 本実装、Day 3- = 互換性):**
+- [x] **T1 (2026-05-28)**: 自作 hello.com (INT 21h AH=09h → AH=4Ch) — トランポリン + COM ロード
+  - 動作確認: `HELLO PHASE3` 表示 + exit code 0
+  - 実装: `native/dos_loader.c/h` (image staging + 0xFEE00 ハンドラ + PSP 構築 + CPU 状態書換) +
+    `native/dos_int21.c/h` (02h/09h/4Ch + tty 風 VRAM 出力) + `tools/dos_loader/boot.asm` (8B 自己起動) +
+    NP2kai bios.c に 3 case 追加 + `qb_dos_install_trampolines()` を `bios_initialize` 末尾から呼ぶ
+  - NP2kai 改変は `tools/np2kai_patches/01_dos_loader_hooks.patch` に保存、`emscripten/build.sh` が自動適用
+- [x] **T2 (2026-05-28)**: 自作 args.com (PSP 0x80 を読んで表示) — cmdline
+  - 動作確認: cmdline 入力 `-k` → 画面 `ARGS:[ -k]` (先頭スペース込み) + exit 0
+  - 実装: `dos_loader.c` の `stage_cmdline` で先頭スペースを prepend (実 DOS の PSP tail 慣例)、
+    `tools/dos_loader/args.com.py` (52 byte) で PSP[0x81+len] を '$' 上書きしてから AH=09h 印字
+- [x] **T3 (2026-05-28)**: 自作 hello.exe (MZ + reloc) — MZ パース + リロケーション
+  - 動作確認: 画面 `HELLO EXE` (改行) + exit 0、reloc 1 件適用
+  - 実装: `qb_dos_stage_exe` (MZ/ZM 両 magic 許容、ヘッダ整合検査 -3〜-9 のエラーコード、
+    image_base_seg=0x0110 を reloc 即時加算)、`loader_start_hook` を COM/EXE で kind 分岐、
+    staging buf を **640KB (PC-98 基本メモリ上限)** に拡張、`tools/dos_loader/hello.exe.py` (76 byte)
+  - 副次修正: `dos_int21.c` の `g_cur_row/col` が reset を跨いで残り連続実行で 1 行ズレるバグ →
+    `qb_dos_tty_reset()` を loader_start_hook から呼ぶ
+- [x] **T4 (2026-05-28)**: さめがめ (sam98210.lzh, `-k` keyboard モード) — **プレイ可能まで通過**
+  - 動作確認: LZH → ローダ → メニュー → Start Game → カーソルキー + スペースで領域選択 + 領域消去まで動く
+  - INT 21h を 3 → **20 fn** に拡張: 02h/06h/09h/1Ah/25h/2Ah/2Ch/30h/35h/3Ch-3Fh/40h-44h/4Ah/4Eh/4Fh
+  - PC-98 ANSI/ESC パーサ (ESC c, [J, [K, [H, [>5h/l 等)、未使用 INT の IRET stub
+    (IVT[0x22..0xFF] が 0:0 のままだと事故、特に INT 33h)、正規 env segment (`A:\PROG.EXE` 入り)
+  - LZH 経路を stage&run に接続、ファイル名 lowercase 化 (FS case-sensitive 対応)
+  - UI: Stop ボタン (polling 強制停止)、Run 連打防止 (focus 外し)
+  - **真因の発見**: テキスト VRAM 残留は NP2kai の **行単位 dirty-flag** に通知していないことが原因
+    (メモリ直書きでは dirty が立たない → 前フレームのキャッシュが残る)。
+    `vram_clear_all` と `vram_put_char` で `gdcs.textdisp |= GDCSCRN_ALLDRAW2` を立てて解消
+  - debug 用: `qbDebug.textdisp() / grphdisp() / watchTextdisp() / textVram()` を追加
+- [~] **T4.5**: Super Depth (DEPTH100.LZH) — **全リソース読込まで到達**、音楽ドライバで hang (既知課題)
+  - [x] INT 21h **48h/49h** メモリ確保/解放 (bump allocator、`dos_loader.c`) — 2026-05-29
+  - [x] **MIDI reset → ブラウザ凍結 fix** (`qb_commng.c`、2 回目以降の `COMMSG_MIDIRESET` 省略) — 2026-05-29
+  - [x] **INT 21h の CF/ZF 復帰 fix** (`dos_int21.c`、`[SS:SP+4]` へ書き戻し。`_open` の JNC 判定等が機能) — 2026-05-29
+  - [x] **env/argv[0] fix** (`dos_loader.c::build_env`、空 env → argv[0] 空読み → パス累積を解消) — 2026-05-29
+  - [x] **close/ioctl の std ハンドル整合** (`dos_int21.c`、h=0..4 を close も no-op 成功) — 2026-05-29
+  - [ ] **(既知課題)** 起動ロゴ後、Bio_100% 独自 **MML 音楽ドライバ**で hang。音楽イベント走査ループ
+        (`0xFFFE` 終端の可変長レコード) が未コンパイルの生 MML バッファを舐めて無限ループ。
+        INT 21h ローダではなく音楽ドライバ依存で深い RE が必要。**Super Depth LZH はオマケ扱い**
+        (.fdi 版は Phase 2 で確認済) のため後回し。`qbDebug.regs()` でレジスタ確認可
+- [x] **コードベース堅牢化 (2026-05-30)**: コードレビューで洗い出した「場当たり実装」を解消。
+      全項目で さめがめ / Super Depth の回帰確認済。詳細は CHANGELOG。
+  - [x] **`dos_path_to_host` を case-insensitive リゾルバ化** — DOS(大小無視)↔MEMFS(大小区別)
+        のギャップを C 側で吸収 (旧: 両側で強制小文字化)。サブディレクトリ保持、MS-DOS 準拠
+        エラーコード (途中 dir 欠=path-not-found 3 / file 欠=file-not-found 2)
+  - [x] **AH=44h IOCTL の嘘成功是正** — 未対応 sub-fn は `CF=1`+ログ (旧: 全 sub-fn 無条件成功)
+  - [x] **FindFirst 属性マスク尊重 + DTA に実日付/時刻** (旧: 属性無視・日時 0 固定)
+  - [x] **ローダ入口の原理化** — argv[0] を実 image 名から生成 / EXE alloc ベースを `e_minalloc`
+        由来に (マジック `SS+0x1000` 排除) / 入口レジスタのマジック定数 (`CX=0xFF`/`BP=0x091C`) 撤去
+  - [x] **コメント陳腐化修正** (トランポリン番地 0xFFE0系→0xFEE00系、ローダ冒頭、bridge.js)
+- [x] **T5 (2026-05-30)**: ザルバール — **完全プレイ可能** (盤面・マウスで壁生成/破壊、クリアで
+      次面、quit でタイトル復帰)。zar.exe はランチャで `AH=4Bh EXEC` により実体エンジン
+      siz3/siz4p.exe を起動する構成。**EXEC を「親常駐・子をアリーナにロード・子終了で親復帰」で実装**。
+      副次修正多数: 4Ah self-shrink、47h/2Fh/19h/33h/入力系、ブロッキング入力の IF デッドロック解消、
+      **DOS メモリマネージャを MCB チェーン化** (リーク解消)。詳細 [[feedback-dos-exec-launcher]]
+- [x] **T4.5 Super Depth LZH (2026-05-30)**: **プレイ可能になった**。「MML 音楽ドライバ hang」既知課題は
+      真因がメモリ破壊で、MCB チェーン化により根治 (音楽ドライバの RE は不要だった)。
+- [x] **DOS メモリマネージャ MCB チェーン化 (2026-05-30、ギャップ④解消)**: bump allocator (free=no-op) を
+      実 DOS 忠実な MCB チェーンに置換。48h first-fit+coalesce+分割 / 49h 実解放 / 4Ah 縮小分割・拡大結合 /
+      EXEC 子に最大空き割当 / 子終了で所有ブロック全解放 (free-on-terminate)。
+- [~] **T6 Ray IV (2026-05-31)**: **起動・RIN 常駐・FM 音楽・メニュー描画まで動作**。doc/strings 解析の結果、
+      Ray は (BEEP フォールバックではなく) **起動時に常駐音源ドライバ `RIN.COM` を自前で `AH=4Bh EXEC`
+      して常駐させる**構成と判明。実装: **EXEC の COM 子対応** + **AH=31h Keep Process (TSR)** +
+      **AH=45h/46h DUP/DUP2**。これで RIN.COM を COM ロード → OPNA 検出 → 常駐 → FM 音楽 →
+      RAYR.ENV/RAY_IV.RAY 読込 → メインメニュー描画まで通る。
+  - **未解決 (保留、2026-06-01 に原因を局所化)**: オープニング手前で hang する黒画面の正体は、
+    **Ray 自前の RLE グラフィック展開ルーチン** (`CS:IP=0110:0x9ca0-0x9f6c` = linear 0xada0-0xb06c,
+    DS=ES=0xB000=赤プレーン) が **全ゼロのソース + 全 0 のエスケープマーカ (regs BX=0000/DX=ff00 →
+    BL/BH/DL=0)** を舐めて空回りしているもの (SI は進むが DI ほぼ不動)。ループ中 INT 21h ゼロ /
+    IVT[21h・1Ch] 乗っ取りなし / grphdisp ENABLE off / VRAM 空 を確認 → ベクタ・ファイル I/O・IF・
+    表示 dirty の**いずれでもない**。真因は「**オープニング画像データが解凍バッファ (VRAM) に届いていない**」
+    上流のデータフローで深い RE 要 (Phase 4 候補)。試した **IF=1 起動 (A) は無効**。Phase 3 合格条件
+    (起動・デモ確認) は満たすため保留。詳細は CHANGELOG 2026-06-01。
+- [x] **うさちゃん列車 (2026-06-01)**: **プレイ可能** (起動・デモ・キー操作・面クリア)。**公式 3/4 達成**。
+      pure-asm で **生 IRQ1 を自前 INT 09h で受ける経路を初実証** (従来スイートは INT 18h BIOS 経由)。INT 21h は
+      既存実装 (02/09/0C/25/2A/35/3C-3F/40/4C) で充足。タイトルの全角化けは下記「日本語表示」の根治で解消。
+- [ ] (+α) Ray のオープニング/演奏完全表示 — 内部ループ hang の RE (Phase 4 候補)
+- [ ] (将来) Bio 100%「蟹味噌」: 左上の「KANI.SCRを作成します」が起動〜本編を通して消えず残留
+      (テキスト面が graphics の上に残留する系、Phase 4 候補)
+
+### 日本語 (漢字) 表示の課題 — 解決済み (2026-06-01)
+
+**真因:** `native/dos_int21.c::vram_put_kanji` が漢字セル高位バイトを `(jis_lo-0x20)|0x80` と索引化していた
+(低位=区索引は正しい)。PC-98 テキスト VRAM の漢字セルは **非対称符号化**で、**高位 = 生 JIS第2バイト | 0x80**
+が正解。font.bmp も `fontpc98.c`(pc98knjcpy) も `maketext.c` も `cgrom.c`(CG窓) も全てこの配置で内部整合
+しており、**font.bmp は最初から正しかった**。高位を `jis_lo|0x80` に直して根治 (実機回帰確認済:
+rabbit タイトル正常・sjistest 全角正常・さめがめ無回帰)。さめがめは CG 窓経由なので無関係 (回帰ゼロ)。
+- **前回 (2026-05-31) の「標準JIS不一致で保留」は誤診**: font.bmp を区/点「索引」で覗いて空白を見たため
+  (実際は jis_lo「バイト」位置に正しく格納)。詳細は CHANGELOG 2026-06-01 と [[feedback-pc98-kanji-font]]。
+- 副産物の **リセット時 fontrom ゼロ埋め抑止** (`02_font_reset_fix.patch`) は引き続き有効 (generic 改善)。
+- 誤診ベースの `make_kanji_font.py` は **削除**。SJIS-tty 描画コードは **現役** (rabbit タイトル/sjistest で稼働)。
+
+### INT 21h ギャップ一覧 (2026-05-30 棚卸し)
+
+現状 INT 21h は **24 fn 実装** (`02 06 09 1A 25 2A 2C 30 35 3C 3D 3E 3F 40 41 42 43
+44 48 49 4A 4C 4E 4F`、44h は sub `00/01` のみ)。残りを「テストスイートへの効きやすさ順」で。
+**ground truth**: `dos_int21.c` の default が `[int21h] UNIMPL AH=XX` をログするので、
+T5 を一度回せば zar が実際に叩く未実装 AH が即わかる。下記は先回り候補のカタログ。
+DEPTH は実測済みで AH 不足ゼロ (hang は MML ドライバ side)。
+
+**重要な前提 (2026-05-30 判明)**: PC-98 ゲームはキー入力を **INT 18h** (PC-98 キーボード
+BIOS、`bios18.c` が実装済) 経由で読む。**さめがめが DOS 入力ゼロのまま動いた**のが証拠。
+→ 下記①の DOS 入力系は「保険」で、テストスイートでは未行使の可能性が高い。
+
+- **① コンソール入力系** [一部実装 2026-05-30: `01 07 08 0A 0B 0C`、`19`/`33` も追加]
+  blocking は NP2kai 流の `CPU_IP--; CPU_REMCLOCK=-1` で再ポーリング (`bios18.c` AH=00h と同手法)。
+  BIOS キーバッファ (0x502, count 0x528) から読む。`05h` プリンタ出力は未実装 (不要)。
+- **② C ランタイム起動時の system 系** [`19h`/`33h` 実装済 2026-05-30]
+  残: `36h` 空きディスク容量、`47h` カレントディレクトリ、`3Bh` CHDIR、`0Eh` ドライブ選択、
+  `38h` 国別情報。← T5 の UNIMPL ログで要否を確定してから追加。
+- **③ ハンドル/日付の取りこぼし**: `57h` ファイル日時 get/set、`45h`/`46h` DUP/DUP2、
+  `5Bh` 排他 create、`59h` 拡張エラー、`2Bh`/`2Dh` 日付/時刻 set。
+- **④ 構造的な穴 (個別 fn でなく仕組み)**:
+  - **本物の MCB チェーンが無い** — `48/49/4A` は bump allocator で free は no-op (巻き戻さない)。
+    alloc/free を繰り返す or `4Ah` 伸縮するゲームはリーク/破綻。参照: DOSBox-X `dos_memory.cpp`。
+    工数 中 (〜半日, 100〜150 行)。**テストスイートは小型 FD ゲームで起動時 1〜2 回 alloc 想定 →
+    当面 bump で足り、必要になった時に実装する** 方針。
+  - **PSP フィールド欠落** — `build_psp` は 00/02/2C/50/80 のみ。`18h–2Bh` JFT、`0Ah–15h` 保存
+    ベクタ、`5Ch`/`6Ch` 解析済 FCB 2 個が空。cmdline 引数を tail でなく FCB から読むソフトは引数欠落。
+  - **FCB 系ファイル I/O 一族** (`0F 10 11 12 13 14 15 16 17 21–24 27 28 29`) 丸ごと未対応。
+    古いソフト (Ray IV 1988-95 等) が使う可能性。ハンドル系実装済なので C ランタイム製なら不要。
+  - `4Bh` EXEC (子プロセス/オーバーレイ起動) 未対応。`31h` TSR は Ray rin.com 用で +α 既知。
+- **⑤ INT 21h 以外で注意 (PC-98)**:
+  - **INT DCh** — zar/DEPTH が叩くが `dos_loader.c` の「IVT[0x22..0xFF] が 0:0 なら IRET-stub」
+    ループの射程内。**NP2kai が IVT[0xDC] を実ハンドラで埋めているか要確認** — 埋めてなければ
+    我々が no-op IRET に潰している可能性 (静かに誤動作)。T5 で挙動が変なら最初に疑う場所。
+  - `INT 18h`(zar×31)・`INT 1Ah`(zar×1) は 0x00–0x1F 帯で NP2kai 既存経路 → OK 想定。
+  - `INT 2Fh` (multiplex) は IRET-stub 帯 → 常に「未インストール」応答。XMS/MSCDEX 検出は失敗
+    するがスコープ外なので妥当。
+
+**ESC シーケンスについて**: PC-98 ANSI/ESC パーサは T4 (さめがめ) で実装済 (`ESC c/[J/[K/[H/[m
+/[A-D/[>5h/l`)。残テストスイート (zar/rabbit/ray) は固定画面 or 自前描画なので **既存セットで足りる
+見込み**。未知シーケンスで表示が乱れたら個別追加する reactive 対応で十分。漢字の 2 バイト出力は
+別件 (後回し中の文字コード問題 = [[reference-dosbox-x-pc98-hle]] / int_dosv.cpp 参照)。
+
+### T1 実装で得た学び (Day 1-2 設計の補正)
+
+**トランポリン番地の選定** — 0xFFE0/FFD0 等を当初想定したが衝突あり:
+- `0xFFFE8/0xFFFEC` = bootstrap entry (NOP+RETF、`bios_initialize` で設置済)
+- `0xFFFF0` = reset vector (`JMP FAR FD80:0000`)
+- `0xFD800-0xFEC37` = `biosfd80.res` の中身 (約 5KB の BIOS ROM 模擬)
+- → 空き領域は **0xFEC38 以降**。実際の採用番地は `0xFEE00/EE10/EE20/EE30`
+
+**`biosfunc` の case ラベルは linear address** — `BIOS_BASE + BIOSOFST_*` (= segment FD80 のオフセット式) と
+混在しているが、0xfffe8/0xfffec/0xFEE00 等は直接 linear address で書く。F000:EE00 → `case 0xFEE00`。
+
+**ニワトリ卵問題** — NOP は guest が踏まないとフックが発火しない。よってフック内で NOP を書く設計はダメ。
+**`bios_initialize` (= 毎リセットで実行) で NOP を pre-install する** のが正解。`qb_dos_install_trampolines()`
+は `bios_initialize` 末尾から呼ばれ、毎リセットでトランポリンを再書き込みする。
+
+**CPU レジスタアクセス** — `CPU_AH` / `CPU_AL` / `CPU_AX` 等の byte/word/dword 別マクロが揃っている
+(`core/np2kai/i386c/ia32/cpu.h`)。`CPU_CS/DS/ES/SS` 書き換え後は `ia32_bioscall` が `LOAD_SEGREG` で
+自動 reload するので明示呼び出し不要。CF は `CPU_FLAG |= C_FLAG` (= 1<<0)。
+
+**終了処理** — INT 21h AH=4Ch で `CPU_CS:IP` を BIOS 領域の `F4 EB FD` (HLT; JMP -3) に飛ばすと、
+image の続きを実行させずに CPU を停止できる。JS 側は 100ms polling で exit を検知。
+
+### Phase 3 Day 1-2 設計 (確定済、未実装)
+
+#### トランポリン機構
+NP2kai は **任意の NOP (0x90) を BIOS 領域 (0xF8000-0xFFFFF) で実行 → `ia32_bioscall` →
+`biosfunc(adrs)` C 関数呼び出し** という既存フック機構を持つ (詳細は memory
+[[feedback-np2kai-nop-hook]])。USE_CUSTOM_HOOKINST 等のコンパイルフラグ追加不要。
+
+レイアウト (空き BIOS 領域 0xFE000〜):
+```
+0xFE00:0000  90 CF   NOP; IRET   — INT 21h dispatcher
+0xFE00:0010  90 CF   NOP; IRET   — INT 33h (mouse)
+0xFE00:0020  90 CF   NOP; IRET   — INT 18h overlay (必要時、PC-98 BIOS 拡張)
+0xFE00:0080  90      NOP         — ローダ起動エントリ (CS:IP/PSP セット用フック)
+```
+
+`core/np2kai/bios/bios.c:biosfunc()` の switch に case を追加するだけ (forward decl 経由で
+`native/dos_*.c` 側関数を呼ぶ)。NP2kai 触る唯一の箇所。
+
+#### ブートストラップ (`tools/dos_loader/boot.asm`, 1024 byte)
+1. テキストモード設定 (既存パターン、boot_hello 流儀)
+2. IVT[0x21] = 0xFE00:0x0000、IVT[0x33] = 0xFE00:0x0010 を書く
+3. `jmp far 0xFE00:0x0080` で「ローダ起動フック」へ
+4. bridge 側: ia32_bioscall → biosfunc(0xFE080) → JS から渡された image を guest メモリ
+   へ展開、PSP 構築、CS:IP/SS:SP を image エントリへ書き換え → return
+5. CPU が新 CS:IP から image を実行開始
+
+#### メモリレイアウト
+```
+0x00000-0x003FF  IVT (256 entries × 4 byte)
+0x00400-0x005FF  BIOS data area (NP2kai 既存)
+0x01000          PSP (segment 0x0100, 256 byte)
+0x01100          .EXE/.COM ロード位置 (segment 0x0110) + Z block 空きヒープ
+0xA0000-0xBFFFF  text/graphics VRAM (既存)
+0xFE000-0xFE0FF  我々のトランポリン
+```
+
+#### PSP (DOS 互換、最低限)
+- 0x00: `CD 20` (INT 20h = DOS exit ショートカット)
+- 0x02: top-of-memory paragraphs
+- 0x2C: env segment (0 = 空環境)
+- 0x50: `CD 21 CB` (INT 21h; RETF = DOS call ショートカット)
+- 0x80: cmdline 長 (1 byte) + 0x81..: cmdline + 末尾 0x0D
+
+#### ローダ本体 (`native/dos_loader.c`)
+JS 側 bridge.js: `qbDos.load(file: File, name: string, cmdline: string)` で:
+1. parseLzh から `/run/{name}` を読む
+2. bridge 関数 `np2kai_dos_load(name_ptr, cmdline_ptr)` に渡す
+
+C 側 (`native/dos_loader.c`):
+- COM (拡張子 `.com` / 先頭が `MZ` でない): segment 0x0110 へ生コピー、CS:IP = 0x0110:0x0100、
+  SS:SP = 0x0110:0xFFFE
+- EXE (先頭 `MZ`): header 解析、image を 0x0110 以降に展開、relocation 適用、CS:IP/SS:SP =
+  header 指定 + 0x0110
+- 共通: PSP を 0x0100 セグメントに作る、cmdline を 0x80 に書く
+
+#### INT 21h 初期セット (`native/dos_int21.c`)
+- **Day 1**: `4Ch` (exit), `09h` (print string), `02h` (print char)
+- **Day 2**: ファイル系 (`3Dh open`, `3Eh close`, `3Fh read`, `40h write`, `42h seek`),
+  PSP/メモリ系 (`30h get version`, `48h alloc`, `49h free`, `4Ah resize`),
+  その他 (`25h set vec`, `35h get vec`, `2Ah/2Ch date/time`)
+- **+α**: `31h Keep Process` (Ray の rin.com TSR、Phase 4 候補)
+
+`4Ch` (exit) は CPU を halt させる代わりに「終了画面に戻る」フラグを立てて、
+`np2kai_run_frame` ループから抜ける形にする。
+
+#### モジュール分割 (新規)
+- `native/dos_loader.c/h` — MZ/COM ローダ + PSP 構築 + メモリレイアウト
+- `native/dos_int21.c/h` — INT 21h ハンドラ群
+- `native/dos_int33.c/h` — INT 33h (マウス) スタブ
+- `core/np2kai/bios/bios.c` に biosfunc dispatch case 追加 (forward decl 経由)
+- `tools/dos_loader/boot.asm` — 1024 byte ブートストラップ
+- `web/player/bridge.js` Run ボタン: lzh 経路を新ローダへ繋ぐ (現状は `/run/` 展開止まり)
+
+#### 検証順 (T1〜T5)
+| # | テスト | 目的 |
+|---|---|---|
+| T1 | 自作 hello.com (AH=09h → "hello" → AH=4Ch) | トランポリン + COM ロード + 2 関数 |
+| T2 | 自作 args.com (PSP 0x80 を読んで表示) | PSP cmdline |
+| T3 | 自作 hello.exe (MZ 形式、reloc あり) | MZ パース + リロケーション |
+| T4 | sam98210.lzh / same.exe `-k` | ファイル read + メモリ系 |
+| T4.5 | DEPTH100.LZH / depth.exe | INT 21h ほぼ全部 (43h/44h 追加) + VSYNC/Timer IRQ + FM + 大量データ read |
+| T5 | zarfw.lzh / zar.exe / マウス | INT 33h + PC-98 native I/O 連携 |
+
+---
+
+## メモ
+
+### d88ディスクイメージ仕様（PC-98 2HD）
+- 77 cylinders × 2 heads × 8 sectors × 1024 bytes = 1,261,568 bytes（raw）
+- `tools/img2d88.py` で raw .img → .d88 変換可能
+
+### ビルド手順
+```bash
+bash emscripten/build.sh
+emrun --port 8080 web/
+```
+
+### フレームバッファ
+- `bpp=2`: RGB16 (5-6-5) → JS側でRGBA32変換
+- 解像度: 640×400（PC-98標準）
+
+---
+
+## コードレビュー棚卸し (2026-06-01)
+
+ざっとレビューで挙がった残課題。重大な 2 件 (Run ボタン disabled / `setDriveName` 引数ずれ)
+は同日修正済み。以下は確信度 中〜低のエッジケース・保守性メモで、未対応。
+
+### ローダ (native) — 確信度 中〜低・エッジ
+- **大物 EXE で alloc アリーナが無音で size 0 に縮退** (`dos_loader.c:690-691, 138`)。
+  640KB 近い EXE で `image_base + end_rel + 0x10 > 0xFFFF` になると、エラーにせず
+  `QB_DOS_MEM_TOP_SEG`(0xA000) にクランプ → 空き 0 段のアリーナになり AH=48h が全失敗。
+  ログも出ないので「なぜか動かない」になりがち。最低でも warn ログ、可能なら明示エラーを。
+- **read/write が 64KB セグメントラップでなく 2MB linear で伸びる** (`dos_int21.c` の 3Fh/40h、
+  `poke8` の `& 0x1FFFFF` 任せ)。DS:DX がセグメント終端付近 + 大きな CX だと、本来ラップ
+  すべき書き込みが隣を踏む。実害は稀だがリアルモード的には不正。
+- **EXEC 親コンテキスト退避が `mem[splin]` を生インデックス** (`dos_loader.c:816-821, 862`)。
+  今は 2MB 配列内で安全だが、他が全て `poke8/peek8` でマスクしているのと非対称。
+- **常時 stderr デバッグログ多数** (open/seek 等の頻出パスにも、gate 無し)。本番では
+  verbosity フラグ化が望ましい。
+- **get 系ハンドラの一部が CF を明示クリアしない** (`int21_19/2a/2c/30/35` 等)。tail で
+  「触らなければ現状の FLAGS をそのまま書き戻す」設計なので、直前状態次第で CF が
+  残りうる。多くの呼び出しが CF を見ないため実害は出にくいが、厳密には clear すべき。
+
+### フロントエンド (JS) — 確信度 中〜低
+- **SJIS ファイル名の 0x5C 問題** (`archive.js` decodeName / bridge.js の `replace(/\\/g,'/')`)。
+  「ソ」「表」等 第2バイトに `0x5C` を含む漢字名でパスを誤分割しうる。ASCII 名が大半なので
+  実害限定だが、漢字ディレクトリ名の書庫で展開先が壊れる可能性。
+- **`archive.js` の堅牢性**: `inflateRaw` の `expectedSize` 引数が未使用 (展開後サイズ検証なし)、
+  `readPtLen`/`readCLen` が破損入力で `nsize` 超過の範囲外書き込みになりうる (JS なので
+  クラッシュはせず誤デコード)。正常データでは問題なし、堅牢化の余地。
+- **`pollDosExit._stop` の単一スロット** が自然終了後も前回参照を保持 (`currentPoll` ガードで
+  誤発火は防げているが設計が脆い)。
+
+---
+
+## LZH 対応状況と残ギャップ (2026-06-01)
+
+`web/player/archive.js` の対応: **メソッド** lh0 / **lh1** / lh4 / lh5 / lh6 / lh7、**ヘッダ** Level 0 / 1 / 2。
+`games/` 全 .lzh (Bio 100% 等) を `lha xq` と byte 比較する `tools/lh5_test.js` で **420 エントリ一致**
+(lh0/lh1/lh4/lh5 × L0/L1/L2 を実書庫で網羅検証)。
+
+**解決済 (2026-06-01):**
+- ✓ **`-lh1-` 対応** — LHarc 1.x の適応 Huffman + 4KB 窓を実装 (`lh1Decode`)。LHa for UNIX
+  dhuf.c/shuf.c/slide.c を参照しクリーン実装 (定数: THRESHOLD=3, maxmatch=60, N_CHAR=314, np=64,
+  位置は静的テーブル)。`GETS/GS100/MOG003.LZH` の 16 エントリが byte 一致。
+- ✓ **未対応メソッドで中断しない** — `parseEntry` は未対応メソッドを throw せず `data=null` で返し、
+  `parseLzh` は `next` で次へ進む。混在書庫でも対応エントリは取りこぼさない (bridge は skip + warn)。
+
+**残ギャップ:**
+- **lh6/lh7 実バイナリ未検証**: アルゴリズムは lh5 と同一で構成上は正当 (パラメータ表が LHa 標準と一致)
+  だが、本 corpus に lh6/lh7 が無く、手元の Lhasa は展開専用で作成もできず実データ照合が未。
+  実書庫が得られれば `games/` に置くだけで `lh5_test.js` が自動検証する。
+- **Level 2 ディレクトリ拡張ヘッダ (type 0x02) 未踏**: 実 L2 書庫が全てルート配置のため、サブディレクトリ
+  結合 (0xFF 区切り → '/') の経路は実書庫で踏まれていない (構成上の正当性のみ確認)。
+- **`-lh2-/-lh3-`, LArc (`-lz4/5/s-`), PMarc 等**: 未対応 (本スコープでは稀)。当たれば skip される。

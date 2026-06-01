@@ -1,0 +1,17 @@
+diff --git a/pccore.c b/pccore.c
+index d93284e..167fe78 100644
+--- a/pccore.c
++++ b/pccore.c
+@@ -1110,7 +1110,11 @@ void pccore_reset(void) {
+   FillMemory(mem + 0xC0000, 0xE8000 - 0xC0000, 0xff); // なぞ
+   ZeroMemory(mem + VRAM1_B, 0x18000);
+   ZeroMemory(mem + VRAM1_E, 0x08000);
+-  ZeroMemory(mem + FONT_ADRS, 0x08000);
++  /* qb: リセット毎の fontrom 先頭 0x8000 (= JIS 点 0..7 の漢字ブロック) ゼロ埋めを抑止。
++   * 本家は消去後 hook_fontrom が OS フォントから再生成するが、Wasm ビルドにはその
++   * バックエンドが無く、font_load も pccore_init で一度きりのため、消すと点1..7 の漢字
++   * (あ/い/う 等) が永久に欠ける。font は init で正しく設定済みなので消す必要は無い。
++   * (元: ZeroMemory(mem + FONT_ADRS, 0x08000);) */
+ 
+   // メモリスイッチ
+   for (i = 0; i < 8; i++) {

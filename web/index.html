@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>QB — PC-98 Player</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+    background: #111;
+    color: #ccc;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    font-family: monospace;
+}
+#screen {
+    /* border ではなく outline を使う: outline はレイアウト外なので
+       box-sizing: border-box によって canvas の CSS サイズが縮まない */
+    outline: 1px solid #333;
+    image-rendering: pixelated;
+    display: block;
+    cursor: crosshair;
+    /* CSS サイズは JS の fitCanvas() が動的にセット */
+}
+#screen.captured { cursor: none; outline: 1px solid #6af; }
+#drives {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
+}
+.drive {
+    min-width: 260px;
+    padding: 4px 10px;
+    font-size: 12px;
+    color: #aaa;
+    background: #1a1a1a;
+    border: 1px dashed #333;
+    border-radius: 3px;
+    cursor: pointer;
+    user-select: none;
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+}
+.drive:hover { color: #ddd; background: #222; border-color: #555; }
+.drive.dragover {
+    color: #cfe;
+    background: rgba(20, 60, 120, 0.4);
+    border-color: #6af;
+    border-style: solid;
+}
+.drive .label { color: #6af; font-weight: bold; }
+.drive .name  { color: inherit; }
+.drive.run-slot .label { color: #fa6; }
+.drive.run-slot.dragover { border-color: #fa6; background: rgba(120, 60, 20, 0.4); }
+#run-config {
+    display: flex;
+    gap: 8px;
+    margin-top: 6px;
+    font-size: 12px;
+    align-items: center;
+}
+#run-config[hidden] { display: none; }
+#run-config .field { color: #888; }
+#run-config .field b { color: #fa6; font-weight: normal; }
+#run-config input {
+    background: #1a1a1a;
+    color: #ddd;
+    border: 1px solid #444;
+    border-radius: 3px;
+    padding: 2px 6px;
+    font: inherit;
+    width: 180px;
+}
+#run-button, #stop-button {
+    background: #2a3a1a;
+    color: #cf9;
+    border: 1px solid #5a7;
+    border-radius: 3px;
+    padding: 2px 10px;
+    font: inherit;
+    cursor: pointer;
+}
+#run-button:hover, #stop-button:hover { background: #3a4a2a; color: #df9; }
+#run-button:disabled { opacity: 0.5; cursor: default; }
+#stop-button { background: #3a1a1a; color: #f99; border-color: #a55; }
+#stop-button:hover { background: #4a2a2a; color: #fbb; }
+#stop-button[hidden] { display: none; }
+#run-status { color: #888; font-size: 11px; }
+#hint {
+    color: #555;
+    font-size: 11px;
+    margin-top: 6px;
+}
+#file-input { display: none; }
+</style>
+</head>
+<body>
+<canvas id="screen" width="640" height="400"></canvas>
+<div id="drives">
+    <div class="drive" data-drive="0" data-kind="fdd" title="A: FDD (新規ブート、リセットあり)">
+        <span class="label">A:</span><span class="name">…</span>
+    </div>
+    <div class="drive" data-drive="1" data-kind="fdd" title="B: FDD (ゲーム中の差し替え用、リセットなし)">
+        <span class="label">B:</span><span class="name">(empty)</span>
+    </div>
+    <div class="drive" data-drive="0" data-kind="hdd" title="C: HDD (HDI/THD/NHD/HDD raw、挿入後リセット)">
+        <span class="label">C:</span><span class="name">(empty)</span>
+    </div>
+    <div class="drive" data-drive="1" data-kind="hdd" title="D: HDD (HDI/THD/NHD/HDD raw、挿入後リセット)">
+        <span class="label">D:</span><span class="name">(empty)</span>
+    </div>
+    <div class="drive run-slot" data-drive="0" data-kind="run" title="アーカイブ (.lzh/.zip) を D&D かクリックで投入し、Run で起動">
+        <span class="label">Run</span><span class="name">(empty)</span>
+    </div>
+</div>
+<div id="run-config" hidden>
+    <span class="field">Title: <b id="run-title">—</b></span>
+    <span class="field">Entry: <b id="run-entry">—</b></span>
+    <span class="field">Args: <input id="run-cmdline" type="text" placeholder="(none)"></span>
+    <button id="run-button">▶ Run</button>
+    <button id="stop-button" hidden>■ Stop</button>
+    <span id="run-status"></span>
+</div>
+<div id="hint">画面クリックでマウスキャプチャ (ESC で解除) ・ 各スロットへ D&D かクリックでディスク挿入</div>
+<input id="file-input" type="file" accept=".d88,.d98,.88d,.98d,.fdi,.hdm,.xdf,.dup,.2hd,.img,.fdd,.tfd,.hdi,.thd,.nhd,.hdd,.lzh,.zip,.com,.exe">
+
+<script src="np2kai_core.js"></script>
+<script src="player/archive.js"></script>
+<script src="player/bridge.js"></script>
+</body>
+</html>

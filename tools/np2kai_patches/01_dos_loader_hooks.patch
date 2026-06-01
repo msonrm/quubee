@@ -1,0 +1,57 @@
+diff --git a/bios/bios.c b/bios/bios.c
+index 59758ca..f7ed703 100755
+--- a/bios/bios.c
++++ b/bios/bios.c
+@@ -410,6 +410,12 @@ static void setbiosseed(UINT8 *ptr, UINT size, UINT seedpos) {
+ 	ptr[seedpos + 1] -= y;
+ }
+ 
++/* Phase 3 DOS ローダ (qb 拡張) — native/dos_loader.c & native/dos_int21.c が定義 */
++extern int qb_dos_loader_start_hook(void);
++extern int qb_dos_int21_hook(void);
++extern int qb_dos_int20_hook(void);
++extern void qb_dos_install_trampolines(void);
++
+ void bios_initialize(void) {
+ 
+ 	BOOL	biosrom;
+@@ -517,6 +523,9 @@ void bios_initialize(void) {
+ 	mem[0xffff0] = 0xea;
+ 	STOREINTELDWORD(mem + 0xffff1, 0xfd800000);
+ 
++	/* Phase 3 ローダ (qb 拡張) — トランポリン (0xFEE00-0xFEE32) を仕込む */
++	qb_dos_install_trampolines();
++
+ 	CopyMemory(mem + 0x0fd800 + 0x0e00, keytable[0], 0x60 * 8);
+ 	
+ 	//fh = file_create_c(_T("emuitf.rom"));
+@@ -911,7 +920,7 @@ void biosioemu_proc(void) {
+ UINT MEMCALL biosfunc(UINT32 adrs) {
+ 
+ 	UINT16	bootseg;
+-	
++
+ // np21w ver0.86 rev46 BIOS I/O emulation
+ #if defined(BIOS_IO_EMULATION)
+ 	UINT32	oldEIP;
+@@ -1172,6 +1181,20 @@ UINT MEMCALL biosfunc(UINT32 adrs) {
+ 			CPU_REMCLOCK -= 2000;
+ 			bootstrapload();
+ 			return(0);
++
++		/* ---- Phase 3 ミニマル DOS ローダ (qb 拡張) ---- */
++		/* 番地は linear address (= F000:EExx)。native/dos_loader.h の QB_TRAMP_* と揃える */
++		case 0xFEE00:  /* loader-start: boot sector が far jmp で踏む */
++			CPU_REMCLOCK -= 200;
++			return qb_dos_loader_start_hook();
++
++		case 0xFEE10:  /* INT 21h ディスパッチャ */
++			CPU_REMCLOCK -= 50;
++			return qb_dos_int21_hook();
++
++		case 0xFEE20:  /* INT 20h (DOS exit ショートカット) */
++			CPU_REMCLOCK -= 50;
++			return qb_dos_int20_hook();
+ 	}
+ 
+ 	if ((adrs >= 0xf9950) && (adrs <= 0x0f9990) && (!(adrs & 3))) {

@@ -1,0 +1,872 @@
+/*
+ * Phase 3 ミニマル DOS ローダ — image ステージング + loader-start フック。
+ *
+ * 設計詳細は TODO.md "Phase 3 Day 1-2 設計" 節を参照。
+ *
+ * 対応状況:
+ *  - COM (org 0x100) / MZ EXE (reloc 適用) の両ローダ
+ *  - 環境セグメント (QB_DOS_ENV_SEG) を実機 DOS 互換レイアウトで構築 (build_env)
+ *  - INT 21h AH=48h/49h/4Ah 用の MCB チェーン (first-fit + coalesce + 分割)
+ *  - AH=4Bh EXEC (親常駐・子をアリーナにロード、子終了で親復帰)。子は MZ EXE / COM 両対応
+ *  - AH=31h Keep Process (TSR) — 子を縮小して常駐させ親へ復帰 (Ray の RIN.COM 用)
+ *
+ * 既知の制限:
+ *  - EXEC は AL=00 のみ (overlay AL=03 非対応)、ネストは g_exec_stack の深さまで
+ *  - EXE body は 640KB (PC-98 基本メモリ上限) まで
+ *  - EXEC 子の env は env_seg=0 (継承) のとき親 env を共有する (argv[0] の限界は exec_load 参照)
+ */
+
+#include <compiler.h>
+#include <string.h>
+#include <stdio.h>
+
+#include <i386c/cpumem.h>
+#include <i386c/ia32/cpu.h>
+
+#include "dos_loader.h"
+#include "dos_int21.h"
+
+/* 直接アクセスする NP2kai のゲスト RAM (linear address indexed) */
+extern UINT8 mem[];
+
+/* ステージング状態 (1 image 分のみ保持)。
+ * buf は PC-98 基本メモリ上限 (640KB) に合わせる — DOS EXE 1 本が物理的に
+ * 取れる最大サイズと一致。Wasm .bss なのでランタイムコストは初期化のみ。 */
+static struct {
+    qb_dos_image_kind kind;
+    uint8_t buf[640 * 1024];
+    size_t  size;
+    char    cmdline[128];       /* PSP[0x80] 領域に入る最大長 = 127 + 終端 */
+    char    name[16];           /* image の basename (大文字、argv[0] 生成用) */
+    int     ready;
+
+    /* EXE 専用 (kind == QB_DOS_IMG_EXE のときのみ有効)。
+     * MZ ヘッダの値をそのまま保持。CS/SS は image_base_seg を足して使う。 */
+    uint16_t exe_cs;
+    uint16_t exe_ip;
+    uint16_t exe_ss;
+    uint16_t exe_sp;
+    uint16_t exe_minalloc;      /* MZ e_minalloc: body 以降に最低限必要な paragraphs */
+} g_stage;
+
+/* 実行中状態 */
+static struct {
+    int  running;
+    int  exited;
+    int  exit_code;
+} g_run;
+
+/* ---- AH=4Bh EXEC 段階2: 親コンテキストスタック ----
+ * 子を起動するとき親の復帰情報を push し、子の終了 (4Ch/INT20h) で pop して親を復元する。
+ * これで「子終了 → 親 (ランチャ) のメニューに戻る」往復が成立する。 */
+typedef struct {
+    uint16_t ret_cs, ret_ip;   /* 親の戻り先 (INT 21h AH=4Bh の次命令) */
+    uint16_t ret_ss, ret_sp;   /* 親スタック (IRET フレーム 6byte を pop した後の SP) */
+    uint16_t flags;            /* 親 FLAGS (復元時に CF をクリア = EXEC 成功) */
+    uint16_t ax, bx, cx, dx, si, di, bp, ds, es;  /* 親 GP + DS/ES */
+    uint16_t psp_seg;          /* 親 PSP (g_cur_psp 復元用) */
+    uint16_t dta_seg, dta_off; /* 親 DTA (子は自 PSP:0080 を既定にするので退避/復元) */
+} exec_frame_t;
+static exec_frame_t g_exec_stack[8];
+static int          g_exec_sp = 0;
+static uint8_t      g_last_exit_code = 0;   /* AH=4Dh 用 */
+static uint8_t      g_last_exit_type = 0;   /* 0 = 正常終了 */
+
+uint16_t qb_dos_exec_last_code(void) {
+    return (uint16_t)(((uint16_t)g_last_exit_type << 8) | g_last_exit_code);
+}
+
+/* ================= DOS メモリマネージャ (MCB チェーン) =================
+ * 実 DOS に忠実な Memory Control Block チェーンをゲストメモリに実体として置く。
+ * 各ブロックは先頭 1 段落に MCB を持ち、使用可能領域はその次の段落から:
+ *   MCB +0: 'M'(0x4D)=後続あり / 'Z'(0x5A)=最終ブロック
+ *       +1: 所有者 PSP (WORD, 0x0000 = 空き)
+ *       +3: サイズ (段落数, WORD)
+ * AH=48h は MCB+1 を返す。チェーンは「アリーナ起点 (g_arena_base) 〜 0xA000」を覆う。
+ * アリーナ起点は最上位プログラムの 4Ah self-shrink で確定 (それより下のプログラム
+ * 本体ブロックはチェーン外 = 簡略化)。EXEC の子・48h ヒープ・子終了時の一括解放を
+ * すべてこのチェーンで管理する。 */
+#define QB_DOS_MEM_TOP_SEG 0xA000u
+#define QB_MCB_M 0x4Du
+#define QB_MCB_Z 0x5Au
+
+static uint16_t g_arena_base = QB_DOS_MEM_TOP_SEG;   /* アリーナ起点 (空きチェーンの先頭 MCB) */
+
+/* 最上位プログラムが PSP ブロック (0x0100) の self-shrink を済ませたか。
+ * 初回の self-shrink だけアリーナを (再) 初期化し、2 回目以降は保守的に成功扱いに
+ * して既存 48h 確保ブロックを巻き込んで消さないようにする。loader-start で 0 に戻す。 */
+static int g_prog_shrunk = 0;
+
+/* 現在実行中プロセスの PSP segment。最上位プログラム = QB_DOS_LOAD_SEG (0x0100)、
+ * EXEC した子プロセス = アリーナ内のブロック。48h の所有者印字に使う。 */
+static uint16_t g_cur_psp = QB_DOS_LOAD_SEG;
+uint16_t qb_dos_cur_psp(void) { return g_cur_psp; }
+
+/* ---- MCB フィールドアクセス ---- */
+static uint8_t  mcb_sig(uint16_t s)   { return mem[(uint32_t)s << 4]; }
+static uint16_t mcb_owner(uint16_t s) { uint32_t a = (uint32_t)s << 4; return (uint16_t)(mem[a+1] | (mem[a+2] << 8)); }
+static uint16_t mcb_size(uint16_t s)  { uint32_t a = (uint32_t)s << 4; return (uint16_t)(mem[a+3] | (mem[a+4] << 8)); }
+static void mcb_set(uint16_t s, uint8_t sig, uint16_t owner, uint16_t size) {
+    uint32_t a = (uint32_t)s << 4;
+    mem[a]   = sig;
+    mem[a+1] = (uint8_t)(owner & 0xFF); mem[a+2] = (uint8_t)(owner >> 8);
+    mem[a+3] = (uint8_t)(size  & 0xFF); mem[a+4] = (uint8_t)(size  >> 8);
+}
+static int mcb_valid(uint16_t s) { uint8_t g = mcb_sig(s); return (g == QB_MCB_M || g == QB_MCB_Z); }
+
+/* 隣接する空きブロックを結合する。 */
+static void mcb_coalesce(void) {
+    uint16_t s = g_arena_base;
+    while (s < QB_DOS_MEM_TOP_SEG && mcb_valid(s)) {
+        if (mcb_sig(s) == QB_MCB_Z) break;
+        uint16_t nxt = (uint16_t)(s + 1 + mcb_size(s));
+        if (nxt >= QB_DOS_MEM_TOP_SEG || !mcb_valid(nxt)) break;
+        if (mcb_owner(s) == 0 && mcb_owner(nxt) == 0) {
+            /* nxt を s に取り込む。s は nxt の sig (M/Z) を継ぐ。 */
+            uint16_t ns = (uint16_t)(mcb_size(s) + 1 + mcb_size(nxt));
+            mcb_set(s, mcb_sig(nxt), 0x0000, ns);
+            /* s のまま再ループ (さらに後続の空きと結合できる) */
+        } else {
+            s = nxt;
+        }
+    }
+}
+
+/* チェーンを「アリーナ起点に空き 1 個」で初期化する。最上位プログラムの
+ * 4Ah self-shrink / loader-start から呼ぶ (まだ 48h 確保が無い段階で呼ぶ前提)。 */
+void qb_dos_alloc_reset(uint16_t arena_base_para) {
+    if (arena_base_para >= QB_DOS_MEM_TOP_SEG) arena_base_para = (uint16_t)(QB_DOS_MEM_TOP_SEG - 1);
+    g_arena_base = arena_base_para;
+    mcb_set(g_arena_base, QB_MCB_Z, 0x0000, (uint16_t)(QB_DOS_MEM_TOP_SEG - arena_base_para - 1));
+}
+
+/* AH=48h: first-fit で空きブロックを確保。大きければ分割。所有者 = g_cur_psp。
+ * 戻り 0 = OK (out_seg)、-1 = 不足 (out_largest_free に最大空きサイズ)。 */
+int qb_dos_alloc_request(uint16_t paragraphs, uint16_t *out_seg, uint16_t *out_largest_free) {
+    mcb_coalesce();
+    uint16_t largest = 0;
+    uint16_t s = g_arena_base;
+    while (s < QB_DOS_MEM_TOP_SEG && mcb_valid(s)) {
+        uint8_t  sig = mcb_sig(s);
+        uint16_t sz  = mcb_size(s);
+        if (mcb_owner(s) == 0) {
+            if (sz > largest) largest = sz;
+            if (sz >= paragraphs) {
+                if (sz > paragraphs) {
+                    /* 分割: このブロック = paragraphs (確保)、残りを空きブロックに */
+                    uint16_t tail = (uint16_t)(s + 1 + paragraphs);
+                    mcb_set(tail, sig, 0x0000, (uint16_t)(sz - paragraphs - 1));
+                    mcb_set(s, QB_MCB_M, g_cur_psp, paragraphs);
+                } else {
+                    mcb_set(s, sig, g_cur_psp, sz);   /* ぴったり: 丸ごと確保 */
+                }
+                if (out_seg) *out_seg = (uint16_t)(s + 1);
+                return 0;
+            }
+        }
+        if (sig == QB_MCB_Z) break;
+        s = (uint16_t)(s + 1 + sz);
+    }
+    if (out_largest_free) *out_largest_free = largest;
+    return -1;
+}
+
+/* AH=49h: ES-1 の MCB を空きにする。 */
+int qb_dos_alloc_free(uint16_t seg) {
+    uint16_t mcb = (uint16_t)(seg - 1);
+    if (!mcb_valid(mcb)) return -1;
+    mcb_set(mcb, mcb_sig(mcb), 0x0000, mcb_size(mcb));
+    mcb_coalesce();
+    return 0;
+}
+
+/* AH=4Ah: ブロックの拡大/縮小。seg == 最上位 PSP の場合は「プログラム self-shrink =
+ * アリーナ起点の確定」として扱う。戻り 0 = OK、-1 = 拡大不能 (out_largest に最大可能)。*/
+int qb_dos_alloc_resize(uint16_t seg, uint16_t newparas, uint16_t *out_largest) {
+    /* 最上位プログラムの self-shrink (アリーナの下) → 起点を確定してチェーン初期化。
+     * ただし「初回の self-shrink」のみ初期化する。プログラムが起動後にもう一度 PSP
+     * ブロックを 4Ah した場合に再初期化すると、その間に 48h で確保したブロックを
+     * 巻き込んで消してしまう (アリーナを 1 個の空きに戻すため)。2 回目以降は保守的に
+     * 成功扱い (チェーン不変) にして、確保済みブロックを保護する。 */
+    if (seg == QB_DOS_LOAD_SEG) {
+        if (!g_prog_shrunk) {
+            qb_dos_alloc_reset((uint16_t)(seg + newparas));
+            g_prog_shrunk = 1;
+        }
+        return 0;
+    }
+    uint16_t mcb = (uint16_t)(seg - 1);
+    if (!mcb_valid(mcb)) return 0;   /* 管理外ブロック: 無害に成功 */
+    uint8_t  sig = mcb_sig(mcb);
+    uint16_t cur = mcb_size(mcb);
+    uint16_t own = mcb_owner(mcb);
+    if (newparas == cur) return 0;
+    if (newparas < cur) {
+        /* 縮小: 末尾を空きブロックに分割 */
+        uint16_t tail = (uint16_t)(mcb + 1 + newparas);
+        mcb_set(tail, sig, 0x0000, (uint16_t)(cur - newparas - 1));
+        mcb_set(mcb, QB_MCB_M, own, newparas);
+        mcb_coalesce();
+        return 0;
+    }
+    /* 拡大: 次が空きブロックなら結合を試みる */
+    if (sig != QB_MCB_Z) {
+        uint16_t nxt = (uint16_t)(mcb + 1 + cur);
+        if (mcb_valid(nxt) && mcb_owner(nxt) == 0) {
+            uint8_t  nsig = mcb_sig(nxt);
+            uint16_t combined = (uint16_t)(cur + 1 + mcb_size(nxt));
+            if (combined >= newparas) {
+                mcb_set(mcb, nsig, own, combined);          /* まず結合 */
+                if (combined > newparas) {                   /* 余りを空きに戻す */
+                    uint16_t tail = (uint16_t)(mcb + 1 + newparas);
+                    mcb_set(tail, nsig, 0x0000, (uint16_t)(combined - newparas - 1));
+                    mcb_set(mcb, QB_MCB_M, own, newparas);
+                }
+                return 0;
+            }
+            if (out_largest) *out_largest = combined;
+            return -1;
+        }
+    }
+    if (out_largest) *out_largest = cur;
+    return -1;
+}
+
+/* プロセス終了時: その PSP が所有する全ブロックを解放する (DOS の free-on-terminate)。 */
+void qb_dos_alloc_free_owner(uint16_t psp) {
+    uint16_t s = g_arena_base;
+    while (s < QB_DOS_MEM_TOP_SEG && mcb_valid(s)) {
+        uint8_t sig = mcb_sig(s);
+        if (mcb_owner(s) == psp) mcb_set(s, sig, 0x0000, mcb_size(s));
+        if (sig == QB_MCB_Z) break;
+        s = (uint16_t)(s + 1 + mcb_size(s));
+    }
+    mcb_coalesce();
+}
+
+/* アリーナ内の最大空きブロックを探す。見つかれば MCB セグメントとサイズを返す。
+ * EXEC の子割り当て (DOS は子に最大空きブロックを渡す) に使う。0 = 空き無し。 */
+static uint16_t mcb_largest_free(uint16_t *out_size) {
+    uint16_t best = 0, bestsz = 0;
+    uint16_t s = g_arena_base;
+    mcb_coalesce();
+    while (s < QB_DOS_MEM_TOP_SEG && mcb_valid(s)) {
+        uint8_t sig = mcb_sig(s);
+        if (mcb_owner(s) == 0 && mcb_size(s) > bestsz) { best = s; bestsz = mcb_size(s); }
+        if (sig == QB_MCB_Z) break;
+        s = (uint16_t)(s + 1 + mcb_size(s));
+    }
+    if (out_size) *out_size = bestsz;
+    return best;
+}
+
+/* ---------------- ステージング (JS bridge から呼ばれる) ---------------- */
+
+/* cmdline を g_stage.cmdline に正規化コピー (実 DOS の PSP tail 慣例: 空でなければ
+ * 先頭スペースを prepend)。memset で 0 クリア済の前提で呼ぶ。 */
+static void stage_cmdline(const char *cmdline) {
+    if (!cmdline || cmdline[0] == '\0') return;
+    size_t cl = strlen(cmdline);
+    if (cl > 125) cl = 125;  /* 先頭スペース 1 byte 分を残す */
+    g_stage.cmdline[0] = ' ';
+    memcpy(&g_stage.cmdline[1], cmdline, cl);
+    g_stage.cmdline[cl + 1] = '\0';
+}
+
+/* image の basename を大文字化して g_stage.name に保持 (argv[0] のフルパス生成用)。
+ * memset で 0 クリア済の前提。空/NULL なら未設定のまま (build_env が既定にフォールバック)。*/
+static void stage_name(const char *name) {
+    if (!name || name[0] == '\0') return;
+    const char *base = name;
+    for (const char *q = name; *q; q++) {
+        if (*q == '/' || *q == '\\') base = q + 1;
+    }
+    size_t i = 0;
+    for (; base[i] && i + 1 < sizeof(g_stage.name); i++) {
+        char c = base[i];
+        g_stage.name[i] = (c >= 'a' && c <= 'z') ? (char)(c - 32) : c;
+    }
+    g_stage.name[i] = '\0';
+}
+
+static inline uint16_t read_le16(const uint8_t *p) {
+    return (uint16_t)p[0] | ((uint16_t)p[1] << 8);
+}
+
+int qb_dos_stage_com(const uint8_t *image, size_t size, const char *cmdline,
+                     const char *name) {
+    if (!image || size == 0) return -1;
+    if (size > 0xFF00) return -2;  /* COM の理論上限 = 64K - PSP(256) */
+
+    memset(&g_stage, 0, sizeof(g_stage));
+    g_stage.kind = QB_DOS_IMG_COM;
+    memcpy(g_stage.buf, image, size);
+    g_stage.size = size;
+    stage_cmdline(cmdline);
+    stage_name(name);
+    g_stage.ready = 1;
+
+    qb_dos_reset_state();
+    fprintf(stderr, "[dos_loader] staged COM: %zu bytes, cmdline=\"%s\"\n",
+            size, g_stage.cmdline);
+    return 0;
+}
+
+/* MZ / ZM EXE をステージング。ヘッダから image body と reloc を読み、body は
+ * staging buffer に header strip 済みでコピー、reloc は image_base_segment を
+ * 足して即時適用する。CS/IP/SS/SP は MZ ヘッダの相対値を保持し、loader-start
+ * フックで image_base_seg と組み合わせて CPU に書く。 */
+int qb_dos_stage_exe(const uint8_t *image, size_t size, const char *cmdline,
+                     const char *name) {
+    if (!image || size < 0x1C) return -1;  /* MZ ヘッダ 28 byte より小さい */
+
+    uint16_t magic = read_le16(image);
+    if (magic != 0x5A4D && magic != 0x4D5A) return -3;  /* MZ / ZM 以外 */
+
+    uint16_t e_cblp     = read_le16(image + 0x02);
+    uint16_t e_cp       = read_le16(image + 0x04);
+    uint16_t e_crlc     = read_le16(image + 0x06);
+    uint16_t e_cparhdr  = read_le16(image + 0x08);
+    uint16_t e_minalloc = read_le16(image + 0x0A);
+    uint16_t e_ss      = read_le16(image + 0x0E);
+    uint16_t e_sp      = read_le16(image + 0x10);
+    uint16_t e_ip      = read_le16(image + 0x14);
+    uint16_t e_cs      = read_le16(image + 0x16);
+    uint16_t e_lfarlc  = read_le16(image + 0x18);
+
+    /* image_size_in_file = e_cp 個の 512 byte page、最後の page は e_cblp バイトで打ち切り。
+     * e_cblp == 0 は「最後の page も全 512 byte」を意味する慣例 (一部ツールは異なる)。*/
+    size_t image_size_file = (size_t)e_cp * 512;
+    if (e_cblp != 0) {
+        if (e_cp == 0) return -4;
+        image_size_file -= (512 - e_cblp);
+    }
+    if (image_size_file > size) return -5;  /* ヘッダ宣言 > ファイルサイズ */
+
+    size_t header_bytes = (size_t)e_cparhdr * 16;
+    if (header_bytes < 0x1C || header_bytes > image_size_file) return -6;
+
+    size_t body_bytes = image_size_file - header_bytes;
+    if (body_bytes > sizeof(g_stage.buf)) return -7;  /* > 640KB */
+
+    memset(&g_stage, 0, sizeof(g_stage));
+    g_stage.kind = QB_DOS_IMG_EXE;
+    memcpy(g_stage.buf, image + header_bytes, body_bytes);
+    g_stage.size   = body_bytes;
+    g_stage.exe_cs = e_cs;
+    g_stage.exe_ip = e_ip;
+    g_stage.exe_ss = e_ss;
+    g_stage.exe_sp = e_sp;
+    g_stage.exe_minalloc = e_minalloc;
+
+    /* relocation 適用: 各エントリは (offset, segment) 16-bit ペアで、image 先頭からの
+     * seg:off を指す。そこに格納された 16-bit segment 値に image_base_seg を加算する。 */
+    if (e_crlc > 0) {
+        uint32_t rel_end = (uint32_t)e_lfarlc + (uint32_t)e_crlc * 4;
+        if (rel_end > size) return -8;
+        for (uint16_t i = 0; i < e_crlc; i++) {
+            uint32_t rec = (uint32_t)e_lfarlc + (uint32_t)i * 4;
+            uint16_t r_off = read_le16(image + rec);
+            uint16_t r_seg = read_le16(image + rec + 2);
+            uint32_t lin   = (uint32_t)r_seg * 16 + r_off;
+            if (lin + 1 >= body_bytes) return -9;
+            uint16_t cur = (uint16_t)g_stage.buf[lin]
+                         | ((uint16_t)g_stage.buf[lin + 1] << 8);
+            cur = (uint16_t)(cur + QB_DOS_EXE_IMAGE_SEG);
+            g_stage.buf[lin]     = (uint8_t)(cur & 0xFF);
+            g_stage.buf[lin + 1] = (uint8_t)((cur >> 8) & 0xFF);
+        }
+    }
+
+    stage_cmdline(cmdline);
+    stage_name(name);
+    g_stage.ready = 1;
+    qb_dos_reset_state();
+    fprintf(stderr,
+            "[dos_loader] staged EXE: file=%zu body=%zu hdr=%zu relocs=%u "
+            "CS:IP=%04x:%04x SS:SP=%04x:%04x cmdline=\"%s\"\n",
+            size, body_bytes, header_bytes, (unsigned)e_crlc,
+            e_cs, e_ip, e_ss, e_sp, g_stage.cmdline);
+    return 0;
+}
+
+void qb_dos_reset_state(void) {
+    g_run.running = 0;
+    g_run.exited = 0;
+    g_run.exit_code = 0;
+}
+
+int qb_dos_get_exit(int *code_out) {
+    if (code_out) *code_out = g_run.exit_code;
+    return g_run.exited ? 1 : 0;
+}
+
+/* 終了通知 (dos_int21.c から呼ばれる)。
+ * CPU_CS:IP を BIOS 領域の HLT ループへリダイレクトして、image の続きを実行
+ * させない。ia32_bioscall は呼び出し元 NOP 後にセグメントを LOAD_SEGREG で
+ * 反映するので、直後に新 CS:IP から実行が再開される。 */
+int qb_dos_signal_exit(int code) {
+    /* EXEC した子の終了なら、親 (ランチャ) を復元して続行する (= メニューに戻る)。 */
+    if (g_exec_sp > 0) {
+        exec_frame_t *f = &g_exec_stack[--g_exec_sp];
+        qb_dos_alloc_free_owner(g_cur_psp);         /* 子 PSP が所有する全ブロックを解放 (DOS free-on-terminate) */
+        CPU_CS = f->ret_cs; CPU_IP = f->ret_ip;     /* 親の INT 21h 直後へ */
+        CPU_SS = f->ret_ss; CPU_SP = f->ret_sp;
+        CPU_DS = f->ds;     CPU_ES = f->es;
+        CPU_AX = f->ax; CPU_BX = f->bx; CPU_CX = f->cx; CPU_DX = f->dx;
+        CPU_SI = f->si; CPU_DI = f->di; CPU_BP = f->bp;
+        CPU_FLAG = (uint16_t)(f->flags & ~C_FLAG);  /* CF=0 = EXEC 成功 (IF 等は親の値に復元) */
+        g_cur_psp = f->psp_seg;
+        qb_dos_dta_set(f->dta_seg, f->dta_off);     /* 親 DTA を復元 */
+        g_last_exit_code = (uint8_t)code;
+        g_last_exit_type = 0;
+        fprintf(stderr,
+                "[dos_exec] child exited code=%d → 親 PSP=%04X 復帰 CS:IP=%04X:%04X SS:SP=%04X:%04X\n",
+                code, g_cur_psp, CPU_CS, CPU_IP, CPU_SS, CPU_SP);
+        return 1;   /* 親復帰 (呼び出し側は dispatch tail の FLAGS 書き戻しを skip) */
+    }
+
+    /* 最上位プログラムの終了 = halt して JS に通知 */
+    g_run.exited = 1;
+    g_run.exit_code = code;
+    g_run.running = 0;
+    CPU_CS = 0xF000;
+    CPU_IP = (uint16_t)(QB_TRAMP_HALT_LOOP & 0xFFFF);
+    fprintf(stderr, "[dos_loader] image exited with code %d → halt loop\n", code);
+    return 0;
+}
+
+/* AH=31h Keep Process (TSR) — 子を常駐させたまま親へ復帰する。
+ * signal_exit の「EXEC 子復帰」分岐とほぼ同じだが、決定的な違いは
+ *   (1) 子の PSP ブロックを keep_paras に縮める (余りは解放) が、所有者は子 PSP のまま
+ *       残す → free-on-terminate しない = メモリが常駐する。
+ *   (2) 子終了コードは AL を採る。
+ * Ray は起動時に RIN.COM (常駐音源ドライバ) を EXEC し、RIN は AH=31h で常駐する。
+ * 戻り値 1 = 親復帰 (CPU リダイレクト済 → dispatch tail の FLAGS 書き戻しを skip)、
+ *        0 = EXEC 子でない (最上位プログラムの TSR は常駐先がないので halt 扱い)。 */
+int qb_dos_signal_tsr(uint16_t keep_paras, int code) {
+    /* 子のブロックを縮小 (resize は所有者を保持するので owner=子 PSP のまま常駐)。
+     * PSP(0x10) を下回る要求は最低 0x11 para に丸める (DX=0 渡し対策)。 */
+    if (keep_paras < 0x11) keep_paras = 0x11;
+    qb_dos_alloc_resize(g_cur_psp, keep_paras, NULL);
+
+    if (g_exec_sp > 0) {
+        exec_frame_t *f = &g_exec_stack[--g_exec_sp];
+        /* free-on-terminate は呼ばない (常駐させるのが TSR の目的)。 */
+        CPU_CS = f->ret_cs; CPU_IP = f->ret_ip;     /* 親の INT 21h 直後へ */
+        CPU_SS = f->ret_ss; CPU_SP = f->ret_sp;
+        CPU_DS = f->ds;     CPU_ES = f->es;
+        CPU_AX = f->ax; CPU_BX = f->bx; CPU_CX = f->cx; CPU_DX = f->dx;
+        CPU_SI = f->si; CPU_DI = f->di; CPU_BP = f->bp;
+        CPU_FLAG = (uint16_t)(f->flags & ~C_FLAG);  /* CF=0 = EXEC 成功 */
+        g_cur_psp = f->psp_seg;
+        qb_dos_dta_set(f->dta_seg, f->dta_off);     /* 親 DTA を復元 */
+        g_last_exit_code = (uint8_t)code;
+        g_last_exit_type = 0;
+        fprintf(stderr,
+                "[dos_exec] TSR keep=%u para (常駐) → 親 PSP=%04X 復帰 CS:IP=%04X:%04X\n",
+                (unsigned)keep_paras, g_cur_psp, CPU_CS, CPU_IP);
+        return 1;
+    }
+
+    /* 最上位プログラムが TSR した (親無し) = 常駐させる相手がいないので halt 扱い。 */
+    g_run.exited = 1;
+    g_run.exit_code = code;
+    g_run.running = 0;
+    CPU_CS = 0xF000;
+    CPU_IP = (uint16_t)(QB_TRAMP_HALT_LOOP & 0xFFFF);
+    fprintf(stderr, "[dos_loader] top-level TSR (keep=%u) → halt loop\n", (unsigned)keep_paras);
+    return 0;
+}
+
+int qb_dos_is_running(void) { return g_run.running; }
+
+/* ---------------- メモリ書き込みヘルパ ---------------- */
+
+static inline void poke8(uint32_t addr, uint8_t v)   { mem[addr & QB_GUEST_MEM_MASK] = v; }
+static inline void poke16(uint32_t addr, uint16_t v) {
+    poke8(addr,     (uint8_t)(v & 0xFF));
+    poke8(addr + 1, (uint8_t)((v >> 8) & 0xFF));
+}
+
+/* IVT[vec] = seg:off に設定 */
+static void set_ivt(uint8_t vec, uint16_t seg, uint16_t off) {
+    uint32_t a = (uint32_t)vec * 4u;
+    poke16(a,     off);
+    poke16(a + 2, seg);
+}
+
+/* トランポリンを書く: linear addr に NOP (0x90) + IRET (0xCF) */
+static void put_trampoline(uint32_t linear) {
+    poke8(linear,     0x90);  /* NOP — ia32_bioscall を踏む */
+    poke8(linear + 1, 0xCF);  /* IRET */
+}
+
+/* bios_initialize() から毎リセット呼ばれる。トランポリン本体を BIOS area に置く。
+ * loader-start は JMP FAR で踏まれる (戻り不要) ので NOP + HLT、
+ * INT 21h/INT 20h は INT で踏まれる (IRET で戻る) ので NOP + IRET、
+ * halt loop は終了後の停止用 (HLT; JMP -3)。 */
+void qb_dos_install_trampolines(void) {
+    /* loader-start: NOP + HLT (フックで CS:IP が書き換わるので HLT は到達しない) */
+    poke8(QB_TRAMP_LOADER_START + 0, 0x90);
+    poke8(QB_TRAMP_LOADER_START + 1, 0xF4);
+
+    /* INT 21h / INT 20h: NOP + IRET */
+    put_trampoline(QB_TRAMP_INT21);
+    put_trampoline(QB_TRAMP_INT20);
+
+    /* HLT ループ: F4 (HLT); EB FD (JMP -3) */
+    poke8(QB_TRAMP_HALT_LOOP + 0, 0xF4);
+    poke8(QB_TRAMP_HALT_LOOP + 1, 0xEB);
+    poke8(QB_TRAMP_HALT_LOOP + 2, 0xFD);
+
+    /* IRET-only スタブ: 0xCF (IRET)。未使用 software INT 0x22..0xFF を全部
+     * これに向けて、未実装ドライバ呼び出しを安全に nop 化する。 */
+    poke8(QB_TRAMP_IRET_STUB, 0xCF);
+}
+
+/* 環境セグメントを seg:0000 に構築する。実機 DOS 互換レイアウト:
+ *   [env vars (各 NUL 終端)] [空文字列 NUL] [WORD: 後続文字列数 = 1] [argv[0] パス NUL]
+ *
+ * 重要 (Super Depth 等の対策): **env vars を空にしてはいけない**。
+ * C ランタイムには env 終端を「二重 NUL (00 00)」で検出する実装があり、空 env
+ * (先頭 00 + count + path...) だと最初の 00 00 が path の後ろ (ゼロ埋め領域) に
+ * 出現してしまい、終端を誤認 → count=0 / argv[0]=空 と読む。argv[0] が空だと
+ * 自分の実行パスからデータディレクトリを得るゲーム (depth.exe は argv[0] の最後の
+ * '\' でディレクトリを切り出す) が破綻し、ファイル名バッファが strcat で累積する。
+ * ダミー変数を 1 つ置いて末尾を必ず "var\0\0" の二重 NUL にすると、二重 NUL 検出式・
+ * 空文字列検出式どちらの cstartup でも argv[0] を正しく読める。 */
+static void build_env(uint16_t seg) {
+    uint32_t base = (uint32_t)seg << 4;
+    memset(&mem[base], 0, 256);
+    uint32_t p = 0;
+    const char *var = "PATH=A:\\";    /* ダミー env var 1 個 (末尾を var\0\0 にするため) */
+    for (size_t i = 0; var[i]; i++) poke8(base + p++, (uint8_t)var[i]);
+    poke8(base + p++, 0x00);          /* var 終端 NUL */
+    poke8(base + p++, 0x00);          /* 空文字列 = env vars 末端 → ここで "00 00" 成立 */
+    poke8(base + p++, 0x01);          /* WORD: 後続文字列数 = 1 (LE) */
+    poke8(base + p++, 0x00);
+    /* argv[0]: ステージした実 image 名から "A:\NAME.EXT" を作る (無ければ既定)。
+     * '\' を含むので、argv[0] からデータディレクトリを切り出すゲームも正常化する。
+     * 実名にすることで、argv[0] の basename を設定/ログ名に使うゲームも正しく動く。 */
+    char path[32];
+    if (g_stage.name[0]) snprintf(path, sizeof(path), "A:\\%s", g_stage.name);
+    else                 snprintf(path, sizeof(path), "A:\\PROG.EXE");
+    for (size_t i = 0; path[i]; i++) poke8(base + p++, (uint8_t)path[i]);
+    poke8(base + p++, 0x00);          /* argv[0] 終端 (以降は memset 0) */
+}
+
+/* PSP を seg:0000 に構築する。最小限の DOS 互換版。 */
+static void build_psp(uint16_t seg, const char *cmdline) {
+    uint32_t base = (uint32_t)seg << 4;
+
+    /* 全 256 byte ゼロ初期化 */
+    memset(&mem[base], 0, 0x100);
+
+    /* 0x00-0x01: INT 20h (= DOS exit ショートカット, "CD 20") */
+    poke8(base + 0x00, 0xCD);
+    poke8(base + 0x01, 0x20);
+
+    /* 0x02-0x03: top-of-memory paragraphs (とりあえず 0xA000 = 640KB) */
+    poke16(base + 0x02, 0xA000);
+
+    /* 0x05: far call to DOS dispatch — 標準の CALL FAR (0x9A) + addr。
+     *       簡略化: ここから飛ばずに INT 21h ショートカット (0x50 で別途) を使う */
+    /* 省略 (使うソフトは少ないので) */
+
+    /* 0x2C: 環境セグメント — 0 だと cstartup の env scan が暴走するので
+     * 別 segment に最小 env を作って指す。 */
+    poke16(base + 0x2C, QB_DOS_ENV_SEG);
+
+    /* 0x50-0x52: "CD 21 CB" (INT 21h; RETF — DOS call ショートカット) */
+    poke8(base + 0x50, 0xCD);
+    poke8(base + 0x51, 0x21);
+    poke8(base + 0x52, 0xCB);
+
+    /* 0x80: cmdline 長 (1 byte) + 0x81..: cmdline + 末尾 0x0D */
+    size_t cl = cmdline ? strlen(cmdline) : 0;
+    if (cl > 126) cl = 126;
+    poke8(base + 0x80, (uint8_t)cl);
+    for (size_t i = 0; i < cl; i++) {
+        poke8(base + 0x81 + i, (uint8_t)cmdline[i]);
+    }
+    poke8(base + 0x81 + cl, 0x0D);  /* DOS cmdline 終端 */
+}
+
+/* ---------------- loader-start フック (0xFEE00 から呼ばれる) ---------------- */
+
+int qb_dos_loader_start_hook(void) {
+    if (!g_stage.ready) {
+        fprintf(stderr, "[dos_loader] start hook fired but no image staged\n");
+        return 0;
+    }
+
+    /* トランポリンは bios_initialize から install 済 (qb_dos_install_trampolines)。
+     * ここでは再保証のため、念のため再書き込み (リセット後の状態に依存させない)。*/
+    qb_dos_install_trampolines();
+
+    /* IVT を仕込む: INT 20h → F000:EE20、INT 21h → F000:EE10 */
+    set_ivt(0x20, 0xF000, (uint16_t)(QB_TRAMP_INT20 & 0xFFFF));
+    set_ivt(0x21, 0xF000, (uint16_t)(QB_TRAMP_INT21 & 0xFFFF));
+
+    /* IVT[0x22..0xFF] の未初期化エントリ (= 0:0) を IRET stub に向ける。
+     * NP2kai は IVT[0x00..0x1F] を biosfd80 ハンドラに初期化済 (bios_vectorset)、
+     * 0x20 以降は触らないので 0 のまま。同じ初期化方針だと same.exe のような
+     * 「マウスドライバ検出のため INT 33h を叩くソフト」が 0:0 にジャンプして
+     * ゴミ命令を実行 → 偶然 CD 20 を踏んで我々の INT 20 で exit、という事故が
+     * 起きる。空きエントリだけ stub にして他 (= 既に書かれた値) は温存する。 */
+    for (uint8_t v = 0x22; v != 0; v++) {  /* 0x22..0xFF (overflow で停止) */
+        uint32_t a = (uint32_t)v * 4u;
+        uint32_t cur = ((uint32_t)mem[a])
+                     | ((uint32_t)mem[a+1] << 8)
+                     | ((uint32_t)mem[a+2] << 16)
+                     | ((uint32_t)mem[a+3] << 24);
+        if (cur == 0) {
+            set_ivt(v, 0xF000, (uint16_t)(QB_TRAMP_IRET_STUB & 0xFFFF));
+        }
+    }
+
+    /* 環境セグメント (PSP[0x2C] で指される) を先に作っておく */
+    build_env(QB_DOS_ENV_SEG);
+
+    /* PSP を 0x0100 セグメントに構築 */
+    build_psp(QB_DOS_LOAD_SEG, g_stage.cmdline);
+    g_cur_psp = QB_DOS_LOAD_SEG;   /* 最上位プログラム = PSP 0x0100 */
+    g_exec_sp = 0;                 /* EXEC ネストをクリア (前回の残骸を持ち越さない) */
+    g_prog_shrunk = 0;             /* この image の初回 self-shrink を再び有効化 */
+
+    /* 連続実行で前回の cursor 位置が残らないように tty を (0,0) に戻す */
+    qb_dos_tty_reset();
+
+    /* DOS プログラム入口のレジスタ。仕様で定義されるのは CS:IP/SS:SP/DS/ES と
+     * AX (コマンドライン FCB のドライブ有効性。FCB を作らない我々は AL=AH=0 =
+     * 「有効」) のみ。残りは規定外なので 0 にする (旧実装の CPU_ECX=0xFF /
+     * CPU_EBP=0x091C は出所不明のマジック値だったので撤去)。
+     * DS / ES は両 image 種別とも PSP セグメントを指す。 */
+    CPU_EAX = 0;
+    CPU_EBX = 0;
+    CPU_ECX = 0;
+    CPU_EDX = 0;
+    CPU_EBP = 0;
+    CPU_DS = QB_DOS_LOAD_SEG;
+    CPU_ES = QB_DOS_LOAD_SEG;
+    /* 実 DOS はプログラムを IF=1 (割り込み許可) で起動する。boot.asm が cli して
+     * から loader に来ているので、ここで IF を立て直さないとイメージは割り込み禁止の
+     * まま走り出す。自前で STI しない & IRQ を待つ設計のソフトはここで止まる。 */
+    CPU_FLAG |= I_FLAG;
+
+    if (g_stage.kind == QB_DOS_IMG_COM) {
+        /* COM image を 0x0100:0x100 にコピー、CS=DS=ES=SS=0x100, IP=0x100, SP=0xFFFE */
+        uint32_t load_lin = ((uint32_t)QB_DOS_LOAD_SEG << 4) + 0x0100;
+        memcpy(&mem[load_lin], g_stage.buf, g_stage.size);
+        CPU_CS = QB_DOS_LOAD_SEG;
+        CPU_SS = QB_DOS_LOAD_SEG;
+        CPU_IP = 0x0100;
+        CPU_SP = 0xFFFE;
+        CPU_ESI = 0x0100;
+        CPU_EDI = 0xFFFE;
+        /* AH=48h 用 alloc base: COM は 0x0100 + 0x1000 paragraphs (= 64KB ブロック直後) */
+        qb_dos_alloc_reset((uint16_t)(QB_DOS_LOAD_SEG + 0x1000));
+        fprintf(stderr,
+                "[dos_loader] COM loaded at %04x:%04x, entry %04x:%04x, SP=%04x\n",
+                QB_DOS_LOAD_SEG, 0x0100, CPU_CS, CPU_IP, CPU_SP);
+    } else if (g_stage.kind == QB_DOS_IMG_EXE) {
+        /* EXE body を image_base_seg:0 にコピー、CS/SS は MZ 相対値 + image_base_seg */
+        uint32_t load_lin = (uint32_t)QB_DOS_EXE_IMAGE_SEG << 4;
+        memcpy(&mem[load_lin], g_stage.buf, g_stage.size);
+        CPU_CS = (uint16_t)(QB_DOS_EXE_IMAGE_SEG + g_stage.exe_cs);
+        CPU_IP = g_stage.exe_ip;
+        CPU_SS = (uint16_t)(QB_DOS_EXE_IMAGE_SEG + g_stage.exe_ss);
+        CPU_SP = g_stage.exe_sp;
+        CPU_ESI = g_stage.exe_ip;
+        CPU_EDI = g_stage.exe_sp;
+        /* AH=48h 用 alloc base = image_base から見た「プログラム占有の末尾」。
+         * ヘッダ宣言の最低確保 (body + e_minalloc) と実スタック頂点 (SS:SP) の
+         * 大きい方を採用 (旧実装のマジック SS+0x1000 を排除)。+16 para は余裕。 */
+        uint32_t body_paras = (uint32_t)((g_stage.size + 15) >> 4);
+        uint32_t heap_end   = body_paras + (uint32_t)g_stage.exe_minalloc;
+        uint32_t stack_end  = (uint32_t)g_stage.exe_ss + (((uint32_t)g_stage.exe_sp + 15) >> 4);
+        uint32_t end_rel    = heap_end > stack_end ? heap_end : stack_end;
+        uint32_t alloc_base = (uint32_t)QB_DOS_EXE_IMAGE_SEG + end_rel + 0x10;
+        qb_dos_alloc_reset(alloc_base > 0xFFFFu ? QB_DOS_MEM_TOP_SEG : (uint16_t)alloc_base);
+        fprintf(stderr,
+                "[dos_loader] EXE loaded at %04x:0000, entry %04x:%04x, SS:SP=%04x:%04x\n",
+                QB_DOS_EXE_IMAGE_SEG, CPU_CS, CPU_IP, CPU_SS, CPU_SP);
+    } else {
+        fprintf(stderr, "[dos_loader] start hook: unknown kind %d\n", (int)g_stage.kind);
+        return 0;
+    }
+
+    g_run.running = 1;
+    g_run.exited = 0;
+    g_stage.ready = 0;       /* 1 ショット */
+    return 1;
+}
+
+/* ---------------- EXEC 子プロセスのロード (段階 1.5: 親常駐・復帰なし) ----------------
+ * AH=4Bh AL=00 用。親 (ランチャ) をメモリに残したまま、子 (エンジン) をアリーナの
+ * 最大空きブロックにロードして CPU を子へ切り替える。親の IVT フックや親内コードは
+ * 生きたままなので、子や IRQ がそれらを参照しても壊れない (段階1 の「置換」で起きた暴走の解消)。
+ *
+ * 段階2: 子起動時に親コンテキストを g_exec_stack に退避し、子の終了 (4Ch/INT20h) で
+ * qb_dos_signal_exit が親を復元する (= メニューに戻る往復が成立)。
+ *
+ * image[size] は MZ EXE。env_seg はパラメータブロック由来 (0 なら親 env を継承)。
+ * 戻り値 0=成功、<0=失敗 (DOS error にマップするのは呼び出し側)。
+ * 注: 既存ローダ (qb_dos_stage_exe/loader_start) は固定 segment 0x0110 前提でリロケート
+ *     済みのため、子を別 base に置くこのパスは MZ パースを別途行う (意図的な重複)。 */
+int qb_dos_exec_load(const uint8_t *image, size_t size,
+                     const char *cmdtail, uint16_t env_seg) {
+    if (!image || size < 2) return -1;
+    uint16_t magic = read_le16(image);
+    int is_exe = (magic == 0x5A4D || magic == 0x4D5A);   /* MZ/ZM=EXE、それ以外=COM */
+
+    /* ---- フォーマット別に body サイズ・エントリ・reloc を確定 ----
+     * EXE: MZ ヘッダを解析。COM: ファイル全体が body で PSP:0x100 にロード、全 segreg=PSP。
+     * (zar は MZ エンジン siz*.exe を EXEC、Ray は COM の常駐音源ドライバ RIN.COM を EXEC する) */
+    size_t   header_bytes = 0, body_bytes = 0;
+    uint16_t e_crlc = 0, e_lfarlc = 0;
+    uint16_t e_cs = 0, e_ip = 0, e_ss = 0, e_sp = 0, e_minalloc = 0;
+
+    if (is_exe) {
+        if (size < 0x1C) return -1;
+        uint16_t e_cblp    = read_le16(image + 0x02);
+        uint16_t e_cp      = read_le16(image + 0x04);
+        e_crlc             = read_le16(image + 0x06);
+        uint16_t e_cparhdr = read_le16(image + 0x08);
+        e_minalloc         = read_le16(image + 0x0A);
+        e_ss               = read_le16(image + 0x0E);
+        e_sp               = read_le16(image + 0x10);
+        e_ip               = read_le16(image + 0x14);
+        e_cs               = read_le16(image + 0x16);
+        e_lfarlc           = read_le16(image + 0x18);
+
+        size_t image_size_file = (size_t)e_cp * 512;
+        if (e_cblp != 0) { if (e_cp == 0) return -4; image_size_file -= (512 - e_cblp); }
+        if (image_size_file > size) return -5;
+        header_bytes = (size_t)e_cparhdr * 16;
+        if (header_bytes < 0x1C || header_bytes > image_size_file) return -6;
+        body_bytes = image_size_file - header_bytes;
+        /* reloc テーブルがファイル外を指していないか確保前に検証する (確保後に弾くと
+         * 割り当て済み MCB ブロックがリークするため。qb_dos_stage_exe と同じ前段チェック)。 */
+        if (e_crlc > 0 && (uint32_t)e_lfarlc + (uint32_t)e_crlc * 4 > size) return -8;
+    } else {
+        if (size > 0xFF00) return -2;   /* 64KB - PSP(256) を超える COM は不正 */
+        body_bytes = size;              /* COM は header 無し: 全体が body */
+    }
+
+    /* DOS の EXEC は子に「最大空きブロック」を渡す。子はその中に PSP+イメージを置き、
+     * 起動直後に 4Ah (EXE 自己縮小) または 31h TSR (COM ドライバ常駐) で自身を縮める。 */
+    uint16_t free_sz = 0;
+    uint16_t free_mcb = mcb_largest_free(&free_sz);
+    uint32_t body_paras = (uint32_t)((body_bytes + 15) >> 4);
+    /* PSP(16) + body + (EXE: minalloc / COM: stack ヘッドルーム少々) */
+    uint32_t need = 0x10 + body_paras + (uint32_t)e_minalloc + (is_exe ? 0u : 0x10u);
+    if (free_mcb == 0 || (uint32_t)free_sz < need) return -10;  /* メモリ不足 */
+    uint16_t child_psp = (uint16_t)(free_mcb + 1);
+    uint16_t child_img = (uint16_t)(child_psp + 0x10);
+    mcb_set(free_mcb, mcb_sig(free_mcb), child_psp, free_sz);   /* 子に丸ごと割り当て */
+
+    /* body をゲストメモリへコピー (EXE は header strip 後、COM は丸ごと)。
+     * EXE/COM とも load 先は child_img:0 = child_psp:0x0100 (COM の PSP:0x100 慣例)。 */
+    uint32_t load_lin = (uint32_t)child_img << 4;
+    memcpy(&mem[load_lin], image + header_bytes, body_bytes);
+
+    /* relocation (EXE のみ; COM は e_crlc=0 でループ無し): 16-bit segment に child_img を加算 */
+    for (uint16_t i = 0; i < e_crlc; i++) {
+        uint32_t rec = (uint32_t)e_lfarlc + (uint32_t)i * 4;
+        if (rec + 4 > size) return -8;
+        uint16_t r_off = read_le16(image + rec);
+        uint16_t r_seg = read_le16(image + rec + 2);
+        uint32_t a = load_lin + ((uint32_t)r_seg * 16 + r_off);
+        uint16_t cur = (uint16_t)mem[a] | ((uint16_t)mem[a + 1] << 8);
+        cur = (uint16_t)(cur + child_img);
+        mem[a]     = (uint8_t)(cur & 0xFF);
+        mem[a + 1] = (uint8_t)((cur >> 8) & 0xFF);
+    }
+
+    /* 子 PSP を構築 (親 PSP を 0x16 に保存、env/cmdtail をセット) */
+    uint16_t parent_psp = g_cur_psp;
+    uint32_t pbase = (uint32_t)child_psp << 4;
+    memset(&mem[pbase], 0, 0x100);
+    poke8(pbase + 0x00, 0xCD); poke8(pbase + 0x01, 0x20);   /* INT 20h */
+    poke16(pbase + 0x02, QB_DOS_MEM_TOP_SEG);               /* top of memory */
+    poke16(pbase + 0x16, parent_psp);                       /* 親 PSP */
+    /* env: パラメータブロック指定があればそれ、無ければ親 env を継承 (共有)。
+     * 【既知の限界 (C1)】env_seg=0 (継承) の子は最上位イメージの env を共有するため、
+     * argv[0] は子自身ではなく最上位プログラムのパス (例 A:\RAY.EXE) になる。実 DOS は
+     * 子の env をコピーして argv[0] に子のパスを置くが、現スコープで子の argv[0] を読む
+     * ものは無い (RIN.COM=TSR ドライバ / zar の siz*.exe=cmdtail 読み) ため未対応。
+     * 将来 argv[0] 依存の子が出たら子ごとに env を確保 (MCB) して子パスを書く。 */
+    poke16(pbase + 0x2C, env_seg ? env_seg : QB_DOS_ENV_SEG);
+    poke8(pbase + 0x50, 0xCD); poke8(pbase + 0x51, 0x21); poke8(pbase + 0x52, 0xCB);
+    {
+        size_t cl = cmdtail ? strlen(cmdtail) : 0;
+        if (cl > 126) cl = 126;
+        poke8(pbase + 0x80, (uint8_t)cl);
+        for (size_t i = 0; i < cl; i++) poke8(pbase + 0x81 + i, (uint8_t)cmdtail[i]);
+        poke8(pbase + 0x81 + cl, 0x0D);
+    }
+
+    /* ---- 段階2: 親コンテキストを退避 (子終了でここへ戻る) ----
+     * この時点で CPU_SS:SP はまだ親スタックを指し、その先頭に親の INT 21h AH=4Bh が
+     * 積んだ IRET フレーム (IP/CS/FLAGS) がある。g_cur_psp もまだ親の値。 */
+    if (g_exec_sp < (int)(sizeof(g_exec_stack) / sizeof(g_exec_stack[0]))) {
+        exec_frame_t *f = &g_exec_stack[g_exec_sp++];
+        uint32_t splin = ((uint32_t)CPU_SS << 4) + CPU_SP;
+        f->ret_ip = (uint16_t)(mem[splin]     | (mem[splin + 1] << 8));
+        f->ret_cs = (uint16_t)(mem[splin + 2] | (mem[splin + 3] << 8));
+        f->flags  = (uint16_t)(mem[splin + 4] | (mem[splin + 5] << 8));
+        f->ret_ss = CPU_SS;
+        f->ret_sp = (uint16_t)(CPU_SP + 6);    /* IRET フレーム 6byte を pop した後 */
+        f->ds = CPU_DS; f->es = CPU_ES;
+        f->ax = CPU_AX; f->bx = CPU_BX; f->cx = CPU_CX; f->dx = CPU_DX;
+        f->si = CPU_SI; f->di = CPU_DI; f->bp = CPU_BP;
+        f->psp_seg = g_cur_psp;
+        uint32_t dta = qb_dos_dta_get_packed();   /* 親 DTA を退避 (子終了で復元) */
+        f->dta_seg = (uint16_t)(dta >> 16);
+        f->dta_off = (uint16_t)(dta & 0xFFFF);
+    } else {
+        fprintf(stderr, "[dos_exec] WARN: EXEC ネスト過多 → この子は親復帰なし\n");
+    }
+
+    /* 現プロセス PSP を子に切替 (子の 48h 確保はこの PSP を所有者にする) */
+    g_cur_psp = child_psp;
+    /* 子の既定 DTA = 子 PSP:0080 (実機 DOS と同じ)。これがないと子が AH=1Ah 無しで
+     * FindFirst したとき親 PSP の cmdline 領域に結果を書いてしまう。 */
+    qb_dos_dta_set(child_psp, 0x0080);
+
+    /* ---- CPU を子エントリへ ---- */
+    CPU_EAX = 0; CPU_EBX = 0; CPU_ECX = 0; CPU_EDX = 0; CPU_EBP = 0;
+    /* 子も IF=1 で起動する (INT 21h AH=4Bh が IF をクリアしているため立て直す)。
+     * RIN.COM のような常駐ドライバが IRQ 待ちで止まらないように。 */
+    CPU_FLAG |= I_FLAG;
+    if (is_exe) {
+        CPU_CS = (uint16_t)(child_img + e_cs);
+        CPU_IP = e_ip;
+        CPU_SS = (uint16_t)(child_img + e_ss);
+        CPU_SP = e_sp;
+        CPU_DS = child_psp;
+        CPU_ES = child_psp;
+        CPU_ESI = e_ip; CPU_EDI = e_sp;
+    } else {
+        /* COM: 全 segreg = PSP、IP=0x100。SP はブロック末尾 (64KB 以上なら 0xFFFE)。
+         * SS:SP に 0x0000 を 1 word push (near RET → PSP:0000 = INT 20h 終了)。 */
+        uint16_t com_sp = (free_sz >= 0x1000)
+                            ? 0xFFFE
+                            : (uint16_t)(((uint32_t)free_sz << 4) - 2);
+        CPU_CS = child_psp; CPU_IP = 0x0100;
+        CPU_SS = child_psp; CPU_SP = com_sp;
+        CPU_DS = child_psp; CPU_ES = child_psp;
+        uint32_t splin = ((uint32_t)child_psp << 4) + com_sp;
+        mem[splin] = 0; mem[splin + 1] = 0;
+        CPU_ESI = 0x0100; CPU_EDI = 0;
+    }
+
+    fprintf(stderr,
+            "[dos_exec] child @ PSP=%04X img=%04X entry=%04X:%04X SS:SP=%04X:%04X "
+            "kind=%s (parent PSP=%04X 常駐, block=%u para)\n",
+            child_psp, child_img, CPU_CS, CPU_IP, CPU_SS, CPU_SP,
+            is_exe ? "EXE" : "COM", (unsigned)parent_psp, (unsigned)free_sz);
+    return 0;
+}

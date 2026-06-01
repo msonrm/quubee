@@ -1,0 +1,3 @@
+[submodule "core/np2kai"]
+	path = core/np2kai
+	url = https://github.com/AZO234/NP2kai.git
