@@ -5,6 +5,9 @@
 /web/np2kai_core.js
 /web/np2kai_core.wasm
 
+# デプロイ用に生成する静的ディレクトリ (tools/deploy.sh の出力)
+/dist/
+
 # NP2kai build artifacts
 /core/np2kai/build/
 
