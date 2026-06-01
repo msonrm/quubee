@@ -110,7 +110,17 @@ async function loadDisk(M, url, fsPath) {
     return true;
 }
 
-NP2KaiModule().then(async function (M) {
+// emscripten の stdout/stderr ルーティング。自前ローダ/INT21h の逐次ログ ([dos_loader]/[int21h…]) は
+// 既定で抑制する (Chrome が stderr を console.error=赤で表示し、無害なのに「エラー」に見えるため)。
+// 再表示: URL に ?debug を付けるか、コンソールで window.QB_VERBOSE = true。本物のエラーは常に表示。
+const qbVerbose = () => typeof window !== 'undefined' &&
+    (window.QB_VERBOSE || /[?&]debug\b/.test(location.search));
+const qbChatter = /^\[(dos_loader|int2[01])/;
+NP2KaiModule({
+    print:    (t) => { if (qbVerbose() || !qbChatter.test(t)) console.log(t); },
+    printErr: (t) => { if (qbChatter.test(t)) { if (qbVerbose()) console.log(t); }
+                       else console.error(t); },
+}).then(async function (M) {
     setDriveName('fdd', 0, 'initializing…');
 
     M.ccall('np2kai_set_data_dir', null, ['string'], ['/tmp/']);
