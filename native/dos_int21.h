@@ -24,4 +24,10 @@ void qb_dos_tty_reset(void);
 uint32_t qb_dos_dta_get_packed(void);   /* (seg << 16) | off */
 void     qb_dos_dta_set(uint16_t seg, uint16_t off);
 
+/* EXEC 子プロセスのファイルハンドル掃除 (dos_loader.c が EXEC/子終了で使う)。
+ * snapshot = EXEC 時点の open 中ユーザハンドル bitmask。子終了で「それ以降に
+ * 開いたハンドル」だけ閉じる (実 DOS の free-on-terminate 相当。TSR では呼ばない)。 */
+uint32_t qb_dos_fh_snapshot(void);
+void     qb_dos_fh_close_since(uint32_t snapshot);
+
 #endif /* QB_DOS_INT21_H */

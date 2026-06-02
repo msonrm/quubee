@@ -25,6 +25,11 @@
  *   43h Get/Set Attr (DS:DX = path, AL = 0/1)
  *   44h IOCTL Get Device Info (h=0..4 = CON/AUX/PRN は全て char device)
  *
+ * ディレクトリ/ディスク系 (/run 配下を host FS でラップ):
+ *   36h Get Disk Free Space (合成ジオメトリで「常に潤沢」を返す)
+ *   39h/3Ah MKDIR/RMDIR (host mkdir/rmdir) / 3Bh CHDIR (論理カレント g_cwd を更新)
+ *   47h Get Current Dir (g_cwd を返す)
+ *
  * メモリ/検索系 (確保は dos_loader.c の MCB チェーンに委譲):
  *   48h Allocate Memory  (BX paragraphs → AX seg。first-fit + 分割)
  *   49h Free Memory      (ES-1 の MCB を空きに + coalesce)
@@ -479,23 +484,37 @@ static int ci_lookup(const char *dir, const char *name, char *found, size_t cap)
     return hit;
 }
 
+/* カレントディレクトリ (/run 相対、'/' 区切り、先頭/末尾スラッシュ無し、'' = ルート)。
+ * AH=3Bh CHDIR で更新、AH=47h GetCurDir で返す。相対パス解決時に read_dos_rel が前置する。
+ * 実 DOS のカレントディレクトリと同じ意味論 (ドライブは単一なので drive 別 CWD は持たない)。
+ * image 起動ごとに qb_dos_tty_reset でルートへ戻す。 */
+static char g_cwd[192];
+
 /* DS:DX 等の ASCIZ DOS パスを読み、drive letter 除去・'\\'→'/'・先頭 '/' 除去した
- * 相対パスを rel に書く (大小は保持)。 */
+ * 相対パスを rel に書く (大小は保持)。相対パス (先頭 '\\' でない) はカレントディレクトリ
+ * g_cwd を前置して /run からの相対に直す (実 DOS のカレント基準解決と同じ)。 */
 static void read_dos_rel(uint16_t seg, uint16_t off, char *rel, size_t cap) {
     uint32_t base = lin(seg, off);
     char c0 = (char)peek8(base);
     char c1 = (char)peek8(base + 1);
     uint32_t i = (c0 && c1 == ':') ? 2u : 0u;   /* drive letter "X:" をスキップ */
+    char raw[256];
     size_t n = 0;
-    while (n + 1 < cap) {
+    while (n + 1 < sizeof(raw)) {
         uint8_t c = peek8(base + i++);
         if (c == 0) break;
-        rel[n++] = (c == '\\') ? '/' : (char)c;
+        raw[n++] = (c == '\\') ? '/' : (char)c;
     }
-    rel[n] = '\0';
-    size_t k = 0;
-    while (rel[k] == '/') k++;                   /* 先頭 '/' を除去して相対化 */
-    if (k > 0) memmove(rel, rel + k, n - k + 1);
+    raw[n] = '\0';
+    int absolute = (raw[0] == '/');             /* 先頭 '\\' (= '/') があれば絶対パス */
+    const char *core = raw;
+    while (*core == '/') core++;                  /* 先頭 '/' を除去して相対化 */
+    if (!absolute && g_cwd[0] != '\0') {          /* 相対 & カレントがルートでない → 前置 */
+        if (*core) snprintf(rel, cap, "%s/%s", g_cwd, core);
+        else       snprintf(rel, cap, "%s", g_cwd);
+    } else {
+        snprintf(rel, cap, "%s", core);
+    }
 }
 
 /* "data/sub" のようなディレクトリ相対パスを /run 配下の実在パスへ case-insensitive
@@ -613,6 +632,23 @@ static void fh_reset_all(void) {
         g_fh[h].used = 0;
         g_fh[h].fp = NULL;
         g_fh[h].path[0] = '\0';
+    }
+}
+
+/* EXEC 子のハンドル掃除 (dos_loader.c が使う)。実 DOS は子の終了で子が開いた
+ * ファイルを閉じる (free-on-terminate) が、我々のハンドル表はプロセス間共有なので、
+ * EXEC 時点で open 中のユーザハンドルを bitmask で記録し (snapshot)、子終了で
+ * 「それ以降に開いた分」だけ閉じる。親が開いていたハンドルは温存する。
+ * (TSR=31h は常駐させるので呼ばない。) DOS_HANDLE_MAX <= 32 前提 (1u<<h)。 */
+uint32_t qb_dos_fh_snapshot(void) {
+    uint32_t m = 0;
+    for (int h = DOS_HANDLE_USER_BASE; h < DOS_HANDLE_MAX; h++)
+        if (g_fh[h].used) m |= (1u << h);
+    return m;
+}
+void qb_dos_fh_close_since(uint32_t snapshot) {
+    for (int h = DOS_HANDLE_USER_BASE; h < DOS_HANDLE_MAX; h++) {
+        if (g_fh[h].used && !(snapshot & (1u << h))) fh_close(h);
     }
 }
 
@@ -926,12 +962,14 @@ void qb_dos_dta_set(uint16_t seg, uint16_t off) {
 
 static void int21_47_getcurdir(void) {
     /* DL = drive (0=default, 1=A:...), DS:SI = 64 byte バッファ。
-     * 我々の /run はサブディレクトリ無しのルート扱いなので、カレントディレクトリは
-     * 空文字列 (先頭 NUL) を返す。drive letter も leading '\' も含めないのが仕様。
-     * これを返さないと、ここからパスを組み立てるゲームが空/ゴミパスになり
-     * データファイルを開けない (zar の "fopen(/run/) failed" の原因)。 */
+     * カレントディレクトリ g_cwd を「drive letter も先頭 '\' も含めず」'\' 区切りで
+     * 書く (実 DOS 仕様)。ルートは空文字列 (先頭 NUL)。CHDIR (3Bh) と連動する。 */
     uint32_t buf = lin(CPU_DS, CPU_SI);
-    poke8(buf, 0x00);          /* 空 = ルートディレクトリ */
+    size_t k = 0;
+    for (; g_cwd[k] && k < 63; k++) {
+        poke8(buf + k, (uint8_t)(g_cwd[k] == '/' ? '\\' : g_cwd[k]));
+    }
+    poke8(buf + k, 0x00);
     CPU_AX = 0x0100;           /* 実 DOS が返す慣例値 */
     CPU_FLAG &= ~C_FLAG;
 }
@@ -1415,6 +1453,98 @@ static void int21_4f_findnext(void) {
     CPU_FLAG &= ~C_FLAG;
 }
 
+/* AH=36h Get Disk Free Space。DL = ドライブ (0=default,1=A:...)。
+ * 実ディスクが無いので「常に潤沢」な合成ジオメトリを返す (空き容量チェックを通すため)。
+ *   AX = sectors/cluster, BX = available clusters, CX = bytes/sector, DX = total clusters
+ * 無効ドライブは AX=0xFFFF だが、単一ドライブなので常に有効扱い。
+ * 512 B/sec × 8 sec/clus (=4KB) × 16384 free = 64MB 空き (free<total、32-bit に収まる)。 */
+static void int21_36_freespace(void) {
+    CPU_AX = 8;          /* sectors per cluster */
+    CPU_CX = 512;        /* bytes per sector */
+    CPU_BX = 0x4000;     /* available clusters = 16384 → 64MB free */
+    CPU_DX = 0x7FFF;     /* total clusters     = 32767 → ~128MB */
+    CPU_FLAG &= ~C_FLAG;
+}
+
+/* AH=39h MKDIR。DS:DX = 作成するディレクトリパス。
+ * 既存なら access denied(5)、親が無ければ path not found(3)、それ以外は mkdir。 */
+static void int21_39_mkdir(void) {
+    char host[256];
+    int st = dos_path_to_host(CPU_DS, CPU_DX, host, sizeof(host));
+    if (st == 0) { CPU_AX = 5; CPU_FLAG |= C_FLAG; return; }   /* 既に存在 */
+    if (st == 2) { CPU_AX = 3; CPU_FLAG |= C_FLAG; return; }   /* 親ディレクトリが無い */
+    if (mkdir(host, 0777) != 0) {
+        fprintf(stderr, "[int21h/39] mkdir(%s) failed\n", host);
+        CPU_AX = 5; CPU_FLAG |= C_FLAG; return;
+    }
+    fprintf(stderr, "[int21h/39] mkdir %s\n", host);
+    CPU_FLAG &= ~C_FLAG;
+}
+
+/* AH=3Ah RMDIR。DS:DX = 削除するディレクトリパス。
+ * 無ければ path not found(3)、非空・失敗は access denied(5)。 */
+static void int21_3a_rmdir(void) {
+    char host[256];
+    int st = dos_path_to_host(CPU_DS, CPU_DX, host, sizeof(host));
+    if (st != 0) { CPU_AX = 3; CPU_FLAG |= C_FLAG; return; }
+    if (rmdir(host) != 0) {
+        fprintf(stderr, "[int21h/3A] rmdir(%s) failed\n", host);
+        CPU_AX = 5; CPU_FLAG |= C_FLAG; return;
+    }
+    CPU_FLAG &= ~C_FLAG;
+}
+
+/* AH=3Bh CHDIR。DS:DX = 目標パス。論理カレント g_cwd (/run 相対) を更新する。
+ * '.'/'..' を解決し、実在ディレクトリでなければ path not found(3)。 */
+static void int21_3b_chdir(void) {
+    /* 絶対 ("\\..." / "X:\\...") か相対かを判定するため raw を別途読む (CWD 前置前)。 */
+    uint32_t base = lin(CPU_DS, CPU_DX);
+    char c0 = (char)peek8(base), c1 = (char)peek8(base + 1);
+    uint32_t i = (c0 && c1 == ':') ? 2u : 0u;
+    char raw[256]; size_t n = 0;
+    while (n + 1 < sizeof(raw)) {
+        uint8_t c = peek8(base + i++);
+        if (!c) break;
+        raw[n++] = (c == '\\') ? '/' : (char)c;
+    }
+    raw[n] = '\0';
+    int absolute = (raw[0] == '/');
+
+    /* 候補 cwd を component 単位で構築 ('.'=無視 / '..'=1 段戻る)。相対なら g_cwd 起点。 */
+    char cand[192];
+    cand[0] = '\0';
+    if (!absolute) { strncpy(cand, g_cwd, sizeof(cand) - 1); cand[sizeof(cand) - 1] = '\0'; }
+    const char *p = raw;
+    while (*p) {
+        while (*p == '/') p++;
+        if (!*p) break;
+        char comp[160]; size_t cl = 0;
+        while (*p && *p != '/' && cl + 1 < sizeof(comp)) comp[cl++] = *p++;
+        comp[cl] = '\0';
+        if (strcmp(comp, ".") == 0) continue;
+        if (strcmp(comp, "..") == 0) {
+            char *s = strrchr(cand, '/');
+            if (s) *s = '\0'; else cand[0] = '\0';
+            continue;
+        }
+        size_t ol = strlen(cand);
+        if (ol) snprintf(cand + ol, sizeof(cand) - ol, "/%s", comp);
+        else    snprintf(cand, sizeof(cand), "%s", comp);
+    }
+
+    /* 候補が実在ディレクトリか検証 (case-insensitive 解決して opendir)。 */
+    char host[256];
+    resolve_dir(cand, host, sizeof(host));
+    DIR *d = opendir(host);
+    if (!d) { CPU_AX = 3; CPU_FLAG |= C_FLAG; return; }   /* path not found */
+    closedir(d);
+
+    strncpy(g_cwd, cand, sizeof(g_cwd) - 1);
+    g_cwd[sizeof(g_cwd) - 1] = '\0';
+    fprintf(stderr, "[int21h/3B] chdir → \"%s\"\n", g_cwd);
+    CPU_FLAG &= ~C_FLAG;
+}
+
 /* ---------------- ディスパッチ ---------------- */
 
 /* AH 別カウンタ + qbDebug.int21Stats() で読めるよう export */
@@ -1454,6 +1584,10 @@ void qb_dos_int21_dispatch(void) {
     case 0x31: int21_31_keep();         break;
     case 0x33: int21_33_ctrlbreak();    break;
     case 0x35: int21_35_get_vec();   break;
+    case 0x36: int21_36_freespace();    break;
+    case 0x39: int21_39_mkdir();        break;
+    case 0x3A: int21_3a_rmdir();        break;
+    case 0x3B: int21_3b_chdir();        break;
     case 0x3C: int21_3c_create();    break;
     case 0x3D: int21_3d_open();      break;
     case 0x3E: int21_3e_close();     break;
@@ -1519,6 +1653,7 @@ void qb_dos_tty_reset(void) {
     g_dta_linear = ((uint32_t)0x0100 << 4) + 0x80;
     g_dta_seg = 0x0100;
     g_dta_off = 0x0080;
+    g_cwd[0] = '\0';     /* カレントディレクトリをルートへ戻す */
     /* 入力系の途中状態をクリア (前回 image の行入力/再ポーリングを持ち越さない) */
     g_int21_repoll = 0;
     g_la_active = 0;

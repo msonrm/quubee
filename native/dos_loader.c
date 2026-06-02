@@ -67,6 +67,7 @@ typedef struct {
     uint16_t ax, bx, cx, dx, si, di, bp, ds, es;  /* 親 GP + DS/ES */
     uint16_t psp_seg;          /* 親 PSP (g_cur_psp 復元用) */
     uint16_t dta_seg, dta_off; /* 親 DTA (子は自 PSP:0080 を既定にするので退避/復元) */
+    uint32_t fh_mask;          /* EXEC 時点の open 中ユーザハンドル (子終了で差分を閉じる) */
 } exec_frame_t;
 static exec_frame_t g_exec_stack[8];
 static int          g_exec_sp = 0;
@@ -411,6 +412,7 @@ int qb_dos_signal_exit(int code) {
     if (g_exec_sp > 0) {
         exec_frame_t *f = &g_exec_stack[--g_exec_sp];
         qb_dos_alloc_free_owner(g_cur_psp);         /* 子 PSP が所有する全ブロックを解放 (DOS free-on-terminate) */
+        qb_dos_fh_close_since(f->fh_mask);          /* 子が開いたファイルハンドルを閉じる (同上) */
         CPU_CS = f->ret_cs; CPU_IP = f->ret_ip;     /* 親の INT 21h 直後へ */
         CPU_SS = f->ret_ss; CPU_SP = f->ret_sp;
         CPU_DS = f->ds;     CPU_ES = f->es;
@@ -827,6 +829,7 @@ int qb_dos_exec_load(const uint8_t *image, size_t size,
         uint32_t dta = qb_dos_dta_get_packed();   /* 親 DTA を退避 (子終了で復元) */
         f->dta_seg = (uint16_t)(dta >> 16);
         f->dta_off = (uint16_t)(dta & 0xFFFF);
+        f->fh_mask = qb_dos_fh_snapshot();        /* 親が開いていたハンドル (子終了で差分を閉じる) */
     } else {
         fprintf(stderr, "[dos_exec] WARN: EXEC ネスト過多 → この子は親復帰なし\n");
     }

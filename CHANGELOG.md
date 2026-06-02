@@ -1,5 +1,37 @@
 # CHANGELOG
 
+## [HLE-DOS にディレクトリ操作 + 空き容量 + EXEC ハンドル掃除 / ファイラ表示の SJIS 化・MEMFS リーク修正] — 2026-06-02
+
+コードレビューでの棚卸しに基づく修正群。**前半は JS フロント (Wasm 不変)、後半は DOS(INT 21h) 層**。
+
+- **ファイラのファイル名表示を SJIS デコード** (`web/player/bridge.js`): 一覧/見出し/パンくず/Run 行は
+  従来 latin1 バイト列を生表示していて漢字名が化けていた。`sjisName()` を追加し**表示文字列だけ**復号
+  (FS キー/フォルダ移動用の原バイト名は保持)。`file.name` (ブラウザ由来=Unicode) は通さない。
+- **MEMFS リーク修正** (`web/player/bridge.js`): `loadDiskFromBlob` が Run 連打のたびに `/tmp/disk_N_*` を
+  量産していた (loader.d88 ~1.2MB/回)。slot 単位で旧イメージを `unlink`、挿入失敗分も即掃除。
+- **`docs/dos_hle_gaps.md` 新規**: HLE-DOS の実 DOS との差異・未対応を体系化 (INT 21h 未実装 fn / 実装済み
+  だが挙動差 / INT 21h の外)。当たりやすさ順の優先度付き。
+- **INT 21h にディレクトリ/ディスク系を追加** (`native/dos_int21.c`):
+  - **39h MKDIR / 3Ah RMDIR / 3Bh CHDIR** — host の mkdir/rmdir。CHDIR は**論理カレント `g_cwd` を持ち、
+    相対パス解決 (`read_dos_rel`) に前置**して実際に効くようにした (`.`/`..` 解決込み)。47h GetCurDir も連動。
+    `g_cwd==""` (CHDIR 未使用=既存ゲーム) では従来と同一経路 → **回帰なし**。
+  - **36h Get Disk Free Space** — 実ディスクが無いので合成ジオメトリで「常に潤沢 (64MB 空き)」を返し、
+    セーブ前の空き容量チェックを通す。
+- **EXEC 子のファイルハンドル掃除** (`native/dos_int21.c` + `dos_loader.c`): 実 DOS の free-on-terminate
+  相当。EXEC 時点の open 中ハンドルを bitmask で記録 (`qb_dos_fh_snapshot`)、子終了で**それ以降に開いた分
+  だけ**閉じる (`qb_dos_fh_close_since`)。ランチャ往復型 (zar 等) でのハンドル枯渇を防ぐ。TSR(31h) は常駐
+  させるので閉じない。
+- **ファイラに /run ライブ反映** (`web/player/bridge.js`): 実行中のゲームが作った/書き換えた/消したファイルを
+  一覧へ自動反映。正本 `loadedEntries` は維持しつつ、**実行中だけ** `/run` を ~1s ポーリングして「開始時から
+  変化した分」だけ差分マージ (書庫由来の原 mtime は保持)。署名比較で**変化時のみ再描画** (チラつき無し)、
+  スキャンは MEMFS=メモリ上なので軽量。CHDIR/MKDIR で作ったフォルダやセーブが UI で見えるようになった。
+  ※ MEMFS は再読込で消えるので「保存の永続化」(IndexedDB 本棚) は別タスク。
+- **`tools/dos_loader/dostest.com.py` 新規**: 39h/3Ah/3Bh/36h + CHDIR 前置を叩いて PASS/FAIL を画面表示する
+  検証用 COM 生成スクリプト (ラベル/フィックスアップ機構の hand-assemble、逆アセンブルで命令列検証済み)。
+
+検証: dostest.com で MKDIR/CHDIR/GETCWD/WRITE/RMDIR/36h 全 PASS + `/run/SAVE/TEST.DAT`="QuuBee" を確認、
+ライブ反映でフォルダ即出現。ザルバール (EXEC ランチャ) でセーブの即反映も確認。
+
 ## [ディスクイメージの中身取り出し (FAT12/16・ブートせず) + ファイラに現代的フォルダ移動] — 2026-06-02
 
 書庫 (.lzh/.zip) と同じ `/run/` 経路に、**ディスクイメージを「ブートせず・中のファイルだけ取り出す」**経路を追加。

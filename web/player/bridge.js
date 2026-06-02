@@ -291,9 +291,11 @@ NP2KaiModule({
         ['number', 'string', 'number']);
     const reset     = M.cwrap('np2kai_reset',      null,     ['number']);
 
-    // ロード中のディスクパス (FS 上)。同名で複数回ロードしても良いように
-    // 名前を都度生成する。FS は永続化しないのでクリーンアップは不要。
+    // ロード中のディスクパス (FS 上)。同名で複数回ロードしても良いように名前を都度生成する。
+    // FS はセッション内では永続するので、同 slot へ挿し直す際は旧イメージを unlink する
+    // (下記 slotPaths)。さもないと Run 連打で loader.d88 (~1.2MB) が MEMFS に積み上がる。
     let loadSeq = 0;
+    const slotPaths = {};   // `${kind}${drive}` → 現在その slot に挿入中の FS パス
 
     /**
      * kind: 'fdd' | 'hdd'
@@ -314,9 +316,15 @@ NP2KaiModule({
             r = insertFdd(handle, fsPath, drive, 0);
         }
         if (r !== 0) {
+            try { M.FS.unlink(fsPath); } catch (_) {}   // 挿入失敗分は即掃除
             setDriveName(kind, drive, `(insert failed r=${r}: ${file.name})`);
             return;
         }
+        // 挿入成功: 同 slot の旧イメージを掃除 (NP2kai は fdd_set/sxsi で新パスを参照済みなので安全)。
+        const slot = `${kind}${drive}`;
+        const prev = slotPaths[slot];
+        slotPaths[slot] = fsPath;
+        if (prev && prev !== fsPath) { try { M.FS.unlink(prev); } catch (_) {} }
         setDriveName(kind, drive, `${file.name} (${(buf.byteLength/1024)|0} KB)`);
         // HDD は挿入後に再ブートしないと BIOS が拾わない。FDD は A: のみリセット。
         if (kind === 'hdd' || drive === 0) reset(handle);
@@ -340,6 +348,14 @@ NP2KaiModule({
     const crumbsEl     = document.getElementById('crumbs');
 
     const sjis = new TextDecoder('shift_jis');
+    // 表示用に名前 (latin1 バイト列, 1 char = 1 byte) を SJIS デコードする。FS キー/ナビ用の
+    // 原バイト名はそのまま保ち、画面に出す文字列だけ日本語へ復号する (漢字ファイル名対策)。
+    // file.name (ブラウザ File) は既に Unicode なので、これを通すのは latin1 由来の名前だけ。
+    const sjisName = (n) => {
+        const b = new Uint8Array(n.length);
+        for (let i = 0; i < n.length; i++) b[i] = n.charCodeAt(i) & 0xff;
+        return sjis.decode(b);
+    };
     const isExecName = (n) => /\.(exe|com)$/i.test(n);
     const isTextName = (n) =>
         /\.(txt|doc|me|1st|asc|bat|ini|cfg|nfo|faq|hlp|dic|wri)$/i.test(n) ||
@@ -385,7 +401,7 @@ NP2KaiModule({
             sep.className = 'sep'; sep.textContent = '›';
             crumbsEl.appendChild(sep);
             acc += seg + '/';
-            addSeg(seg, acc, i === segs.length - 1);
+            addSeg(sjisName(seg), acc, i === segs.length - 1);
         });
     }
 
@@ -417,7 +433,7 @@ NP2KaiModule({
             const row = document.createElement('div');
             row.className = 'frow dir';
             row.innerHTML =
-                `<span class="fn">📁 ${escapeHtml(fn)}/</span>` +
+                `<span class="fn">📁 ${escapeHtml(sjisName(fn))}/</span>` +
                 `<span class="fsz">${folders.get(fn)} 件</span>` +
                 `<span class="fdt"></span>`;
             row.addEventListener('click', () => { currentDir += fn + '/'; renderFileList(); });
@@ -436,7 +452,7 @@ NP2KaiModule({
                             (ent === selectedEntry ? ' sel' : '');
             const tag = isExecName(nm) ? '▶ ' : isTextName(nm) ? '・' : '  ';
             row.innerHTML =
-                `<span class="fn">${tag}${escapeHtml(nm)}</span>` +
+                `<span class="fn">${tag}${escapeHtml(sjisName(nm))}</span>` +
                 `<span class="fsz">${fmtSize(ent.data.length)}</span>` +
                 `<span class="fdt">${fmtTime(ent.mtime)}</span>`;
             row.addEventListener('click', () =>
@@ -446,7 +462,7 @@ NP2KaiModule({
     }
 
     function openText(ent) {
-        textHeadEl.textContent = ent.name;
+        textHeadEl.textContent = sjisName(ent.name);
         // DOS EOF (Ctrl-Z=0x1A) 以降は本文ではない。生バイトで切る
         // (0x1A は SJIS の trail バイト範囲外なので常に単独制御＝安全。
         //  デコード後の符号位置は環境依存なのでバイトで判定する)。
@@ -459,7 +475,7 @@ NP2KaiModule({
 
     function selectEntry(ent) {
         selectedEntry = ent;
-        runEntryEl.textContent = ent.name;
+        runEntryEl.textContent = sjisName(ent.name);
         runButton.disabled = false;
         renderFileList();   // ハイライト更新
     }
@@ -566,7 +582,7 @@ NP2KaiModule({
         const written = [], skipped = [];
         for (const ent of entries) {
             if (ent.data == null) {            // 未対応メソッド (例: -lh1-) → skip して継続
-                skipped.push(`${ent.name} (${ent.method || '?'})`);
+                skipped.push(`${sjisName(ent.name)} (${ent.method || '?'})`);
                 continue;
             }
             const rel = ent.name.replace(/^\/+/, '');
@@ -640,6 +656,71 @@ NP2KaiModule({
         pollDosExit._stop = () => stopPolling(-1);
     }
 
+    // ---- /run ライブ反映 ----------------------------------------------------
+    // 実行中のゲームが /run に作った/書き換えた/消したファイルを一覧へ取り込む。
+    // 正本は従来どおり loadedEntries (投入時に作る配列)。実行中だけ /run を ~1s ポーリング
+    // し、「実行開始時から変化したファイル」だけ差分マージする (= 書庫由来ファイルの原 mtime は
+    // そのまま保持)。FS スキャン自体は MEMFS=メモリ上なので軽い。再描画は変化があった時のみ。
+    let fsSig = new Map();     // name(/run 相対) -> "size:mtimeMs" (最後に同期した FS 状態)
+    let runSyncTimer = null;
+
+    function scanRun() {        // /run 配下の通常ファイルを再帰列挙 {name,size,mtimeMs}
+        const out = [];
+        (function walk(dir, prefix) {
+            let ents;
+            try { ents = M.FS.readdir(dir); } catch (_) { return; }
+            for (const e of ents) {
+                if (e === '.' || e === '..') continue;
+                const path = dir + '/' + e;
+                let st;
+                try { st = M.FS.stat(path); } catch (_) { continue; }
+                if (M.FS.isDir(st.mode)) walk(path, prefix + e + '/');
+                else out.push({ name: prefix + e, size: st.size, mtimeMs: +st.mtime });
+            }
+        })('/run', '');
+        return out;
+    }
+
+    function fsSnapshot() {     // run 開始時の FS 状態を「同期済み」として記録 (差分の基準)
+        fsSig = new Map();
+        for (const f of scanRun()) fsSig.set(f.name, f.size + ':' + f.mtimeMs);
+    }
+
+    function syncRunDir() {     // 差分だけ loadedEntries に反映。変化があれば再描画
+        const scan = scanRun();
+        const names = new Set();
+        let changed = false;
+        for (const f of scan) {
+            names.add(f.name);
+            const sig = f.size + ':' + f.mtimeMs;
+            if (fsSig.get(f.name) === sig) continue;     // 開始時から不変 → 触らない (原 mtime 保持)
+            fsSig.set(f.name, sig);
+            let data;
+            try { data = M.FS.readFile('/run/' + f.name); } catch (_) { continue; }
+            const mtime = f.mtimeMs ? new Date(f.mtimeMs) : null;
+            const i = loadedEntries.findIndex((e) => e.name === f.name);
+            if (i >= 0) { loadedEntries[i].data = data; loadedEntries[i].mtime = mtime; }  // 同一性保持
+            else loadedEntries.push({ name: f.name, data, mtime });
+            changed = true;
+        }
+        // 実行中に消えたファイルを一覧からも除去
+        for (let i = loadedEntries.length - 1; i >= 0; i--) {
+            const nm = loadedEntries[i].name;
+            if (names.has(nm)) continue;
+            fsSig.delete(nm);
+            if (loadedEntries[i] === selectedEntry) {
+                selectedEntry = null; runButton.disabled = true; runEntryEl.textContent = '—';
+            }
+            loadedEntries.splice(i, 1);
+            changed = true;
+        }
+        if (changed) renderFileList();
+        return changed;
+    }
+
+    function startRunSync() { stopRunSync(); fsSnapshot(); runSyncTimer = setInterval(syncRunDir, 1000); }
+    function stopRunSync()  { if (runSyncTimer) { clearInterval(runSyncTimer); runSyncTimer = null; } }
+
     async function stageAndRunImage(bytes, cmdline, label, isExe) {
         // image を C ヒープに転送して stage する
         const ptr = M._malloc(bytes.length);
@@ -652,7 +733,10 @@ NP2KaiModule({
         await loadLoaderDisk();
         runStatusEl.textContent = `${label}: 実行中 (exit を polling 中…)`;
         stopButton.hidden = false;
+        startRunSync();                 // 実行中の /run 変化を一覧へライブ反映
         pollDosExit((code) => {
+            stopRunSync();
+            syncRunDir();               // 終了直前の書き込みを最終取り込み
             runStatusEl.textContent = code === -1
                 ? `${label}: 中断 (Stop)`
                 : `${label}: 終了 (exit code=${code})`;
@@ -673,8 +757,8 @@ NP2KaiModule({
         const cmdline = runCmdline.value;
         const isExe = /\.exe$/i.test(selectedEntry.name);
         try {
-            runStatusEl.textContent = `${selectedEntry.name} を起動…`;
-            await stageAndRunImage(selectedEntry.data, cmdline, selectedEntry.name, isExe);
+            runStatusEl.textContent = `${sjisName(selectedEntry.name)} を起動…`;
+            await stageAndRunImage(selectedEntry.data, cmdline, sjisName(selectedEntry.name), isExe);
         } catch (e) {
             runStatusEl.textContent = `ERROR: ${e.message}`;
             console.error(e);

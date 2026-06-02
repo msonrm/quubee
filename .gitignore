@@ -32,6 +32,7 @@
 /tools/dos_loader/args.com
 /tools/dos_loader/hello.exe
 /tools/dos_loader/sjistest.com
+/tools/dos_loader/dostest.com
 
 # フォント配布アーカイブ (参照用・大きい。ライセンス文は CREDITS.md に取り込み済み)
 /sazanami-fontbmp.zip
