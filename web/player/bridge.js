@@ -336,6 +336,8 @@ NP2KaiModule({
     let loadedEntries  = [];   // { name(=/run 相対), data, mtime }  path は last-wins
     let selectedEntry  = null; // 実行対象の EXE/COM
     let loadedArchives = [];   // 表示用の投入書庫名
+    let currentDir     = '';   // ファイラの現在フォルダ (/run 相対, '' = ルート, 末尾 '/' 付き)
+    const crumbsEl     = document.getElementById('crumbs');
 
     const sjis = new TextDecoder('shift_jis');
     const isExecName = (n) => /\.(exe|com)$/i.test(n);
@@ -361,25 +363,84 @@ NP2KaiModule({
         }
     }
 
+    // パンくず (現代的なフォルダ移動。クリックで任意の親へジャンプ)
+    function renderCrumbs() {
+        const segs = currentDir.split('/').filter(Boolean);
+        // サブフォルダが一切無く、ルートに居るなら隠す (平置き書庫では従来どおりの見た目)
+        const anyDir = loadedEntries.some((e) => e.name.includes('/'));
+        if (!segs.length && !anyDir) { crumbsEl.hidden = true; crumbsEl.textContent = ''; return; }
+        crumbsEl.hidden = false;
+        crumbsEl.textContent = '';
+        const addSeg = (label, dir, here) => {
+            const s = document.createElement('span');
+            s.className = 'seg' + (here ? ' here' : '');
+            s.textContent = label;
+            if (!here) s.addEventListener('click', () => { currentDir = dir; renderFileList(); });
+            crumbsEl.appendChild(s);
+        };
+        addSeg('🏠', '', segs.length === 0);
+        let acc = '';
+        segs.forEach((seg, i) => {
+            const sep = document.createElement('span');
+            sep.className = 'sep'; sep.textContent = '›';
+            crumbsEl.appendChild(sep);
+            acc += seg + '/';
+            addSeg(seg, acc, i === segs.length - 1);
+        });
+    }
+
     function renderFileList() {
         arcNameEl.textContent = loadedArchives.length
             ? `書庫: ${loadedArchives.join(' + ')}` : '書庫をドロップ';
-        const rank = (n) => isReadme(n) ? 0 : isTextName(n) ? 1 : isExecName(n) ? 2 : 3;
-        const sorted = loadedEntries.slice().sort((a, b) =>
-            rank(a.name) - rank(b.name) ||
-            a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
+        renderCrumbs();
+
+        // currentDir 直下の「フォルダ」と「ファイル」に振り分ける
+        const folders = new Map();   // 直下サブフォルダ名 → ファイル数
+        const files = [];            // 直下ファイル entry
+        for (const ent of loadedEntries) {
+            if (currentDir && !ent.name.startsWith(currentDir)) continue;
+            const rest = ent.name.slice(currentDir.length);
+            const slash = rest.indexOf('/');
+            if (slash >= 0) {
+                const fname = rest.slice(0, slash);
+                folders.set(fname, (folders.get(fname) || 0) + 1);
+            } else if (rest) {
+                files.push(ent);
+            }
+        }
         fileListEl.textContent = '';
-        for (const ent of sorted) {
+
+        // フォルダ行 (アルファベット順、降下する)
+        const folderNames = Array.from(folders.keys())
+            .sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
+        for (const fn of folderNames) {
             const row = document.createElement('div');
-            row.className = 'frow' + (isExecName(ent.name) ? ' exec' : isTextName(ent.name) ? ' text' : '') +
-                            (ent === selectedEntry ? ' sel' : '');
-            const tag = isExecName(ent.name) ? '▶ ' : isTextName(ent.name) ? '・' : '  ';
+            row.className = 'frow dir';
             row.innerHTML =
-                `<span class="fn">${tag}${escapeHtml(ent.name)}</span>` +
+                `<span class="fn">📁 ${escapeHtml(fn)}/</span>` +
+                `<span class="fsz">${folders.get(fn)} 件</span>` +
+                `<span class="fdt"></span>`;
+            row.addEventListener('click', () => { currentDir += fn + '/'; renderFileList(); });
+            fileListEl.appendChild(row);
+        }
+
+        // ファイル行 (readme→text→exec→other、各内アルファベット順)
+        const base = (n) => n.slice(n.lastIndexOf('/') + 1);
+        const rank = (n) => isReadme(n) ? 0 : isTextName(n) ? 1 : isExecName(n) ? 2 : 3;
+        files.sort((a, b) => rank(a.name) - rank(b.name) ||
+            base(a.name).toLowerCase().localeCompare(base(b.name).toLowerCase()));
+        for (const ent of files) {
+            const nm = base(ent.name);
+            const row = document.createElement('div');
+            row.className = 'frow' + (isExecName(nm) ? ' exec' : isTextName(nm) ? ' text' : '') +
+                            (ent === selectedEntry ? ' sel' : '');
+            const tag = isExecName(nm) ? '▶ ' : isTextName(nm) ? '・' : '  ';
+            row.innerHTML =
+                `<span class="fn">${tag}${escapeHtml(nm)}</span>` +
                 `<span class="fsz">${fmtSize(ent.data.length)}</span>` +
                 `<span class="fdt">${fmtTime(ent.mtime)}</span>`;
             row.addEventListener('click', () =>
-                isExecName(ent.name) ? selectEntry(ent) : openText(ent));
+                isExecName(nm) ? selectEntry(ent) : openText(ent));
             fileListEl.appendChild(row);
         }
     }
@@ -406,18 +467,29 @@ NP2KaiModule({
     // ドロップ/選択された 1 ファイルを開く。append=true で /run/ に重ねて展開。
     async function openDropped(file, append) {
         document.body.classList.remove('panel-hidden');   // 投入時はパネルを表示
+        currentDir = '';                                  // 投入時はルート表示に戻す
         runStatusEl.textContent = `読み込み中: ${file.name}…`;
         try {
             if (!append) { clearRunDir(); loadedEntries = []; loadedArchives = []; selectedEntry = null; }
             if (/\.(lzh|zip)$/i.test(file.name)) {
                 mergeEntries(await extractArchiveToFs(file, true));   // /run/ クリアは上で実施済
+            } else if (qbDiskImage.isDiskImageName(file.name)) {
+                // ディスクイメージは「ブートせず中身を /run/ へ取り出す」(FAT12/16 リーダ)。
+                const res = qbDiskImage.extractDiskImage(
+                    new Uint8Array(await file.arrayBuffer()), file.name);
+                if (!res.ok) {
+                    runStatusEl.textContent = `取り出せません: ${file.name} — ${res.reason}`;
+                    return;
+                }
+                mergeEntries(writeEntriesToRun(res.files));
             } else if (isExecName(file.name)) {
                 ensureRunDir();
                 const data = new Uint8Array(await file.arrayBuffer());
                 M.FS.writeFile('/run/' + file.name, data);
                 mergeEntries([{ name: file.name, data, mtime: file.lastModified ? new Date(file.lastModified) : null }]);
             } else {
-                runStatusEl.textContent = `未対応のファイル: ${file.name} (.lzh/.zip/.com/.exe)`;
+                runStatusEl.textContent =
+                    `未対応のファイル: ${file.name} (.lzh / .zip / ディスクイメージ / .com / .exe)`;
                 return;
             }
             loadedArchives.push(file.name);
@@ -467,23 +539,37 @@ NP2KaiModule({
         }
     }
 
-    async function extractArchiveToFs(file, append) {
-        const bytes = new Uint8Array(await file.arrayBuffer());
-        // .zip は deflate 展開、それ以外 (.lzh) は LZH デコーダ。どちらもブートせず /run/ へ展開する。
-        const entries = /\.zip$/i.test(file.name)
-            ? await qbArchive.parseZip(bytes)
-            : qbArchive.parseLzh(bytes);
-        if (!append) clearRunDir();
-        // 原ケースのまま /run 配下へ展開し、LZH 内のサブディレクトリも再現する。
-        // DOS は大小を区別しないので、case の吸収は C 側 dos_path_to_host の
-        // case-insensitive リゾルバに任せる (旧実装の「両側で強制小文字化」は廃止)。
-        const extracted = [], skipped = [];
-        for (const ent of entries) {
-            if (ent.data == null) {            // 未対応メソッド (例: -lh1-) → skip して継続
-                skipped.push(`${ent.name} (${ent.method})`);
+    // DOS パス区切り '\' を '/' に変換。ただし SJIS 2 バイト文字の trail バイト 0x5C
+    // (ダメ文字: ソ=0x83 0x5C / 表=0x95 0x5C 等) は区切りでなく文字データなので素通しする。
+    // name は latin1 バイト列 (1 char = 1 byte) 前提。書庫経路の名前にだけ適用する
+    // (FAT 名は '/' 区切りで生成済 + 0x5C は必ず漢字 trail なので変換しない)。
+    function dosPathToSlash(name) {
+        let out = '';
+        for (let i = 0; i < name.length; i++) {
+            const c = name.charCodeAt(i);
+            if ((c >= 0x81 && c <= 0x9f) || (c >= 0xe0 && c <= 0xfc)) {  // SJIS lead byte
+                out += name[i];
+                if (i + 1 < name.length) { out += name[i + 1]; i++; }    // trail を素通し
                 continue;
             }
-            const rel = ent.name.replace(/\\/g, '/').replace(/^\/+/, '');
+            out += (c === 0x5c) ? '/' : name[i];
+        }
+        return out;
+    }
+
+    // entries [{name, data, mtime}] を /run/ 配下へ書き出す (LZH/書庫/ディスクイメージ共通)。
+    // 区切りは '/' 前提 (呼び出し側で正規化済)。サブディレクトリも再現。data==null は skip。
+    // 書き出したエントリ (name=正規化相対パス) を返す。DOS は大小を区別しないので、case の
+    // 吸収は C 側 dos_path_to_host の case-insensitive リゾルバに任せる (原ケースのまま保持)。
+    function writeEntriesToRun(entries) {
+        ensureRunDir();
+        const written = [], skipped = [];
+        for (const ent of entries) {
+            if (ent.data == null) {            // 未対応メソッド (例: -lh1-) → skip して継続
+                skipped.push(`${ent.name} (${ent.method || '?'})`);
+                continue;
+            }
+            const rel = ent.name.replace(/^\/+/, '');
             const parts = rel.split('/');
             let dir = '/run';
             for (let k = 0; k < parts.length - 1; k++) {
@@ -491,13 +577,24 @@ NP2KaiModule({
                 try { M.FS.mkdir(dir); } catch (_) { /* 既存 */ }
             }
             M.FS.writeFile('/run/' + rel, ent.data);
-            ent.name = rel;
-            extracted.push(ent);
+            written.push({ name: rel, data: ent.data, mtime: ent.mtime });
         }
         if (skipped.length) {
             console.warn(`未対応メソッドで ${skipped.length} エントリを skip: ${skipped.join(', ')}`);
         }
-        return extracted;
+        return written;
+    }
+
+    async function extractArchiveToFs(file, append) {
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        // .zip は deflate 展開、それ以外 (.lzh) は LZH デコーダ。どちらもブートせず /run/ へ展開する。
+        const entries = /\.zip$/i.test(file.name)
+            ? await qbArchive.parseZip(bytes)
+            : qbArchive.parseLzh(bytes);
+        if (!append) clearRunDir();
+        // 書庫名の '\' 区切りを SJIS 対応で '/' に正規化 (ダメ文字の誤分割を防ぐ)。
+        for (const e of entries) if (e.name) e.name = dosPathToSlash(e.name);
+        return writeEntriesToRun(entries);
     }
 
     // ---- Phase 3 ローダ: COM / EXE image を staging → loader.d88 で起動 ----
@@ -604,7 +701,7 @@ NP2KaiModule({
     });
     document.getElementById('clear-run').addEventListener('click', () => {
         clearRunDir();
-        loadedEntries = []; loadedArchives = []; selectedEntry = null;
+        loadedEntries = []; loadedArchives = []; selectedEntry = null; currentDir = '';
         runEntryEl.textContent = '—'; runButton.disabled = true;
         textHeadEl.textContent = 'readme / テキスト'; textBodyEl.textContent = '';
         renderFileList();

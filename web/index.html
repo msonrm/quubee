@@ -62,6 +62,18 @@ body.panel-hidden #panel, body.panel-hidden #divider { display: none; }
 }
 #panel-head button:hover { background: #2c2c2c; color: #ddd; }
 
+/* パンくず (現代的なフォルダ移動。サブディレクトリが無いときは隠す) */
+#crumbs {
+    flex: 0 0 auto; display: flex; flex-wrap: wrap; align-items: center; gap: 3px;
+    padding: 4px 10px; background: #181818; border-bottom: 1px solid #2a2a2a;
+    font-size: 11px; color: #789;
+}
+#crumbs[hidden] { display: none; }
+#crumbs .seg { cursor: pointer; color: #9bd; }
+#crumbs .seg:hover { text-decoration: underline; }
+#crumbs .seg.here { color: #ccc; cursor: default; text-decoration: none; }
+#crumbs .sep { color: #555; }
+
 #file-list { flex: 1 1 45%; min-height: 60px; overflow: auto; }
 .frow {
     display: flex; align-items: baseline; gap: 10px;
@@ -71,6 +83,7 @@ body.panel-hidden #panel, body.panel-hidden #divider { display: none; }
 .frow:hover { background: #1f1f1f; }
 .frow.sel { background: #243018; }
 .frow .fn  { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; color: #ccc; }
+.frow.dir  .fn { color: #fc9; }
 .frow.exec .fn { color: #cf9; }
 .frow.text .fn { color: #9cf; }
 .frow .fsz { flex: 0 0 auto; color: #999; min-width: 56px;  text-align: right; }
@@ -135,6 +148,7 @@ body.panel-hidden #panel, body.panel-hidden #divider { display: none; }
             <span id="arc-name">書庫をドロップ</span>
             <span><button id="add-archive">＋追加</button><button id="clear-run">クリア</button></span>
         </div>
+        <div id="crumbs" hidden></div>
         <div id="file-list"></div>
         <div id="run-bar">
             <div class="rb-line1">
@@ -151,12 +165,15 @@ body.panel-hidden #panel, body.panel-hidden #divider { display: none; }
             <div id="text-head">readme / テキスト</div>
             <pre id="text-body">QuuBee — PC-98 フリーソフトのブラウザプレイヤー
 
-フリーソフトの書庫 (.lzh / .zip) を、右のパネルかゲーム画面にドロップしてください。
+フリーソフトの書庫 (.lzh / .zip) や ディスクイメージ (.d88 / .fdi / .hdm 等) を、
+右のパネルかゲーム画面にドロップしてください。
 （「書庫をドロップ」をクリックでファイル選択も可）
 
   ・ファイル一覧から readme などを開いて読みながら、
   ・EXE / COM を選んで [▶ Run] で起動できます。
   ・「＋追加」で別の書庫を同じ場所に重ねて展開（HD インストール風）。
+  ・ディスクイメージはブートせず、中のファイルだけを取り出します
+  　（自己起動・非 FAT のイメージは対象外）。
   ・右上「▦ パネル」でこの欄を隠すと画面が広がります。
 
 ゲームは同梱していません。お手元のフリーソフトをどうぞ。
@@ -164,10 +181,11 @@ body.panel-hidden #panel, body.panel-hidden #divider { display: none; }
         </div>
     </div>
 </div>
-<input id="file-input" type="file" accept=".lzh,.zip,.com,.exe">
+<input id="file-input" type="file" accept=".lzh,.zip,.com,.exe,.d88,.d77,.d98,.88d,.98d,.fdi,.hdm,.xdf,.2hd,.dup,.flp,.dcp,.dcu">
 
 <script src="np2kai_core.js"></script>
 <script src="player/archive.js"></script>
+<script src="player/diskimage.js"></script>
 <script src="player/bridge.js"></script>
 </body>
 </html>

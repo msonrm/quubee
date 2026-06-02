@@ -113,7 +113,9 @@ qb/
 │   └── dos_int21.c/h      # Phase 3: INT 21h ハンドラ + text VRAM 風 tty
 ├── web/                   # ブラウザフロントエンド
 │   ├── index.html
-│   ├── player/bridge.js   # JS↔Wasm ブリッジ
+│   ├── player/bridge.js   # JS↔Wasm ブリッジ + filer (フォルダ移動/展開)
+│   ├── player/archive.js  # LZH/ZIP デコーダ
+│   ├── player/diskimage.js # ディスクイメージ→FAT12/16 取り出し (ブートせず)
 │   ├── assets/
 │   │   ├── boot.d88       # FreeDOS(98) 2HD (起動完走しない、TODO)
 │   │   ├── np2kai_boot.d88 # 自己起動最小ディスク (動作確認用)
