@@ -37,6 +37,7 @@
         const level    = buf[base + 20];
 
         let name, dataStart, mtime = null;
+        let compBytes = compSize;   // 実圧縮データ長 (Level1 は ext header 長を後で減算)
         if (level === 0 || level === 1) {
             const nameLen = buf[base + 21];
             name = decodeName(buf, base + 22, nameLen);
@@ -59,6 +60,10 @@
                 }
             }
             dataStart = p;
+            // LHA Level1 の compSize は「圧縮データ + 全 ext header」の合算値 (lha 本家が
+            // 読み取り後に packed_size -= ext 長 する仕様)。ext header 分 (p-basicEnd) を
+            // 引いて実圧縮データ長にする。Level0 は p==basicEnd なので減算 0。
+            compBytes = compSize - (p - basicEnd);
         } else if (level === 2) {
             // Level 2: 先頭 2 byte = 全ヘッダ長 (basic + 全 ext header)。チェックサム無し。
             // ファイル名は ext header (type 0x01)、ディレクトリは type 0x02 (0xFF 区切り)。
@@ -96,15 +101,15 @@
 
         let data = null;   // 未対応メソッドは null (throw せず、呼び出し側で skip)
         if (method === '-lh0-' || method === '-lhd-') {
-            data = buf.slice(dataStart, dataStart + compSize);
+            data = buf.slice(dataStart, dataStart + compBytes);
         } else if (LH_DICBIT[method] !== undefined) {
-            data = lhDecode(buf.subarray(dataStart, dataStart + compSize),
+            data = lhDecode(buf.subarray(dataStart, dataStart + compBytes),
                             origSize, LH_DICBIT[method]);
         } else if (method === '-lh1-') {
-            data = lh1Decode(buf.subarray(dataStart, dataStart + compSize), origSize);
+            data = lh1Decode(buf.subarray(dataStart, dataStart + compBytes), origSize);
         }
 
-        return { name, data, method, mtime, next: dataStart + compSize };
+        return { name, data, method, mtime, next: dataStart + compBytes };
     }
 
     function decodeName(buf, off, len) {
@@ -347,20 +352,23 @@
             const dataStart = pos + 30 + nameLen + extraLen;
 
             if (flags & 0x08) {
+                // data descriptor: LFH の compSize が 0/不定で次エントリ位置を復元できない。
+                // central directory 解析が要るため未対応 (この書庫だけ中断)。
                 throw new Error('ZIP data descriptor (bit 3) は未対応: ' + name);
             }
-            if (flags & 0x01) {
-                throw new Error('ZIP encrypted entry は未対応: ' + name);
-            }
+            // 以降は bit3 クリア = LFH の compSize が有効 → 未対応 1 エントリで書庫全体を
+            // 巻き添えにせず、pos を進めて次エントリへ skip する (LZH 側と同じ方針)。
+            if (flags & 0x01) { pos = dataStart + compSize; continue; }   // 暗号化: skip
 
             const comp = buf.subarray(dataStart, dataStart + compSize);
             let data;
             if (method === 0) {
                 data = new Uint8Array(comp);  // stored: そのままコピー
             } else if (method === 8) {
-                data = await inflateRaw(comp, origSize);
+                try { data = await inflateRaw(comp, origSize); }
+                catch (_) { pos = dataStart + compSize; continue; }      // 破損/サイズ不一致: skip
             } else {
-                throw new Error('ZIP method 未対応: ' + method + ' (' + name + ')');
+                pos = dataStart + compSize; continue;                    // 未対応 method: skip
             }
             out.push({ name, data, mtime });
             pos = dataStart + compSize;
@@ -372,7 +380,13 @@
         const ds = new DecompressionStream('deflate-raw');
         const stream = new Blob([comp]).stream().pipeThrough(ds);
         const buf = await new Response(stream).arrayBuffer();
-        return new Uint8Array(buf);
+        const out = new Uint8Array(buf);
+        // 展開後サイズが ZIP ヘッダの値と食い違う = 破損/切り詰め。黙って通さず弾く
+        // (呼び出し側が try/catch で該当エントリだけ skip する)。
+        if (expectedSize != null && out.length !== expectedSize) {
+            throw new Error('ZIP inflate サイズ不一致: ' + out.length + ' != ' + expectedSize);
+        }
+        return out;
     }
 
     // 後方互換: 旧 lh5Decode(src, outSize) は dicbit=13 固定の lhDecode と等価

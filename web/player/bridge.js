@@ -223,11 +223,17 @@ NP2KaiModule({
         // ブラウザのオートプレイ規制により、最初のユーザー操作まで AudioContext は
         // 'suspended' 状態。canvas クリックでまとめて resume する。
         const resumeAudio = () => {
-            if (audioCtx.state === 'suspended') audioCtx.resume();
+            if (audioCtx.state !== 'suspended') return;
+            // resume 成功後にだけリスナを外す (失敗時は次のジェスチャで再試行)。
+            audioCtx.resume().then(() => {
+                canvas.removeEventListener('click',       resumeAudio);
+                canvas.removeEventListener('keydown',     resumeAudio);
+                window.removeEventListener('pointerdown', resumeAudio);
+            }).catch(() => {});
         };
         canvas.addEventListener('click',     resumeAudio);
         canvas.addEventListener('keydown',   resumeAudio);
-        window.addEventListener('pointerdown', resumeAudio, { once: false });
+        window.addEventListener('pointerdown', resumeAudio);
     }
 
     // ---- マウス入力 (Pointer Lock) ----
@@ -634,24 +640,28 @@ NP2KaiModule({
     }
 
     // 現在 polling 中のハンドル (Stop ボタンで強制中断する用)。
-    let currentPoll = null;
+    let currentPoll = null;   // 実行中の poll: { tick, codePtr } | null
     function pollDosExit(onExit) {
+        // 万一前の poll が生きていたら確実に止める (再入時のタイマ/ヒープリーク防止)。
+        if (currentPoll) {
+            clearInterval(currentPoll.tick);
+            M._free(currentPoll.codePtr);
+            currentPoll = null;
+        }
         // exit code 用に 4B (i32) を HEAP に確保して polling。100ms 間隔。
         const codePtr = M._malloc(4);
-        const tick = setInterval(() => {
-            const done = dosGetExitFn(codePtr);
-            if (done) {
-                stopPolling(M.getValue(codePtr, 'i32'));
-            }
-        }, 100);
+        const self = { tick: 0, codePtr };
         function stopPolling(code) {
-            if (currentPoll !== tick) return;  // 既に停止済
-            M._free(codePtr);
-            clearInterval(tick);
+            if (currentPoll !== self) return;  // 既に停止済 (二重停止防止)
+            clearInterval(self.tick);
+            M._free(self.codePtr);
             currentPoll = null;
             onExit(code);
         }
-        currentPoll = tick;
+        self.tick = setInterval(() => {
+            if (dosGetExitFn(codePtr)) stopPolling(M.getValue(codePtr, 'i32'));
+        }, 100);
+        currentPoll = self;
         // Stop ボタンが叩く用のフックを保存
         pollDosExit._stop = () => stopPolling(-1);
     }

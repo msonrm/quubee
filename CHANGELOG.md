@@ -1,5 +1,40 @@
 # CHANGELOG
 
+## [コードレビュー: LZH Level1 拡張ヘッダのバグ修正 + 防御的ハードニング] — 2026-06-03
+
+並列コードレビュー (native/web 各層) での棚卸し。**実害バグ 1 件 + すぐ入る堅牢化**。
+JS フロントが中心 (Wasm は loader の 1 箇所のみ)。
+
+- **【バグ修正】LZH Level1 の拡張ヘッダ長を compSize から減算** (`web/player/archive.js`):
+  LHA Level1 の compSize (skip size) は「圧縮データ長 **+ 全 ext header 長**」の合算値
+  (lha 本家 `get_header_level1` が `packed_size -= extend_size` する仕様)。従来コードは ext 長を
+  引かず、data 終端と次エントリ位置 `next` がともに ext 長ぶん行き過ぎ → **ext header を持つ
+  Level1 書庫で 2 件目以降を取りこぼす / lh0 データ末尾にゴミ**。`compBytes = compSize - (ext 長)`
+  を導入して修正。
+  - **影響範囲**: games/ の全書庫 (Level1=359 エントリ) は ext header チェーンが空のため**実害ゼロ**
+    (だから lh5_test.js がバグありでも 420/420 通っていた)。ext header 付き Level1 を踏んだ時だけ顕在化。
+  - **検証**: Lhasa を独立オラクルに、CRC/checksum まで正しい Level1+dir-ext 実書庫を合成 →
+    Lhasa が 59B 抽出 / 修正版 parser が byte 一致を確認。回帰テスト `tools/lzh_l1ext_test.js` を新設
+    (games/ では覆えない経路を合成データで守る。lha は展開専用で Level1+ext を作れないため外部依存なし)。
+  - ※ 旧メモリ `feedback-lzh-level1-header` の「packed=データのみ」は ext 無し fixture からの誤った
+    一般化だった (本コミットで訂正)。Level1 の dir ext header → パス接頭辞の反映は別途未対応 (実害なし)。
+- **【堅牢化】ZIP: 未対応 1 エントリで書庫全体を巻き添えにしない** (`web/player/archive.js`):
+  暗号化 / 未対応 method / inflate サイズ不一致は `throw` で中断していたのを、LFH の compSize が有効な
+  限り **該当エントリだけ skip** に変更 (LZH 側と同方針)。`inflateRaw` に展開後サイズ検証を追加。
+  data descriptor (bit3) は next 位置を復元できないため従来どおり中断。
+- **【堅牢化】FAT12/16: bad-cluster マーカ終端化 + クラスタ番号上限チェック** (`web/player/diskimage.js`):
+  `eofMin` を 0xFF8/0xFFF8 → 0xFF7/0xFFF7 にして bad-cluster (0xFF7/0xFFF7) もチェーン終端扱い。
+  チェーン追跡ループに `cl <= clusters+1` を追加し、壊れた FAT で範囲外/ゴミ追跡を防止。
+- **【堅牢化】DOS ローダ: EXEC 子の reloc 書き込みを境界マスク** (`native/dos_loader.c`):
+  子 EXE のリロケーション適用が `mem[]` を無マスク直書きしていた。`QB_GUEST_MEM_MASK` + `poke16`
+  経由にして、壊れた/巨大な子 EXE で配列外を踏み Wasm トラップする経路を封じた。
+- **【堅牢化】pollDosExit の再入耐性 + resumeAudio リスナ掃除** (`web/player/bridge.js`):
+  poll を `{tick, codePtr}` 管理にし、再入時に前の poll を確実に停止 (タイマ/ヒープリーク防止)。
+  AudioContext の resume リスナは resume 成功後に自身を外す (ページ寿命中ずっと残らない)。
+
+検証: `lh5_test.js` 420/420・`diskimage_test.js` 27/27 回帰なし、`lzh_l1ext_test.js` 新規 PASS、
+JS 3 ファイル `node --check` パス、Wasm 再ビルド (exit 0)。
+
 ## [HLE-DOS にディレクトリ操作 + 空き容量 + EXEC ハンドル掃除 / ファイラ表示の SJIS 化・MEMFS リーク修正] — 2026-06-02
 
 コードレビューでの棚卸しに基づく修正群。**前半は JS フロント (Wasm 不変)、後半は DOS(INT 21h) 層**。

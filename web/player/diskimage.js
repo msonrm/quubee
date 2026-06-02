@@ -196,7 +196,9 @@
 
         // FAT (1 つ目) を読む
         const fat = vol.subarray(reserved * bps, (reserved + spf) * bps);
-        const eofMin = isFat16 ? 0xfff8 : 0xff8;
+        // チェーン終端とみなす最小値。0xFF8/0xFFF8 以上が EOF だが、bad-cluster マーカ
+        // 0xFF7/0xFFF7 も「次クラスタ番号ではない」ので終端扱いにする (辿るとゴミに突入)。
+        const eofMin = isFat16 ? 0xfff7 : 0xff7;
         function fatEntry(cl) {
             if (isFat16) {
                 return u16(fat, cl * 2);
@@ -217,7 +219,7 @@
             const out = new Uint8Array(size);
             let p = 0, cl = firstCl, guard = clusters + 4;
             const seen = new Set();
-            while (cl >= 2 && cl < eofMin && p < size && guard-- > 0) {
+            while (cl >= 2 && cl <= clusters + 1 && cl < eofMin && p < size && guard-- > 0) {
                 if (seen.has(cl)) break;
                 seen.add(cl);
                 const chunk = clusterBytes(cl);
@@ -263,7 +265,7 @@
             const parts = [];
             let cl = firstCl, guard = clusters + 4;
             const seen = new Set();
-            while (cl >= 2 && cl < eofMin && guard-- > 0) {
+            while (cl >= 2 && cl <= clusters + 1 && cl < eofMin && guard-- > 0) {
                 if (seen.has(cl)) break;
                 seen.add(cl);
                 parts.push(clusterBytes(cl));

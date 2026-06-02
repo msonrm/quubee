@@ -782,10 +782,11 @@ int qb_dos_exec_load(const uint8_t *image, size_t size,
         uint16_t r_off = read_le16(image + rec);
         uint16_t r_seg = read_le16(image + rec + 2);
         uint32_t a = load_lin + ((uint32_t)r_seg * 16 + r_off);
-        uint16_t cur = (uint16_t)mem[a] | ((uint16_t)mem[a + 1] << 8);
-        cur = (uint16_t)(cur + child_img);
-        mem[a]     = (uint8_t)(cur & 0xFF);
-        mem[a + 1] = (uint8_t)((cur >> 8) & 0xFF);
+        /* 壊れた/巨大な子 EXE の reloc で mem[] 配列外を踏まないよう必ずマスクする
+         * (staging 経路や poke* と同じ流儀。poke16 が両バイトをマスクして書く)。 */
+        uint16_t cur = (uint16_t)mem[a & QB_GUEST_MEM_MASK]
+                     | ((uint16_t)mem[(a + 1) & QB_GUEST_MEM_MASK] << 8);
+        poke16(a, (uint16_t)(cur + child_img));
     }
 
     /* 子 PSP を構築 (親 PSP を 0x16 に保存、env/cmdtail をセット) */
