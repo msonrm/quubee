@@ -94,10 +94,12 @@ int qb_dos_loader_start_hook(void);
 /* AH=4Bh EXEC 子ロード (親常駐・子をアリーナの最大空きブロックに置いて CPU 切替)。
  * image=子イメージ (MZ/ZM ヘッダなら EXE、それ以外は COM として PSP:0x100 にロード)、
  * cmdtail=子 PSP[0x80] に入れるコマンドテイル (先頭スペース込み可)、
- * env_seg=パラメータブロック由来の環境セグメント (0 なら親 env 継承)。
+ * env_seg=パラメータブロック由来の環境セグメント (0 なら親 env 継承)、
+ * child_name=子の basename (argv[0] を "A:\\NAME" に正規化するのに使う。NULL/空なら既定)。
  * 戻り値 0=成功、<0=失敗。 */
 int qb_dos_exec_load(const uint8_t *image, size_t size,
-                     const char *cmdtail, uint16_t env_seg);
+                     const char *cmdtail, uint16_t env_seg,
+                     const char *child_name);
 
 /* AH=31h Keep Process (TSR): 子を keep_paras パラグラフに縮めて常駐させ、親へ復帰。
  * code = 子の終了コード (AL)。Ray の RIN.COM 等の常駐ドライバ用。

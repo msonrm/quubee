@@ -662,8 +662,10 @@ emrun --port 8080 web/
   順に EXEC→4Ch) + `qb_dos_stage_script` (C) + `resolveSequence` (JS)。EXEC/TSR(31h)/MCB は既存再利用、
   既存単一起動・EXEC 経路は不変 (回帰隔離)。検証 `batscript_test 33/0` + ビルドクリーン。
   **実ゲーム (mdrv98 系) のブラウザ動作確認が次の実フロンティア** — 「MDRV98/middrv 等が HLE で実際に
-  FM を鳴らせるか」。残課題: per-child env で argv[0] 正規化 (C1)、旧式 `INT 27h` TSR、制御フロー .bat の
-  完全逐次 (finalty の demo→main ループ)。
+  FM を鳴らせるか」。残課題: 旧式 `INT 27h` TSR、制御フロー .bat の完全逐次 (finalty の demo→main ループ)。
+  **per-child env で argv[0] 正規化 (C1) は 2026-06-04 実装済** — 継承 EXEC で `build_child_env` が子固有 env を
+  確保し argv[0] を子パスに正規化 (env を子本体より先に確保→所有権を子へ、`env_seg!=0` は現行維持・拡張容易)。
+  `tools/exec_env_test.js` で headless 回帰 (継承 env=0 / 親復帰 / 子 argv[0])。
   - 現状の暫定動作: ドライバは読み飛ばし、主プログラムだけ起動 → ゲームが FM ポート直叩きなら鳴る /
     ドライバ依存音源なら無音 or BEEP のグレースフル (起動・プレイ自体はブロックしない)。
 

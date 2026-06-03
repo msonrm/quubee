@@ -1,5 +1,27 @@
 # CHANGELOG
 
+## [HLE-DOS: EXEC 子の env を per-child 化し argv[0] を子パスに正規化 (C1)] — 2026-06-04
+
+AH=4Bh EXEC の継承 (env_seg=0) で、子の PSP[0x2C] が最上位プログラムの env を共有し argv[0] が
+親パス (例 A:\RAY.EXE) になっていた不具合を解消。実 DOS は子の env をコピーして子自身のフルパスを
+argv[0] に置くので、自実行パスからデータ dir を切り出す子が将来動くようにした。
+
+- `native/dos_loader.c`: **`build_child_env`** を新設。コピー元 env の変数部を二重NULまで境界付きで
+  複製し `WORD=1` + `A:\<NAME>` (大文字) を追記してアリーナから確保。`qb_dos_exec_load` は継承時に
+  env を**子本体より先に**確保 (子は最大空きブロックを丸取りするため) → child_psp 確定後に所有権を
+  子へ付け替え (子終了で free-on-terminate、TSR では resize 任せで残留)。確保失敗時は親 env にフォールバック。
+- `native/dos_loader.h` / `native/dos_int21.c`: `qb_dos_exec_load` に `child_name` 引数を追加し、
+  EXEC ハンドラが子 basename を渡す。
+- スコープ: **`env_seg!=0` (明示 env) は現行維持** (corpus に該当タイトル無し)。`build_child_env` は
+  供給源セグを引数に取るので、完全 faithful 化は呼び出し1行の拡張で済む構造。
+- `tools/exec_env_test.js` (新規・恒久): loader.d88 を実ブートしミニ COMMAND.COM に HELLO.COM を
+  EXEC させ、(1) 継承 (env=0000) (2) 親 PSP 復帰 (EXEC 機構の回帰なし) (3) 子 env に A:\HELLO.COM
+  (C1 解消) を assert する headless 回帰テスト。
+
+検証: ビルド clean、headless bench 78.8fps (回帰なし)、JS スイート4本 pass、exec_env_test PASS、
+ブラウザ実機で ザルバール (siz EXEC 往復) / Ray (RIN.COM 常駐+FM) / .bat 起動が従来どおり動作
+(Ray 黒画面は無関係の既知課題)。
+
 ## [音響クリーンアップ: vol_master が fmgen に無影響と判明 → 65→100 中立化] — 2026-06-03
 
 opngen 時代の名残の調査。**`np2cfg.vol_master` は既定の fmgen に一切届かない**ことが判明:

@@ -1379,8 +1379,8 @@ static void int21_4b_exec(void) {
     fprintf(stderr, "[int21h/4B] EXEC child=%s size=%zu env=%04X cmdtail=\"%s\" (stage1.5: parent resident)\n",
             base, sz, (unsigned)env_seg, cmdtail);
 
-    /* 親常駐のまま子を上にロードして CPU を子へ切替える。 */
-    int r = qb_dos_exec_load(childbuf, sz, cmdtail, env_seg);
+    /* 親常駐のまま子を上にロードして CPU を子へ切替える (base = 子の basename → argv[0] 正規化用)。 */
+    int r = qb_dos_exec_load(childbuf, sz, cmdtail, env_seg, base);
     if (r != 0) {
         fprintf(stderr, "[int21h/4B] exec_load failed r=%d\n", r);
         CPU_AX = (r == -10) ? 8 : 0x0B;   /* -10=メモリ不足(8), 他=書式不正(11) */

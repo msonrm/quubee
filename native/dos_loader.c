@@ -632,6 +632,65 @@ static void build_env(uint16_t seg) {
     poke8(base + p++, 0x00);          /* argv[0] 終端 (以降は memset 0) */
 }
 
+/* EXEC 子のための per-child 環境ブロックを作る (C1: argv[0] を子自身のパスに正規化)。
+ * 実 DOS の EXEC は env を子所有の新ブロックにコピーし、末尾に子のフルパスを argv[0] として
+ * 付け直す。継承 (env_seg=0) の子に最上位プログラムのパス (例 A:\RAY.EXE) が argv[0] として
+ * 漏れる不具合を解消する。所有者は呼び元 (alloc_request が g_cur_psp=親を入れる) のままで返し、
+ * 呼び元が child_psp 確定後に付け替える (env を子本体より先に確保するため child_psp 未確定)。
+ *
+ *   src_env_seg = コピー元 env の変数部 (build_env 互換: var\0...\0\0)。
+ *   child_name  = 子の basename (大文字化して "A:\\NAME" に整形)。空なら "PROG.EXE"。
+ *   戻り値      = 新 env data セグメント。0 = 確保失敗 (呼び元は親 env にフォールバック)。
+ *
+ * 【拡張ポイント】env_seg!=0 (明示 env) を完全 faithful 化する時は、呼び元で src_env_seg に
+ * その明示セグを渡してこの関数を通すだけでよい (現状は corpus に該当タイトルが無いため継承のみ)。 */
+static uint16_t build_child_env(uint16_t src_env_seg, const char *child_name) {
+    /* 1) コピー元の変数部を二重NUL (空文字列終端) まで境界付きで temp に複製。src が壊れている/
+     *    終端が無い場合は最小 env ("\0\0" = 変数ゼロ) にフォールバックする (caller env 防御)。 */
+    uint8_t  vars[256];
+    uint32_t vlen = 0;
+    uint32_t sbase = (uint32_t)src_env_seg << 4;
+    int prev_nul = 0, terminated = 0;
+    for (uint32_t i = 0; i < sizeof(vars); i++) {
+        uint8_t c = mem[(sbase + i) & QB_GUEST_MEM_MASK];
+        vars[vlen++] = c;
+        if (c == 0) { if (prev_nul) { terminated = 1; break; } prev_nul = 1; }
+        else        { prev_nul = 0; }
+    }
+    if (!terminated) { vlen = 0; vars[vlen++] = 0; vars[vlen++] = 0; }
+
+    /* 2) argv[0] パスを "A:\\NAME" (大文字) に整形 (build_env と同じ書式)。 */
+    char path[32];
+    uint32_t pn = 0;
+    path[pn++] = 'A'; path[pn++] = ':'; path[pn++] = '\\';
+    if (child_name && child_name[0]) {
+        for (uint32_t i = 0; child_name[i] && pn + 1 < sizeof(path); i++) {
+            char ch = child_name[i];
+            path[pn++] = (ch >= 'a' && ch <= 'z') ? (char)(ch - 32) : ch;
+        }
+    } else {
+        const char *def = "PROG.EXE";
+        for (uint32_t i = 0; def[i] && pn + 1 < sizeof(path); i++) path[pn++] = def[i];
+    }
+    path[pn] = '\0';
+
+    /* 3) 必要バイト = 変数部 + WORD(後続文字列数=1) + パス + NUL。アリーナから確保。 */
+    uint32_t need_bytes = vlen + 2 + pn + 1;
+    uint16_t need_paras = (uint16_t)((need_bytes + 15) >> 4);
+    uint16_t env_seg = 0;
+    if (qb_dos_alloc_request(need_paras, &env_seg, NULL) != 0) return 0;
+
+    /* 4) 書き込み: [変数部 (二重NUL込み)][WORD=1][パス\0]。ブロック全体を 0 クリアしてから。 */
+    uint32_t base = (uint32_t)env_seg << 4;
+    memset(&mem[base], 0, (size_t)need_paras << 4);
+    uint32_t p = 0;
+    for (uint32_t i = 0; i < vlen; i++) poke8(base + p++, vars[i]);
+    poke8(base + p++, 0x01); poke8(base + p++, 0x00);   /* 後続文字列数 = 1 (LE) */
+    for (uint32_t i = 0; i < pn; i++) poke8(base + p++, (uint8_t)path[i]);
+    poke8(base + p++, 0x00);
+    return env_seg;
+}
+
 /* PSP を seg:0000 に構築する。最小限の DOS 互換版。 */
 static void build_psp(uint16_t seg, const char *cmdline) {
     uint32_t base = (uint32_t)seg << 4;
@@ -792,7 +851,8 @@ int qb_dos_loader_start_hook(void) {
  * 注: 既存ローダ (qb_dos_stage_exe/loader_start) は固定 segment 0x0110 前提でリロケート
  *     済みのため、子を別 base に置くこのパスは MZ パースを別途行う (意図的な重複)。 */
 int qb_dos_exec_load(const uint8_t *image, size_t size,
-                     const char *cmdtail, uint16_t env_seg) {
+                     const char *cmdtail, uint16_t env_seg,
+                     const char *child_name) {
     if (!image || size < 2) return -1;
     uint16_t magic = read_le16(image);
     int is_exe = (magic == 0x5A4D || magic == 0x4D5A);   /* MZ/ZM=EXE、それ以外=COM */
@@ -839,6 +899,17 @@ int qb_dos_exec_load(const uint8_t *image, size_t size,
         body_bytes = size;              /* COM は header 無し: 全体が body */
     }
 
+    /* per-child env (C1): 継承 (env_seg=0) の子に固有 env を新規確保し argv[0] を子パスに正規化。
+     * 子本体は「最大空きブロック丸ごと」を取るので、env は子本体より先に確保する (= 子の
+     * ロード位置が env 分だけ上にずれるが reloc EXE / PSP 相対 COM とも透過)。所有者は確保時点で
+     * 親、child_psp 確定後に子へ付け替える。確保失敗時は 0 のまま親 env にフォールバック。 */
+    uint16_t child_env_seg = 0;
+    if (env_seg == 0) {
+        uint32_t ppsp = (uint32_t)g_cur_psp << 4;
+        uint16_t parent_env = (uint16_t)(mem[ppsp + 0x2C] | (mem[ppsp + 0x2D] << 8));
+        child_env_seg = build_child_env(parent_env ? parent_env : QB_DOS_ENV_SEG, child_name);
+    }
+
     /* DOS の EXEC は子に「最大空きブロック」を渡す。子はその中に PSP+イメージを置き、
      * 起動直後に 4Ah (EXE 自己縮小) または 31h TSR (COM ドライバ常駐) で自身を縮める。 */
     uint16_t free_sz = 0;
@@ -846,10 +917,18 @@ int qb_dos_exec_load(const uint8_t *image, size_t size,
     uint32_t body_paras = (uint32_t)((body_bytes + 15) >> 4);
     /* PSP(16) + body + (EXE: minalloc / COM: stack ヘッドルーム少々) */
     uint32_t need = 0x10 + body_paras + (uint32_t)e_minalloc + (is_exe ? 0u : 0x10u);
-    if (free_mcb == 0 || (uint32_t)free_sz < need) return -10;  /* メモリ不足 */
+    if (free_mcb == 0 || (uint32_t)free_sz < need) {
+        if (child_env_seg) qb_dos_alloc_free(child_env_seg);  /* 子が入らない → 先取り env を巻き戻す */
+        return -10;  /* メモリ不足 */
+    }
     uint16_t child_psp = (uint16_t)(free_mcb + 1);
     uint16_t child_img = (uint16_t)(child_psp + 0x10);
     mcb_set(free_mcb, mcb_sig(free_mcb), child_psp, free_sz);   /* 子に丸ごと割り当て */
+    /* env ブロックの所有者を子 PSP へ付け替え (子終了で free-on-terminate、TSR では resize 任せで残留)。 */
+    if (child_env_seg) {
+        uint16_t emcb = (uint16_t)(child_env_seg - 1);
+        mcb_set(emcb, mcb_sig(emcb), child_psp, mcb_size(emcb));
+    }
 
     /* body をゲストメモリへコピー (EXE は header strip 後、COM は丸ごと)。
      * EXE/COM とも load 先は child_img:0 = child_psp:0x0100 (COM の PSP:0x100 慣例)。 */
@@ -877,13 +956,12 @@ int qb_dos_exec_load(const uint8_t *image, size_t size,
     poke8(pbase + 0x00, 0xCD); poke8(pbase + 0x01, 0x20);   /* INT 20h */
     poke16(pbase + 0x02, QB_DOS_MEM_TOP_SEG);               /* top of memory */
     poke16(pbase + 0x16, parent_psp);                       /* 親 PSP */
-    /* env: パラメータブロック指定があればそれ、無ければ親 env を継承 (共有)。
-     * 【既知の限界 (C1)】env_seg=0 (継承) の子は最上位イメージの env を共有するため、
-     * argv[0] は子自身ではなく最上位プログラムのパス (例 A:\RAY.EXE) になる。実 DOS は
-     * 子の env をコピーして argv[0] に子のパスを置くが、現スコープで子の argv[0] を読む
-     * ものは無い (RIN.COM=TSR ドライバ / zar の siz*.exe=cmdtail 読み) ため未対応。
-     * 将来 argv[0] 依存の子が出たら子ごとに env を確保 (MCB) して子パスを書く。 */
-    poke16(pbase + 0x2C, env_seg ? env_seg : QB_DOS_ENV_SEG);
+    /* env: ① パラメータブロック明示 (env_seg!=0) → そのまま指す (完全 faithful は拡張ポイント、
+     *      build_child_env のコメント参照。corpus に該当タイトル無し)。② 継承 (env_seg=0) →
+     *      build_child_env で確保した子固有 env (argv[0]=子パス、C1 解消)。③ ②の確保失敗時のみ
+     *      従来どおり親 env を共有 (argv[0] は親パスになるがフォールバックとして許容)。 */
+    poke16(pbase + 0x2C, env_seg ? env_seg
+                                 : (child_env_seg ? child_env_seg : QB_DOS_ENV_SEG));
     poke8(pbase + 0x50, 0xCD); poke8(pbase + 0x51, 0x21); poke8(pbase + 0x52, 0xCB);
     {
         size_t cl = cmdtail ? strlen(cmdtail) : 0;
