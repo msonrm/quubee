@@ -321,6 +321,7 @@ target_compile_definitions(np2kai_core PRIVATE
 
 # Emscripten linker flags
 target_link_options(np2kai_core PRIVATE
+    -O3                      # リンク時最適化 (Binaryen wasm-opt)。上流 sdl/Makefile21.em のリンク段と同じ
     -sWASM=1
     -sALLOW_MEMORY_GROWTH=1
     "-sEXPORTED_FUNCTIONS=[${EXPORTED_FUNCTIONS_STR}]"
@@ -332,7 +333,12 @@ target_link_options(np2kai_core PRIVATE
 
 # NP2kai uses UINT8/UINT return types where IOOUT/IOINP expect UINT — suppress
 # Clang 17's promoted-to-error treatment of these upstream type mismatches
+# 最適化: 既定は CMAKE_BUILD_TYPE 空 = 実質 -O0 (IA-32 インタプリタが毎フレームの支配項なので
+# 致命的に遅い)。上流 sdl/Makefile21.em の release と同じ -O2 をコンパイル段に入れる
+# (リンク段は上の -O3)。-O2 は NP2kai が release/em で常用するテスト済みレベル。strict-aliasing は
+# 上流 libretro が -fstrict-aliasing で通しているので無効化不要。C/C++ 両方に効かせる (fmgen は C++)。
 target_compile_options(np2kai_core PRIVATE
+    -O2
     $<$<COMPILE_LANGUAGE:C>:-Wno-incompatible-function-pointer-types>
     $<$<COMPILE_LANGUAGE:C>:-Wno-int-conversion>
 )
