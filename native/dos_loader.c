@@ -826,6 +826,14 @@ int qb_dos_exec_load(const uint8_t *image, size_t size,
         /* reloc テーブルがファイル外を指していないか確保前に検証する (確保後に弾くと
          * 割り当て済み MCB ブロックがリークするため。qb_dos_stage_exe と同じ前段チェック)。 */
         if (e_crlc > 0 && (uint32_t)e_lfarlc + (uint32_t)e_crlc * 4 > size) return -8;
+        /* 各 reloc ターゲットが body 内を指すかも確保前に検証する (qb_dos_stage_exe:return -9
+         * と同じ。これが無いと壊れた/巨大 reloc を持つ子 EXE が、適用ループの 2MB 配列マスク
+         * を通って他プログラム/PSP/IVT を書き換えてしまう)。rec+4<=size は上の行で保証済み。 */
+        for (uint16_t i = 0; i < e_crlc; i++) {
+            uint32_t rec = (uint32_t)e_lfarlc + (uint32_t)i * 4;
+            uint32_t tgt = (uint32_t)read_le16(image + rec + 2) * 16 + read_le16(image + rec);
+            if (tgt + 1 >= body_bytes) return -9;
+        }
     } else {
         if (size > 0xFF00) return -2;   /* 64KB - PSP(256) を超える COM は不正 */
         body_bytes = size;              /* COM は header 無し: 全体が body */

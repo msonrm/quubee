@@ -1107,6 +1107,7 @@ static void int21_46_dup2(void) {
         dst < 0 || dst >= DOS_HANDLE_MAX) {
         CPU_AX = 6; CPU_FLAG |= C_FLAG; return;
     }
+    if (src == dst) { CPU_AX = (uint16_t)dst; CPU_FLAG &= ~C_FLAG; return; }  /* 同一ハンドルは no-op (実 DOS 準拠。fh_close(dst) で src の FILE* を閉じてしまう UAF 回避) */
     if (dst >= DOS_HANDLE_USER_BASE && g_fh[dst].used) fh_close(dst);
     long pos = ftell(g_fh[src].fp);
     FILE *nf = fopen(g_fh[src].path, g_fh[src].mode);
