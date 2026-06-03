@@ -1014,7 +1014,7 @@ NP2KaiModule({
         cs:     () => '0x' + (getCs(handle)       >>> 0).toString(16),
         linear: () => '0x' + (getLinearPc(handle) >>> 0).toString(16),
         pc:     () => `${window.qbDebug.cs()}:${window.qbDebug.linear()}`,
-        // FM 音源エンジンの A/B 切替。fmgen(1)=fmgen / fmgen(0)=opngen(既定)。
+        // FM 音源エンジンの A/B 切替。fmgen(1)=fmgen(既定) / fmgen(0)=opngen。
         // 次の Run (reset) から反映 → 同じ FM ゲームを再実行して聴き比べる。
         fmgen:  (on=1) => `usefmgen=${setFmgen(on ? 1 : 0)} (1=fmgen/0=opngen) — 次の Run から反映。同じゲームを再実行して聴き比べてください`,
         // 16-bit レジスタ一覧 (ハング時の状態確認用)

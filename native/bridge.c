@@ -290,8 +290,8 @@ int np2kai_set_audio_rate(uint32_t rate) {
 	return 0;
 }
 
-/* FM 音源エンジンの実行時 A/B 切替: 1 = fmgen (cisc C++ ライブラリ、OPNA 実機クセを精密再現)、
- * 0 = opngen (NP2 オリジナル整数合成、既定)。np2cfg.usefmgen を書くだけ。enable_fmgen は
+/* FM 音源エンジンの実行時 A/B 切替: 1 = fmgen (cisc C++ ライブラリ、OPNA 実機クセを精密再現、既定)、
+ * 0 = opngen (NP2 オリジナル整数合成)。np2cfg.usefmgen を書くだけ。enable_fmgen は
  * pccore_reset で再読込され fmboard_bind→opna_bind が再ディスパッチするので、次の Run から
  * 反映される (Run は loader.d88 挿入 → reset を伴うため)。戻り値: 設定後の値 (0/1)。 */
 int np2kai_set_fmgen(int on) {
