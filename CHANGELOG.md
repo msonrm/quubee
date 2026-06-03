@@ -1,5 +1,41 @@
 # CHANGELOG
 
+## [② ミニ COMMAND.COM — 起動 .bat を 1 DOS セッション内で逐次 EXEC (音源ドライバ TSR 常駐)] — 2026-06-03
+
+①(.bat レシピ解釈) の積み残し **②** を実装。Run 毎に `pccore_reset` で別 DOS セッションになる構造では
+ドライバを常駐させても本体に効かない。そこで **最上位プログラムとして小さなシェル (ミニ COMMAND.COM) を
+起動し、.bat のコマンドを順に `AH=4Bh EXEC` する**ことで、`mdrv98`(TSR 常駐) → game → `mdrv98 -r` を
+**1 セッション内**で実行する (= 実 DOS の `COMMAND.COM /C batch` 相当)。EXEC / TSR(31h) / MCB /
+free-on-terminate は既存機構をそのまま再利用 — **追加は「親シェル」だけ**で、既存の単一起動・EXEC 経路
+(さめがめ〜うさちゃん列車・zar・Ray) には一切手を入れていない (回帰リスク隔離)。
+
+- **新規 `tools/dos_loader/shell.asm`** (nasm → `shell.bin` → `native/dos_shell_blob.h`、`bin2h.py` 生成):
+  COM。起動時にスタックを KEEP 領域 (0x200 para=8KB) 内へ退避 → `AH=4Ah` self-shrink (子に ≈632KB を渡す)
+  → コマンド表を順に `DS:DX=パス / ES:BX=パラメータブロック / AX=4B00 / INT 21h` → 全完了で `AX=4C00`。
+  表 (count + path_off/tail_off ペア + ASCIZ パス/DOS cmdtail) は C が blob 末尾 (`table:` ラベル) に append。
+- **`native/dos_loader.c/h` `qb_dos_stage_script()`**: shell blob + コマンド表を COM image に組んで stage。
+  子イメージのバイトは渡さない (展開済 `/run` から `AH=4Bh` が case-insensitive 解決して読む)。
+- **`native/bridge.c/h` `np2kai_dos_stage_script(script,len,name)`** (CMake export 追加): script は
+  `"PATH\tARGS\n…"` の**生バイト** (SJIS パス名を壊さないよう NUL 終端でなく len 指定)。
+- **`web/player/batscript.js` `resolveSequence()`**: .bat を**元の順序**でコマンド列に解決 (ドライバ常駐込み)。
+  制御フロー (goto/if) 入りや本体不在は `null` → ①(単一起動) にフォールバック。束に無いコマンドは skip。
+- **`web/player/bridge.js`**: Run 時に複数コマンド (本体+ドライバ・制御フロー無し) なら `stageAndRunScript`
+  でシェル起動、それ以外は従来の単一起動。staging 後の共通処理を `runStaged()` に集約。
+- **起動 .bat の中身が読める** (③敬意): .bat を選ぶとテキスト面に**生の .bat 内容**を表示し、先頭に
+  **解釈した起動順** (`▷ 起動順 (1 セッション逐次 EXEC): MDRV98.COM → … → MDRV98.COM -r`) を注記。
+  起動不能な .bat も中身は読ませる。`openText(ent, annotation)` 拡張 + `batRecipeSummary()` (純 JS)。
+
+検証: `tools/batscript_test.js` **33/0** (resolveSequence の順序保持/制御フロー null/単一=1要素/skip を追加)。
+回帰: `diskimage_test` 30/0・`lzh_l1ext_test` PASS・`lh5_test` 420/0、emscripten ビルド (bridge/dos_int21/
+dos_loader) クリーン、export 確認済。**ブラウザ実機で FM 音源が鳴ることをユーザー確認 (2026-06-03)** ―― 
+音源ドライバが 1 セッション内で常駐し本体に効く ② の核心が成立。
+
+**既知の割り切り / 次の課題**: ① 子は `env_seg=0` 継承で起動するので **argv[0] は最上位 (シェル) のパス**に
+なる (C1)。mdrv98 等は argv[0] を読まないので未影響だが、argv[0] からデータ dir を得る本体が .bat 経由だと
+破綻する → `qb_dos_exec_load` の **per-child env** で正す (共有 EXEC 経路を触るので独立ステップ)。
+② TSR が旧式 `INT 27h` を使う場合は現状 IRET スタブ止まり (`AH=31h` のみ対応)。③ `-r` 常駐解除は
+best-effort。④ 制御フロー .bat の線形化は未対応。
+
 ## [起動 .bat を「作者の起動レシピ」として解釈 — エントリ自動検出に統合] — 2026-06-03
 
 PC-98 フリーソフトの約 1/3 (調査: `games/` 40 書庫中 14 本) は起動 .bat を同梱し、主プログラム名・

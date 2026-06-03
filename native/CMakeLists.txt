@@ -184,6 +184,7 @@ set(EXPORTED_FUNCTIONS
     _np2kai_debug_get_reg16
     _np2kai_dos_stage_com
     _np2kai_dos_stage_exe
+    _np2kai_dos_stage_script
     _np2kai_dos_get_exit
     _malloc
     _free

@@ -80,24 +80,52 @@
         return name.split(/[\\/]/).pop().toLowerCase();
     }
 
-    // レシピ + 展開済みエントリ名一覧 → 実際に起動する主プログラムを解決する。
-    // DOS の拡張子補完順 (.COM > .EXE) と大小無視で当てる。{ name, args } か null。
-    function resolveMain(recipe, entryNames) {
+    // 展開済みエントリ名一覧 → 「素の basename → 実エントリ名」を DOS の拡張子補完順
+    // (.COM > .EXE)・大小無視で引く find(base) を返す。resolveMain / resolveSequence 共用。
+    function entryFinder(entryNames) {
         const byBase = new Map();
         for (const n of entryNames) {
             const b = lcBase(n);
             if (!byBase.has(b)) byBase.set(b, n);   // 先勝ち (同名はまず無い)
         }
-        const find = (base) => {
+        return (base) => {
             const b = base.toLowerCase();
             if (/\.(com|exe)$/.test(b)) return byBase.get(b) || null;
             return byBase.get(b + '.com') || byBase.get(b + '.exe') || null;   // DOS 解決順
         };
+    }
+
+    // レシピ + 展開済みエントリ名一覧 → 実際に起動する主プログラムを解決する。{ name, args } か null。
+    // (① 単一起動 / 表示の見出し用。複数コマンド逐次実行は resolveSequence。)
+    function resolveMain(recipe, entryNames) {
+        const find = entryFinder(entryNames);
         for (const m of recipe.mains) {
             const hit = find(m.base);
             if (hit) return { name: hit, args: m.args.slice() };
         }
         return null;
+    }
+
+    // ② レシピを「.bat の元の順序で実行するコマンド列」に解決する (ドライバ常駐込み)。
+    // ミニ COMMAND.COM (C 側 qb_dos_stage_script) に渡して 1 DOS セッション内で順に EXEC する用。
+    // 各要素 { name(実エントリ), args(buildCmdline 済) }。userArgs は各コマンドの %N に差し込む。
+    // 線形化できない (goto/if 等の制御フロー入り) / 主プログラムが束に無い → null (① にフォールバック)。
+    // 束に無いコマンド (システム依存ユーティリティ等) は best-effort で読み飛ばす。
+    function resolveSequence(recipe, entryNames, userArgs) {
+        if (recipe.hasControlFlow) return null;        // 分岐入りは順序が確定しない → ①
+        const find = entryFinder(entryNames);
+        const seq = [];
+        let sawMain = false;
+        for (const l of recipe.lines) {
+            if (l.kind !== 'command') continue;        // directive (echo/rem/set/cls/pause) は無視
+            const hit = find(l.base);
+            if (!hit) continue;                        // 束に無い → スキップ
+            const key = l.base.toLowerCase().replace(/\.(com|exe|bat)$/, '');
+            if (!DRIVER_NAMES.has(key)) sawMain = true; // ドライバ以外 = ゲーム本体相当
+            seq.push({ name: hit, args: buildCmdline(l.args, userArgs) });
+        }
+        if (!sawMain) return null;                     // 本体が無い列は無効 → ①
+        return seq;
     }
 
     // レシピの引数 (%1..%9 入り) + ユーザー入力 (Run の cmdline 欄、空白区切り) → 最終 cmdline。
@@ -120,7 +148,7 @@
         return out.join(' ');
     }
 
-    const api = { parse, resolveMain, buildCmdline, programBasename, DRIVER_NAMES };
+    const api = { parse, resolveMain, resolveSequence, buildCmdline, programBasename, DRIVER_NAMES };
     if (typeof module !== 'undefined' && module.exports) {
         module.exports = api;
     } else {

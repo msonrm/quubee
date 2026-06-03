@@ -471,7 +471,9 @@ NP2KaiModule({
         }
     }
 
-    function openText(ent) {
+    // テキスト (readme / .bat 等) を表示。annotation を渡すと本文の先頭に注記行を足す
+    // (起動 .bat の「解釈した起動順」を見せる用)。
+    function openText(ent, annotation) {
         textHeadEl.textContent = sjisName(ent.name);
         // DOS EOF (Ctrl-Z=0x1A) 以降は本文ではない。生バイトで切る
         // (0x1A は SJIS の trail バイト範囲外なので常に単独制御＝安全。
@@ -479,7 +481,8 @@ NP2KaiModule({
         let bytes = ent.data;
         const eof = bytes.indexOf(0x1a);
         if (eof >= 0) bytes = bytes.subarray(0, eof);
-        textBodyEl.textContent = sjis.decode(bytes).replace(/\r\n?/g, "\n");
+        const body = sjis.decode(bytes).replace(/\r\n?/g, "\n");
+        textBodyEl.textContent = annotation ? `${annotation}\n\n${body}` : body;
         textBodyEl.scrollTop = 0;
     }
 
@@ -494,12 +497,28 @@ NP2KaiModule({
         return { targetEntry: target, args: m.args, recipe };
     }
 
+    // 起動 .bat の「解釈した起動順」を 1 行サマリにする (Run でこう動く、の透明化)。
+    // リテラルフラグ (-r/-v 等) は出すが %N はユーザー入力前なので省く (本文の生 .bat で確認可)。
+    function batRecipeSummary(rec) {
+        if (!rec) return '▷ 起動レシピ — 起動する実行ファイルが束に見つかりません';
+        const names = loadedEntries.map((e) => e.name);
+        const seq = qbBatScript.resolveSequence(rec.recipe, names, '');
+        const fmt = (c) => sjisName(baseName(c.name)) + (c.args ? ` ${c.args}` : '');
+        if (seq && seq.length > 1) {
+            return `▷ 起動順 (1 セッション逐次 EXEC): ${seq.map(fmt).join('  →  ')}`;
+        }
+        const a = rec.args.join(' ');
+        return `▷ 起動: ${sjisName(baseName(rec.targetEntry.name))}${a ? ` ${a}` : ''}`;
+    }
+
     function selectEntry(ent) {
         if (isBatName(ent.name)) {
             // .bat は「作者の起動レシピ」。主プログラム + 引数を解決して run 対象にする。
             const rec = resolveBat(ent);
             if (!rec) {
+                // 起動できなくても中身は読ませる (③敬意: 作者のレシピ)。
                 runStatusEl.textContent = `${sjisName(ent.name)}: 起動する実行ファイルが見つかりません`;
+                openText(ent, batRecipeSummary(null));
                 return;
             }
             selectedEntry = ent;
@@ -509,6 +528,8 @@ NP2KaiModule({
             const preview = rec.args.join(' ');
             runEntryEl.textContent =
                 `${sjisName(ent.name)} → ${sjisName(baseName(rec.targetEntry.name))}` + (preview ? ` ${preview}` : '');
+            // 起動 .bat の中身 (作者のレシピ) を解釈した起動順つきでテキスト面に表示。
+            openText(ent, batRecipeSummary(rec));
         } else {
             selectedEntry = ent;
             selectedRecipe = null;
@@ -669,6 +690,9 @@ NP2KaiModule({
                                   ['number', 'number', 'string', 'string']);
     const dosStageExe  = M.cwrap('np2kai_dos_stage_exe', 'number',
                                   ['number', 'number', 'string', 'string']);
+    // ② 起動 .bat の逐次実行 (ミニ COMMAND.COM)。script は生バイト (ptr,len) で渡す。
+    const dosStageScript = M.cwrap('np2kai_dos_stage_script', 'number',
+                                  ['number', 'number', 'string']);
     // np2kai_dos_get_exit(int* code) — JS では HEAP に書き込み番地を渡す
     const dosGetExitFn = M.cwrap('np2kai_dos_get_exit', 'number', ['number']);
 
@@ -776,15 +800,9 @@ NP2KaiModule({
     function startRunSync() { stopRunSync(); fsSnapshot(); runSyncTimer = setInterval(syncRunDir, 1000); }
     function stopRunSync()  { if (runSyncTimer) { clearInterval(runSyncTimer); runSyncTimer = null; } }
 
-    async function stageAndRunImage(bytes, cmdline, label, isExe) {
-        // image を C ヒープに転送して stage する
-        const ptr = M._malloc(bytes.length);
-        M.HEAPU8.set(bytes, ptr);
-        const stageFn = isExe ? dosStageExe : dosStageCom;
-        const r = stageFn(ptr, bytes.length, cmdline || '', label || '');
-        M._free(ptr);
-        if (r !== 0) throw new Error(`stage_${isExe ? 'exe' : 'com'} failed r=${r}`);
-        runStatusEl.textContent = `${label}: staged ${bytes.length}B、loader.d88 を A: に挿入してリセット中…`;
+    // staging 後の共通処理: loader.d88 を A: に挿入してリセット → /run ライブ反映 → exit polling。
+    async function runStaged(label) {
+        runStatusEl.textContent = `${label}: loader.d88 を A: に挿入してリセット中…`;
         await loadLoaderDisk();
         runStatusEl.textContent = `${label}: 実行中 (exit を polling 中…)`;
         stopButton.hidden = false;
@@ -800,6 +818,32 @@ NP2KaiModule({
         });
     }
 
+    async function stageAndRunImage(bytes, cmdline, label, isExe) {
+        // image を C ヒープに転送して stage する
+        const ptr = M._malloc(bytes.length);
+        M.HEAPU8.set(bytes, ptr);
+        const stageFn = isExe ? dosStageExe : dosStageCom;
+        const r = stageFn(ptr, bytes.length, cmdline || '', label || '');
+        M._free(ptr);
+        if (r !== 0) throw new Error(`stage_${isExe ? 'exe' : 'com'} failed r=${r}`);
+        await runStaged(label);
+    }
+
+    // ② 起動 .bat の逐次実行: コマンド列をミニ COMMAND.COM に組んで stage する。
+    // 子イメージのバイトは渡さない (展開済 /run から AH=4Bh が読む)。
+    async function stageAndRunScript(seq, label) {
+        // "PATH\tARGS\n…" を latin1 (= FS キーと同じ符号化) で C へ。
+        const scriptStr = seq.map((c) => c.name + '\t' + (c.args || '')).join('\n') + '\n';
+        const bytes = new Uint8Array(scriptStr.length);
+        for (let i = 0; i < scriptStr.length; i++) bytes[i] = scriptStr.charCodeAt(i) & 0xff;
+        const ptr = M._malloc(bytes.length);
+        M.HEAPU8.set(bytes, ptr);
+        const r = dosStageScript(ptr, bytes.length, label || '');
+        M._free(ptr);
+        if (r !== 0) throw new Error(`stage_script failed r=${r}`);
+        await runStaged(label);
+    }
+
     stopButton.addEventListener('click', () => {
         if (pollDosExit._stop) pollDosExit._stop();
         stopButton.blur();
@@ -810,27 +854,40 @@ NP2KaiModule({
         runButton.disabled = true;   // ポーリング終了まで連打を抑止 (重複 stage 防止)
         runButton.blur();            // Enter で Run が再 click されないよう focus を外す
         const userArgs = runCmdline.value;
-        // .bat を選んでいる時は主プログラムに解決し、レシピ引数 (%N にユーザー入力を差し込み) で起動。
-        // それ以外は選んだ EXE/COM をそのまま、cmdline 欄を素の引数として起動。
-        let target, cmdline, label;
-        if (selectedRecipe) {
-            target  = selectedRecipe.targetEntry;
-            cmdline = qbBatScript.buildCmdline(selectedRecipe.args, userArgs);
-            label   = `${sjisName(selectedEntry.name)} → ${sjisName(baseName(target.name))}`;
-        } else {
-            target  = selectedEntry;
-            cmdline = userArgs;
-            label   = sjisName(target.name);
-        }
-        const isExe = /\.exe$/i.test(target.name);
         try {
+            // ② .bat がドライバ+本体の複数コマンド (制御フロー無し) なら、ミニ COMMAND.COM で
+            // 1 DOS セッション内に順次 EXEC する (音源ドライバ TSR が本体に効く)。
+            if (selectedRecipe) {
+                const seq = qbBatScript.resolveSequence(
+                    selectedRecipe.recipe, loadedEntries.map((e) => e.name), userArgs);
+                if (seq && seq.length > 1) {
+                    const label = `${sjisName(selectedEntry.name)} → `
+                        + `${sjisName(baseName(selectedRecipe.targetEntry.name))} (+${seq.length - 1} cmd)`;
+                    runStatusEl.textContent = `${label} を起動…`;
+                    await stageAndRunScript(seq, label);
+                    return;
+                }
+            }
+            // 単一プログラム: .bat 主のみ / 制御フロー入り .bat (① フォールバック) / 素の EXE・COM。
+            // .bat はレシピ引数 (%N にユーザー入力を差し込み)、素のファイルは cmdline 欄を素の引数で。
+            let target, cmdline, label;
+            if (selectedRecipe) {
+                target  = selectedRecipe.targetEntry;
+                cmdline = qbBatScript.buildCmdline(selectedRecipe.args, userArgs);
+                label   = `${sjisName(selectedEntry.name)} → ${sjisName(baseName(target.name))}`;
+            } else {
+                target  = selectedEntry;
+                cmdline = userArgs;
+                label   = sjisName(target.name);
+            }
+            const isExe = /\.exe$/i.test(target.name);
             runStatusEl.textContent = `${label} を起動…`;
             await stageAndRunImage(target.data, cmdline, label, isExe);
         } catch (e) {
             runStatusEl.textContent = `ERROR: ${e.message}`;
             console.error(e);
         } finally {
-            // polling 中は onExit (stageAndRunImage) が戻すので、currentPoll が立つ間は触らない。
+            // polling 中は onExit (stageAndRun*) が戻すので、currentPoll が立つ間は触らない。
             if (currentPoll === null) { runButton.disabled = false; stopButton.hidden = true; }
         }
     });

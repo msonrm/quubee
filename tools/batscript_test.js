@@ -101,5 +101,36 @@ function mainOf(recipe, entries) {
     eq(bat.buildCmdline(r.mains[0].args, 'ignored'), '', 'oz: 引数テンプレ無→空 cmdline');
 }
 
+// ---- 10. ② resolveSequence: ドライバ常駐の逐次実行 (元順序保持 + 各 cmd の引数) ----
+{
+    const r = bat.parse(batBytes(['echo off', 'mdrv98 /v', 'camelzoo %1', 'mdrv98 -r']));
+    const seq = bat.resolveSequence(r, ['mdrv98.com', 'camelzoo.exe'], 'hard');
+    eq(seq.map(c => c.name), ['mdrv98.com', 'camelzoo.exe', 'mdrv98.com'],
+        'seq: 元順序でドライバ→本体→解除');
+    eq(seq.map(c => c.args), ['/v', 'hard', '-r'], 'seq: 各 cmd の引数 (%1←hard)');
+}
+
+// ---- 11. ② 制御フロー入りは null (① 単一起動にフォールバック) ----
+{
+    const r = bat.parse(batBytes(['middrv -T3', ':LOOP', 'finmain %1', 'GOTO LOOP', 'middrv -R']));
+    eq(bat.resolveSequence(r, ['middrv.com', 'finmain.exe'], ''), null, 'seq: 制御フロー入りは null');
+}
+
+// ---- 12. ② 単一本体は length 1 (シェル不要 → ① 単一起動) ----
+{
+    const seq = bat.resolveSequence(bat.parse(batBytes(['game %1'])), ['game.exe'], '');
+    eq(seq.length, 1, 'seq: 単一本体は 1 要素');
+    eq(seq[0].name, 'game.exe', 'seq: 本体 game.exe');
+}
+
+// ---- 13. ② 束に無いコマンドは skip / 本体が無ければ null ----
+{
+    const seq = bat.resolveSequence(
+        bat.parse(batBytes(['mdrv98', 'setup', 'game'])), ['mdrv98.com', 'game.exe'], '');
+    eq(seq.map(c => c.name), ['mdrv98.com', 'game.exe'], 'seq: 束に無い setup を skip');
+    eq(bat.resolveSequence(bat.parse(batBytes(['mdrv98', 'mdrv98 -r'])), ['mdrv98.com'], ''),
+        null, 'seq: 本体無し (ドライバのみ) は null');
+}
+
 console.log(`\nbatscript_test: pass=${pass} fail=${fail}`);
 process.exit(fail ? 1 : 0);

@@ -73,6 +73,19 @@ int qb_dos_stage_com(const uint8_t *image, size_t size, const char *cmdline,
 int qb_dos_stage_exe(const uint8_t *image, size_t size, const char *cmdline,
                      const char *name);
 
+/* Phase 3 ②: 起動 .bat を「1 DOS セッション内で順に EXEC」するミニ COMMAND.COM を
+ * 最上位プログラムとして stage する。シェル (tools/dos_loader/shell.asm の blob) の末尾に
+ * コマンド表を組んで COM として展開し、シェルが各コマンドを AH=4Bh EXEC する。子の TSR
+ * (音源ドライバ等) は既存 AH=31h でそのまま常駐継続するので、driver→game→driver -r の
+ * 同一セッション逐次実行 (= 実 DOS の COMMAND.COM /C batch 相当) が成立する。
+ *   script = "PATH\tARGS\nPATH\tARGS\n…" (タブ=パス/引数、改行=コマンド区切り、ARGS 省略可)。
+ *            PATH は /run 相対 (AH=4Bh が case-insensitive 解決して fopen する)。
+ *            SJIS ダメ文字名を壊さないよう NUL 終端でなく len 指定の生バイトで渡す。
+ *   name   = 表示/argv[0] 用 (例 "GAME")。NULL 可。
+ * 子イメージのバイトは渡さない (展開済 /run から AH=4Bh が読む)。
+ * 戻り値 0=OK、<0=エラー (-1 引数不正 / -2 0 コマンド / -11 image がシェル保持領域に収まらない)。 */
+int qb_dos_stage_script(const char *script, size_t len, const char *name);
+
 /* loader-start フック (0xFEE00 で biosfunc から呼ばれる)。
  * 戻り値: 1 = CPU 状態を書き換えたので caller は return(1) すること
  *         0 = stage されていないので素通り */

@@ -310,6 +310,12 @@ int np2kai_dos_stage_exe(const uint8_t *image, int size, const char *cmdline,
 	return qb_dos_stage_exe(image, (size_t)size, cmdline, name);
 }
 
+/* ② 起動 .bat の逐次実行: ミニ COMMAND.COM を stage (script は SJIS 安全のため生バイト)。 */
+int np2kai_dos_stage_script(const char *script, int len, const char *name) {
+	if (!script || len <= 0) return -1;
+	return qb_dos_stage_script(script, (size_t)len, name);
+}
+
 int np2kai_dos_get_exit(int *code_out) {
 	return qb_dos_get_exit(code_out);
 }

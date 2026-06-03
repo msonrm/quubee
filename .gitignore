@@ -33,6 +33,8 @@
 /tools/dos_loader/hello.exe
 /tools/dos_loader/sjistest.com
 /tools/dos_loader/dostest.com
+/tools/dos_loader/shell.bin
+# ↑ shell.bin は中間生成物。C ビルド用の native/dos_shell_blob.h (build.sh 生成) はコミットする。
 
 # フォント配布アーカイブ (参照用・大きい。ライセンス文は CREDITS.md に取り込み済み)
 /sazanami-fontbmp.zip

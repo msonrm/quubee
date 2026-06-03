@@ -638,10 +638,13 @@ emrun --port 8080 web/
 - **① 実装済 (JS 起動レシピ抽出)**: パーサ + `resolveMain` (`.COM`>`.EXE`・ドライブレター/パス剥がし・大小無視) +
   `buildCmdline` (`%N` 置換・リテラルフラグ保持)。`bridge.js` は .bat 最優先自動選択 / 複数 .bat は一覧選択 /
   レシピ起動。検証: `tools/batscript_test.js` 26/0 + 実書庫 26 .bat 全解決 + 回帰なし。
-- **② 未実装 (次セッション)**: 音源ドライバ TSR の実常駐。`mdrv98 → game → mdrv98 -r` を **1 セッションで
-  EXEC** する COMMAND.COM もどき (C 側、AH=4Bh EXEC + AH=31h TSR の Ray IV rin.com 経路を再利用)。
-  「MDRV98/middrv 等が HLE で実際に FM を鳴らせるか」の互換フロンティア込み。**スコープ = まず 1 ドライバ
-  (mdrv98) を 1 タイトル (cz/oz/tw 系) で鳴らす**。制御フロー .bat の完全逐次 (finalty の demo→main ループ) もここ。
+- **② 実装済 (2026-06-03、ミニ COMMAND.COM)**: 音源ドライバ TSR の常駐を「シェルが 1 DOS セッション内で
+  各コマンドを順に AH=4Bh EXEC」する形で成立させた。`tools/dos_loader/shell.asm` (COM、self-shrink→表を
+  順に EXEC→4Ch) + `qb_dos_stage_script` (C) + `resolveSequence` (JS)。EXEC/TSR(31h)/MCB は既存再利用、
+  既存単一起動・EXEC 経路は不変 (回帰隔離)。検証 `batscript_test 33/0` + ビルドクリーン。
+  **実ゲーム (mdrv98 系) のブラウザ動作確認が次の実フロンティア** — 「MDRV98/middrv 等が HLE で実際に
+  FM を鳴らせるか」。残課題: per-child env で argv[0] 正規化 (C1)、旧式 `INT 27h` TSR、制御フロー .bat の
+  完全逐次 (finalty の demo→main ループ)。
   - 現状の暫定動作: ドライバは読み飛ばし、主プログラムだけ起動 → ゲームが FM ポート直叩きなら鳴る /
     ドライバ依存音源なら無音 or BEEP のグレースフル (起動・プレイ自体はブロックしない)。
 

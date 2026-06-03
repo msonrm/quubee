@@ -26,6 +26,7 @@
 
 #include "dos_loader.h"
 #include "dos_int21.h"
+#include "dos_shell_blob.h"   /* tools/dos_loader/shell.asm の assemble 済 blob (build.sh 生成) */
 
 /* 直接アクセスする NP2kai のゲスト RAM (linear address indexed) */
 extern UINT8 mem[];
@@ -390,6 +391,78 @@ int qb_dos_stage_exe(const uint8_t *image, size_t size, const char *cmdline,
             size, body_bytes, header_bytes, (unsigned)e_crlc,
             e_cs, e_ip, e_ss, e_sp, g_stage.cmdline);
     return 0;
+}
+
+/* ② ミニ COMMAND.COM: シェル blob + コマンド表を COM image に組んで stage する。
+ * image レイアウト (COM なので segment 内 offset 0x100 ロード):
+ *   [shell blob (固定コード, QB_DOS_SHELL_BLOB_LEN)]
+ *   [count(1B)] [count 回: path_off(LE16), tail_off(LE16)]    ← shell の table ラベル位置
+ *   [文字列領域: ASCIZ パス群 + DOS cmdtail 群 ([len][bytes][0Dh])]
+ * シェルは自身を KEEP=0x200 para (8KB) に self-shrink しスタックを 0x1FFE へ退避するので、
+ * image は 0x100+image_bytes < ~0x1E00 (= スタック手前) に収める必要がある。 */
+#define QB_SHELL_MAX_CMDS 32
+#define QB_SHELL_IMG_MAX  0x1C00   /* image バイト上限 (0x100+これ=0x1D00 < スタック 0x1FFE) */
+
+int qb_dos_stage_script(const char *script, size_t len, const char *name) {
+    if (!script) return -1;
+
+    /* --- script を (path, args) コマンド列へ分解 (生バイト, len 境界で読む) --- */
+    struct { const char *path; size_t plen; const char *args; size_t alen; }
+        cmds[QB_SHELL_MAX_CMDS];
+    int n = 0;
+    const char *p = script, *end = script + len;
+    while (p < end && n < QB_SHELL_MAX_CMDS) {
+        while (p < end && (*p == '\n' || *p == '\r')) p++;   /* 空行/改行スキップ */
+        if (p >= end) break;
+        const char *line = p;
+        while (p < end && *p != '\n' && *p != '\r') p++;     /* 行末まで */
+        const char *lend = p;
+        const char *tab = line;
+        while (tab < lend && *tab != '\t') tab++;            /* path \t args */
+        size_t plen = (size_t)(tab - line);
+        const char *args = (tab < lend) ? tab + 1 : lend;
+        size_t alen = (size_t)(lend - args);
+        if (plen == 0) continue;                             /* path 無し行は無視 */
+        cmds[n].path = line; cmds[n].plen = plen;
+        cmds[n].args = args; cmds[n].alen = alen;
+        n++;
+    }
+    if (n == 0) return -2;
+
+    /* --- image 組み立て --- */
+    static uint8_t img[QB_SHELL_IMG_MAX];
+    size_t blob = QB_DOS_SHELL_BLOB_LEN;
+    if (blob + 1 + (size_t)n * 4 > sizeof(img)) return -11;
+    memcpy(img, qb_dos_shell_blob, blob);
+
+    size_t pos = blob;
+    img[pos++] = (uint8_t)n;                  /* count */
+    size_t entry_off = pos;
+    pos += (size_t)n * 4;                      /* path_off/tail_off ペア領域を予約 */
+
+    for (int i = 0; i < n; i++) {
+        /* path ASCIZ */
+        if (pos + cmds[i].plen + 1 > sizeof(img)) return -11;
+        uint16_t poff = (uint16_t)(0x100 + pos);
+        memcpy(&img[pos], cmds[i].path, cmds[i].plen); pos += cmds[i].plen;
+        img[pos++] = 0x00;
+        /* DOS cmdtail: [len][bytes][0x0D] */
+        size_t alen = cmds[i].alen; if (alen > 255) alen = 255;
+        if (pos + alen + 2 > sizeof(img)) return -11;
+        uint16_t toff = (uint16_t)(0x100 + pos);
+        img[pos++] = (uint8_t)alen;
+        memcpy(&img[pos], cmds[i].args, alen); pos += alen;
+        img[pos++] = 0x0D;
+        /* entry に offset を LE で書く */
+        img[entry_off + (size_t)i * 4 + 0] = (uint8_t)(poff & 0xFF);
+        img[entry_off + (size_t)i * 4 + 1] = (uint8_t)(poff >> 8);
+        img[entry_off + (size_t)i * 4 + 2] = (uint8_t)(toff & 0xFF);
+        img[entry_off + (size_t)i * 4 + 3] = (uint8_t)(toff >> 8);
+    }
+
+    fprintf(stderr, "[dos_loader] staged SHELL: %d cmd(s), image=%zu bytes\n", n, pos);
+    /* シェルを通常の COM として stage (cmdline 不要)。loader-start が 0x100:0x100 に展開する。 */
+    return qb_dos_stage_com(img, pos, NULL, name);
 }
 
 void qb_dos_reset_state(void) {
