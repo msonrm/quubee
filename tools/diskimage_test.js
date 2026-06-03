@@ -3,6 +3,7 @@
 //   - np2tool/*.hdm (実 FAT12 2HD・サブディレクトリ持ち) で抽出を検証
 //   - img2d88.py で .hdm→.d88 変換、FDI ヘッダ合成 → raw/d88/fdi の3経路がバイト一致
 //   - 自己起動 .d88 は「非FAT」になることを確認
+//   - SJIS 8.3 ファイル名の生バイト保持 (合成 FAT12。corpus は全て ASCII 名なので守れない経路)
 //
 // 使い方: node tools/diskimage_test.js
 
@@ -144,6 +145,57 @@ for (const ext of ['nfd', 'fdd', 'ddb']) {
     const res = di.extractDiskImage(new Uint8Array(16), 'x.' + ext);
     ok(!res.ok && /対応外/.test(res.reason), `.${ext} should be rejected as unsupported`);
     console.log(`  .${ext}: ${res.reason}`);
+}
+
+// ---- 6. SJIS 8.3 ファイル名は生バイトで保持される (表示側 sjisName が復号する前提) ----
+//   games/ の書庫・ディスクイメージは全て ASCII 8.3 名で、SJIS 復号分岐を踏むデータが
+//   corpus に無い。実ブラウザで「漢字名が化けない」ことを確認した経路を、合成 FAT12 で守る。
+console.log('\n[sjis name] synthesized FAT12 with raw Shift-JIS 8.3 name');
+{
+    function synthFat12OneFile(nameBytes, ext3, content) {
+        const bps = 512, spc = 1, reserved = 1, nfat = 2, rootEnt = 16, spf = 1, totalSec = 20;
+        const img = new Uint8Array(totalSec * bps);
+        const dv = new DataView(img.buffer);
+        img.set([0xeb, 0x3c, 0x90], 0);
+        img.set([...'QUUBEE  '].map(c => c.charCodeAt(0)), 3);
+        dv.setUint16(0x0b, bps, true); img[0x0d] = spc;
+        dv.setUint16(0x0e, reserved, true); img[0x10] = nfat;
+        dv.setUint16(0x11, rootEnt, true); dv.setUint16(0x13, totalSec, true);
+        img[0x15] = 0xf0; dv.setUint16(0x16, spf, true);
+        img[0x1fe] = 0x55; img[0x1ff] = 0xaa;
+        // FAT ×2: entry0=0xFF0(media), entry1=0xFFF, cluster2=EOF(0xFFF)
+        const fat = [0xf0, 0xff, 0xff, 0xff, 0x0f];
+        for (let fi = 0; fi < nfat; fi++) img.set(fat, (reserved + fi * spf) * bps);
+        // ルートに 1 エントリ
+        const rootStart = (reserved + nfat * spf) * bps;
+        const e = new Uint8Array(32).fill(0x20, 0, 11);   // 8.3 名は space 詰め
+        e.set(nameBytes, 0);
+        e.set([...ext3].map(c => c.charCodeAt(0)), 8);
+        const edv = new DataView(e.buffer);
+        e[0x0b] = 0x20;                                    // attr=archive
+        edv.setUint16(0x18, ((1992 - 1980) << 9) | (8 << 5) | 4, true);
+        edv.setUint16(0x1a, 2, true);                      // first cluster
+        edv.setUint32(0x1c, content.length, true);
+        img.set(e, rootStart);
+        // データ: cluster2 = sector dataStart
+        const dataStart = (reserved + nfat * spf) + Math.ceil((rootEnt * 32) / bps);
+        img.set(content, dataStart * bps);
+        return img;
+    }
+    // "漢字" = SJIS 8A BF 8E 9A、ext = TXT
+    const img = synthFat12OneFile([0x8a, 0xbf, 0x8e, 0x9a], 'TXT',
+                                  Uint8Array.from('hi\r\n', c => c.charCodeAt(0)));
+    const res = di.extractDiskImage(img, 'sjis.hdm');
+    ok(res.ok && res.files.length === 1, `synth sjis.hdm should extract 1 file (ok=${res.ok})`);
+    if (res.ok && res.files[0]) {
+        const nm = res.files[0].name;
+        const rawHex = [...nm].map(c => c.charCodeAt(0).toString(16).padStart(2, '0')).join(' ');
+        const decoded = new TextDecoder('shift_jis')
+            .decode(Uint8Array.from([...nm], c => c.charCodeAt(0) & 0xff));
+        ok(rawHex === '8a bf 8e 9a 2e 54 58 54', `name keeps raw SJIS bytes (got "${rawHex}")`);
+        ok(decoded === '漢字.TXT', `display SJIS decode = 漢字.TXT (got "${decoded}")`);
+        console.log(`  raw="${rawHex}"  decoded="${decoded}"`);
+    }
 }
 
 fs.rmSync(tmp, { recursive: true, force: true });
