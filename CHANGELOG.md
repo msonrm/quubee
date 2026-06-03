@@ -1,5 +1,20 @@
 # CHANGELOG
 
+## [音響クリーンアップ: vol_master が fmgen に無影響と判明 → 65→100 中立化] — 2026-06-03
+
+opngen 時代の名残の調査。**`np2cfg.vol_master` は既定の fmgen に一切届かない**ことが判明:
+fmgen の音量は `opna_reset` が `vol_fm` で直接設定し、vol_master を畳む経路
+(`fmboard_updatevolume`→`opna_fmgen_setallvolume*_linear`) は **opnalist が一度も populate されず &
+fmboard_updatevolume が通常フローで未呼び出し**のため完全な no-op (grep で確認)。vol_master が効くのは
+opngen/beep/psg(opngen)/cs4231 等の整数合成経路だけ。
+
+- `native/bridge.c`: `np2cfg.vol_master` を **65→100 に中立化**。65 は opngen+ハードクリップ時代に
+  「低音のビリビリ」回避で絞った値だが、(1) 真因はクリップ段で今は soft-clip が捌く、(2) そもそも
+  fmgen には無影響、の二点から不要。コメントを実態に訂正。fmgen の音は変化なし (= 無影響の裏付け)。
+- 補足: 前エントリで「soft-clip + vol_master=65 + -O3 で fmgen 高音質」と書いたが、vol_master=65 は
+  fmgen の音質には寄与していなかった (効いていたのは soft-clip と -O3 の CPU 余裕)。
+- fmgen の音量を変えたい場合の本物のレバーは `vol_fm` (opna_reset 経由)。今回はノブ化せず据え置き。
+
 ## [エンジン性能・音質: 実質 -O0 → -O2/-O3 で 2x 高速化 + FM を fmgen 既定化] — 2026-06-03
 
 エンジンそのものの質を底上げ。2 つの独立した大きな改善。

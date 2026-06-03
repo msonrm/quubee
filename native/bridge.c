@@ -79,12 +79,15 @@ np2kai_handle np2kai_create(void) {
 
 	initload();           /* sets default np2cfg via pccore_setdefault() */
 	np2cfg.fddequip = 0x03; /* equip drives A and B so diskdrv_* functions accept them */
-	/* マスター音量を 65% に下げてヘッドルームを確保。
-	 * デフォルト 100 だと FM+SSG+リズムの合算ピークが SINT16 範囲を超え、
-	 * qb_soundmng の出力段でハードクリップ → 低音で「ビリビリ」歪みが出る。
-	 * 80 では低音歪みが完全に取りきれず、65 まで下げると線形領域 (ソフト
-	 * クリップの KNEE = 24576) にほぼ全ピークが収まる計算。 */
-	np2cfg.vol_master = 65;
+	/* マスター音量。【重要】vol_master が実際に効くのは opngen/beep/psg(opngen)/cs4231 等の
+	 * 整数合成経路だけで、既定の fmgen には届かない: fmgen の音量は opna_reset が vol_fm で直接
+	 * 設定し、vol_master を畳む経路 (fmboard_updatevolume→opna_fmgen_setallvolume*_linear) は
+	 * opnalist が一度も populate されない & fmboard_updatevolume が通常フローで呼ばれないため
+	 * 完全な no-op。よって fmgen 既定の今、この値は無影響。
+	 * 以前は opngen+ハードクリップ時代に「低音のビリビリ」回避で 65 まで絞っていたが、その歪みの
+	 * 真因はクリップ段で、今は soft-clip (qb_soundmng) がピークを滑らかに捌くので絞る必要は無い。
+	 * 100 に中立化 (opngen へ A/B 切替した時も soft-clip 任せで歪まない想定)。 */
+	np2cfg.vol_master = 100;
 	/* FM 音源は fmgen (cisc C++ ライブラリ) を既定にする。以前は「低音のビリビリ」を理由に
 	 * opngen (NP2 オリジナル) へ切り替えていたが、その歪みの主因は soft-clip 導入前の
 	 * ハードクリップだった。soft-clip + vol_master=65 + -O2/-O3 (CPU 余裕) を揃えた後の実機
