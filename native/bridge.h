@@ -96,6 +96,11 @@ void np2kai_mouse_button(np2kai_handle h, int button, int down);
 __attribute__((visibility("default")))
 int np2kai_set_audio_rate(uint32_t rate);
 
+/* FM 音源エンジンの実行時 A/B 切替 (1=fmgen / 0=opngen)。次の Run (reset) から反映。
+ * 戻り値: 設定後の値。FM 音質チューニング用 (qbDebug.fmgen から呼ぶ)。 */
+__attribute__((visibility("default")))
+int np2kai_set_fmgen(int on);
+
 /* リングバッファから PCM をステレオ int16 で取り出す。
  * dst には max_frames * 2 個の int16 ぶんの領域が必要。
  * 返り値は実際に書いたフレーム数 (0 ならバッファ空)。 */

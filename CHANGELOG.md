@@ -1,5 +1,25 @@
 # CHANGELOG
 
+## [エンジン性能・音質: 実質 -O0 → -O2/-O3 で 2x 高速化 + FM を fmgen 既定化] — 2026-06-03
+
+エンジンそのものの質を底上げ。2 つの独立した大きな改善。
+
+- **ビルド最適化 (実質 -O0 → compile -O2 / link -O3)**: `CMAKE_BUILD_TYPE` 空・`target_*_options` に
+  `-O` 指定無しで、IA-32 インタプリタ (毎フレームの支配項) が `-O0` 相当のまま動いていた。上流
+  `sdl/Makefile21.em` と同じ「compile -O2 / link -O3」を `native/CMakeLists.txt` に self-contained 追加
+  (build.sh 引数に非依存)。strict-aliasing は上流 libretro が `-fstrict-aliasing` で通すため無効化不要。
+  - 計測 (`tools/bench_frame.js`、FreeDOS boot.d88 を headless 600 フレーム): **26.1→12.9 ms/frame =
+    38.3→77.4 fps (2.02x)**、wasm **2.73→0.86MB (3.2x 縮小)**。`-O0` は実機 56fps 未達だったのが超えに転じ、
+    multiple 引き上げ (快適化) と重い FM エンジンを払う余地が生まれた。
+  - 回帰: JS スイート全 pass、boot 720 フレーム完走、実機でさめがめ/ザルバール/うさちゃん列車 動作・体感軽量化。
+- **FM 音源を fmgen 既定化** (`native/bridge.c` `usefmgen=1`): 以前は「低音のビリビリ」で opngen を選んで
+  いたが、真因は **soft-clip 導入前のハードクリップ**だった。soft-clip + `vol_master=65` + `-O2/-O3` 後の
+  実機 A/B で fmgen が明確に高音質と確認 (ユーザー評「opngen では埋もれて聞こえなかったパートが表に出る」)。
+  CPU は重いが `-O3` の余裕で吸収 (処理落ちなし)。
+- **FM エンジンの実行時 A/B トグル**: `np2kai_set_fmgen(0|1)` (`bridge.c/h` + CMake export) / `qbDebug.fmgen(0|1)`。
+  `np2cfg.usefmgen` を書くだけで `pccore_reset` が再読込し `opna_bind` が再ディスパッチ → 次の Run で反映。
+  音質チューニング/回帰確認で再利用する道具。`tools/bench_frame.js` も headless A/B ベンチとして恒久追加。
+
 ## [② ミニ COMMAND.COM — 起動 .bat を 1 DOS セッション内で逐次 EXEC (音源ドライバ TSR 常駐)] — 2026-06-03
 
 ①(.bat レシピ解釈) の積み残し **②** を実装。Run 毎に `pccore_reset` で別 DOS セッションになる構造では

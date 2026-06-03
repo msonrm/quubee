@@ -85,12 +85,13 @@ np2kai_handle np2kai_create(void) {
 	 * 80 では低音歪みが完全に取りきれず、65 まで下げると線形領域 (ソフト
 	 * クリップの KNEE = 24576) にほぼ全ピークが収まる計算。 */
 	np2cfg.vol_master = 65;
-	/* FM 音源を fmgen (cisc.cs C++ ライブラリ、デフォルト) から opngen
-	 * (NP2 オリジナル) に切り替え。fmgen は OPNA の実機クセを精密に再現する分、
-	 * オーバーサンプリングの量子化や低レート LFO の干渉で「ビリビリ」が
-	 * 乗りやすい。opngen はよりシンプル/理想化された合成で、低音の歪みが
-	 * 出にくい場合がある。 */
-	np2cfg.usefmgen = 0;
+	/* FM 音源は fmgen (cisc C++ ライブラリ) を既定にする。以前は「低音のビリビリ」を理由に
+	 * opngen (NP2 オリジナル) へ切り替えていたが、その歪みの主因は soft-clip 導入前の
+	 * ハードクリップだった。soft-clip + vol_master=65 + -O2/-O3 (CPU 余裕) を揃えた後の実機
+	 * A/B で、fmgen は opngen より明確に高音質と確認 (opngen では埋もれて聞こえなかったパート
+	 * が出る)。CPU は重めだが -O3 で吸収できる。実行時 A/B は np2kai_set_fmgen /
+	 * qbDebug.fmgen(0|1) で可能 (次の Run で反映)。 */
+	np2cfg.usefmgen = 1;
 	commng_initialize();      /* cmmidi_initailize で midictrlindex テーブル初期化 */
 	if (s_data_dir[0]) {
 		file_setcd(s_data_dir);   /* writable dir for font.tmp, saves, etc. */
@@ -284,6 +285,15 @@ int np2kai_set_audio_rate(uint32_t rate) {
 	}
 	np2cfg.samplingrate = rate;
 	return 0;
+}
+
+/* FM 音源エンジンの実行時 A/B 切替: 1 = fmgen (cisc C++ ライブラリ、OPNA 実機クセを精密再現)、
+ * 0 = opngen (NP2 オリジナル整数合成、既定)。np2cfg.usefmgen を書くだけ。enable_fmgen は
+ * pccore_reset で再読込され fmboard_bind→opna_bind が再ディスパッチするので、次の Run から
+ * 反映される (Run は loader.d88 挿入 → reset を伴うため)。戻り値: 設定後の値 (0/1)。 */
+int np2kai_set_fmgen(int on) {
+	np2cfg.usefmgen = on ? 1 : 0;
+	return np2cfg.usefmgen;
 }
 
 uint32_t np2kai_audio_drain(np2kai_handle h, int16_t *dst, uint32_t max_frames) {
