@@ -348,7 +348,8 @@ NP2KaiModule({
     const textHeadEl  = document.getElementById('text-head');
 
     let loadedEntries  = [];   // { name(=/run 相対), data, mtime }  path は last-wins
-    let selectedEntry  = null; // 実行対象の EXE/COM
+    let selectedEntry  = null; // 実行対象に選んだ行 (EXE/COM もしくは 起動 .bat)
+    let selectedRecipe = null; // selectedEntry が .bat の時の解決結果 { targetEntry, args, recipe }
     let loadedArchives = [];   // 表示用の投入書庫名
     let currentDir     = '';   // ファイラの現在フォルダ (/run 相対, '' = ルート, 末尾 '/' 付き)
     const crumbsEl     = document.getElementById('crumbs');
@@ -363,10 +364,12 @@ NP2KaiModule({
         return sjis.decode(b);
     };
     const isExecName = (n) => /\.(exe|com)$/i.test(n);
+    const isBatName  = (n) => /\.bat$/i.test(n);   // 起動レシピ (qbBatScript で解釈)
     const isTextName = (n) =>
-        /\.(txt|doc|me|1st|asc|bat|ini|cfg|nfo|faq|hlp|dic|wri)$/i.test(n) ||
+        /\.(txt|doc|me|1st|asc|ini|cfg|nfo|faq|hlp|dic|wri)$/i.test(n) ||
         /readme|read\.me|どきゅめんと|説明|よみ/i.test(n);
     const isReadme   = (n) => /readme|read\.me|よみ|説明|どきゅめんと/i.test(n);
+    const baseName   = (n) => n.slice(n.lastIndexOf('/') + 1);   // /run 相対 → ファイル名
     const fmtSize = (n) => n >= 1024 ? `${(n / 1024) | 0}K` : `${n}`;
     const fmtTime = (d) => {
         if (!d) return '';
@@ -446,23 +449,24 @@ NP2KaiModule({
             fileListEl.appendChild(row);
         }
 
-        // ファイル行 (readme→text→exec→other、各内アルファベット順)
-        const base = (n) => n.slice(n.lastIndexOf('/') + 1);
-        const rank = (n) => isReadme(n) ? 0 : isTextName(n) ? 1 : isExecName(n) ? 2 : 3;
+        // ファイル行 (readme→起動.bat→text→exec→other、各内アルファベット順)
+        const rank = (n) => isReadme(n) ? 0 : isBatName(n) ? 1 : isTextName(n) ? 2 : isExecName(n) ? 3 : 4;
         files.sort((a, b) => rank(a.name) - rank(b.name) ||
-            base(a.name).toLowerCase().localeCompare(base(b.name).toLowerCase()));
+            baseName(a.name).toLowerCase().localeCompare(baseName(b.name).toLowerCase()));
         for (const ent of files) {
-            const nm = base(ent.name);
+            const nm = baseName(ent.name);
+            const isBat = isBatName(nm);
+            const runnable = isBat || isExecName(nm);
             const row = document.createElement('div');
-            row.className = 'frow' + (isExecName(nm) ? ' exec' : isTextName(nm) ? ' text' : '') +
+            row.className = 'frow' + (isBat ? ' bat' : isExecName(nm) ? ' exec' : isTextName(nm) ? ' text' : '') +
                             (ent === selectedEntry ? ' sel' : '');
-            const tag = isExecName(nm) ? '▶ ' : isTextName(nm) ? '・' : '  ';
+            const tag = isBat ? '▷ ' : isExecName(nm) ? '▶ ' : isTextName(nm) ? '・' : '  ';
             row.innerHTML =
                 `<span class="fn">${tag}${escapeHtml(sjisName(nm))}</span>` +
                 `<span class="fsz">${fmtSize(ent.data.length)}</span>` +
                 `<span class="fdt">${fmtTime(ent.mtime)}</span>`;
             row.addEventListener('click', () =>
-                isExecName(nm) ? selectEntry(ent) : openText(ent));
+                runnable ? selectEntry(ent) : openText(ent));
             fileListEl.appendChild(row);
         }
     }
@@ -479,9 +483,37 @@ NP2KaiModule({
         textBodyEl.scrollTop = 0;
     }
 
+    // 起動 .bat を解釈し、実際に走らせる主プログラム entry + 引数テンプレを解決する。
+    // 主プログラムが展開済みファイル群に見つからなければ null (UI 側でフォールバック)。
+    function resolveBat(ent) {
+        const recipe = qbBatScript.parse(ent.data);
+        const m = qbBatScript.resolveMain(recipe, loadedEntries.map((e) => e.name));
+        if (!m) return null;
+        const target = loadedEntries.find((e) => e.name === m.name);
+        if (!target) return null;
+        return { targetEntry: target, args: m.args, recipe };
+    }
+
     function selectEntry(ent) {
-        selectedEntry = ent;
-        runEntryEl.textContent = sjisName(ent.name);
+        if (isBatName(ent.name)) {
+            // .bat は「作者の起動レシピ」。主プログラム + 引数を解決して run 対象にする。
+            const rec = resolveBat(ent);
+            if (!rec) {
+                runStatusEl.textContent = `${sjisName(ent.name)}: 起動する実行ファイルが見つかりません`;
+                return;
+            }
+            selectedEntry = ent;
+            selectedRecipe = rec;
+            // プレビューはレシピ引数を素のまま見せる (%1 等のプレースホルダも) ―― ユーザーに
+            // 「cmdline 欄に引数が要る」ことを伝える。実起動時は buildCmdline で %N を差し込む。
+            const preview = rec.args.join(' ');
+            runEntryEl.textContent =
+                `${sjisName(ent.name)} → ${sjisName(baseName(rec.targetEntry.name))}` + (preview ? ` ${preview}` : '');
+        } else {
+            selectedEntry = ent;
+            selectedRecipe = null;
+            runEntryEl.textContent = sjisName(ent.name);
+        }
         runButton.disabled = false;
         renderFileList();   // ハイライト更新
     }
@@ -492,7 +524,7 @@ NP2KaiModule({
         currentDir = '';                                  // 投入時はルート表示に戻す
         runStatusEl.textContent = `読み込み中: ${file.name}…`;
         try {
-            if (!append) { clearRunDir(); loadedEntries = []; loadedArchives = []; selectedEntry = null; }
+            if (!append) { clearRunDir(); loadedEntries = []; loadedArchives = []; selectedEntry = null; selectedRecipe = null; }
             if (/\.(lzh|zip)$/i.test(file.name)) {
                 mergeEntries(await extractArchiveToFs(file, true));   // /run/ クリアは上で実施済
             } else if (qbDiskImage.isDiskImageName(file.name)) {
@@ -515,11 +547,21 @@ NP2KaiModule({
                 return;
             }
             loadedArchives.push(file.name);
-            // 既定エントリ自動選択 (.exe > .com) — ユーザーは一覧クリックで上書き可
+            // 既定エントリ自動選択。起動 .bat があれば最優先 (作者の意図した起動レシピ)。
+            // 複数 .bat = 起動方法 (音源モード/シナリオ/難易度等) の選択肢なのでユーザーに選ばせる。
+            // .bat 無しは従来どおり .exe > .com。
+            let multiBat = false;
             if (!selectedEntry) {
-                const def = loadedEntries.find((e) => /\.exe$/i.test(e.name))
-                         || loadedEntries.find((e) => /\.com$/i.test(e.name));
-                if (def) selectEntry(def);
+                const bats = loadedEntries.filter((e) => isBatName(e.name) && resolveBat(e));
+                if (bats.length === 1) {
+                    selectEntry(bats[0]);
+                } else if (bats.length > 1) {
+                    multiBat = true;
+                } else {
+                    const def = loadedEntries.find((e) => /\.exe$/i.test(e.name))
+                             || loadedEntries.find((e) => /\.com$/i.test(e.name));
+                    if (def) selectEntry(def);
+                }
             }
             renderFileList();
             // readme 系を自動で開く (③敬意: 作者の声をまず見せる)
@@ -527,7 +569,10 @@ NP2KaiModule({
                         || loadedEntries.find((e) => /\.doc$/i.test(e.name))
                         || loadedEntries.find((e) => isTextName(e.name));
             if (readme) openText(readme);
-            runStatusEl.textContent = '';   // ファイル数は一覧自体が示すので表示しない
+            // 複数 .bat (音源モード選択肢) の時だけ誘導を出す。それ以外は一覧自体が示すので無表示。
+            runStatusEl.textContent = multiBat
+                ? '起動 .bat が複数あります — 一覧から起動方法を選んでください'
+                : '';
         } catch (e) {
             runStatusEl.textContent = `ERROR: ${e.message}`;
             console.error(e);
@@ -719,7 +764,7 @@ NP2KaiModule({
             if (names.has(nm)) continue;
             fsSig.delete(nm);
             if (loadedEntries[i] === selectedEntry) {
-                selectedEntry = null; runButton.disabled = true; runEntryEl.textContent = '—';
+                selectedEntry = null; selectedRecipe = null; runButton.disabled = true; runEntryEl.textContent = '—';
             }
             loadedEntries.splice(i, 1);
             changed = true;
@@ -764,11 +809,23 @@ NP2KaiModule({
         if (!selectedEntry || runButton.disabled) return;
         runButton.disabled = true;   // ポーリング終了まで連打を抑止 (重複 stage 防止)
         runButton.blur();            // Enter で Run が再 click されないよう focus を外す
-        const cmdline = runCmdline.value;
-        const isExe = /\.exe$/i.test(selectedEntry.name);
+        const userArgs = runCmdline.value;
+        // .bat を選んでいる時は主プログラムに解決し、レシピ引数 (%N にユーザー入力を差し込み) で起動。
+        // それ以外は選んだ EXE/COM をそのまま、cmdline 欄を素の引数として起動。
+        let target, cmdline, label;
+        if (selectedRecipe) {
+            target  = selectedRecipe.targetEntry;
+            cmdline = qbBatScript.buildCmdline(selectedRecipe.args, userArgs);
+            label   = `${sjisName(selectedEntry.name)} → ${sjisName(baseName(target.name))}`;
+        } else {
+            target  = selectedEntry;
+            cmdline = userArgs;
+            label   = sjisName(target.name);
+        }
+        const isExe = /\.exe$/i.test(target.name);
         try {
-            runStatusEl.textContent = `${sjisName(selectedEntry.name)} を起動…`;
-            await stageAndRunImage(selectedEntry.data, cmdline, sjisName(selectedEntry.name), isExe);
+            runStatusEl.textContent = `${label} を起動…`;
+            await stageAndRunImage(target.data, cmdline, label, isExe);
         } catch (e) {
             runStatusEl.textContent = `ERROR: ${e.message}`;
             console.error(e);
@@ -795,7 +852,7 @@ NP2KaiModule({
     });
     document.getElementById('clear-run').addEventListener('click', () => {
         clearRunDir();
-        loadedEntries = []; loadedArchives = []; selectedEntry = null; currentDir = '';
+        loadedEntries = []; loadedArchives = []; selectedEntry = null; selectedRecipe = null; currentDir = '';
         runEntryEl.textContent = '—'; runButton.disabled = true;
         textHeadEl.textContent = 'readme / テキスト'; textBodyEl.textContent = '';
         renderFileList();

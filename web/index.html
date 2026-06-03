@@ -85,6 +85,7 @@ body.panel-hidden #panel, body.panel-hidden #divider { display: none; }
 .frow .fn  { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; color: #ccc; }
 .frow.dir  .fn { color: #fc9; }
 .frow.exec .fn { color: #cf9; }
+.frow.bat  .fn { color: #fd6; font-weight: bold; }   /* 起動レシピ (作者の意図) を目立たせる */
 .frow.text .fn { color: #9cf; }
 .frow .fsz { flex: 0 0 auto; color: #999; min-width: 56px;  text-align: right; }
 .frow .fdt { flex: 0 0 auto; color: #888; min-width: 138px; text-align: right; }
@@ -186,6 +187,7 @@ body.panel-hidden #panel, body.panel-hidden #divider { display: none; }
 <script src="np2kai_core.js"></script>
 <script src="player/archive.js"></script>
 <script src="player/diskimage.js"></script>
+<script src="player/batscript.js"></script>
 <script src="player/bridge.js"></script>
 </body>
 </html>

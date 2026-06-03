@@ -627,6 +627,24 @@ emrun --port 8080 web/
   SJIS 表示、すべて OK。④ は **corpus の書庫/イメージが全て ASCII 8.3 名で踏めない**ため、日本語 8.3 名を
   1 本持つ合成 FAT12 `.hdm` を作って確認 → `diskimage_test.js` に恒久テスト化 (上記 pass 30/0 の SJIS 分)。
 
+## 起動 .bat のレシピ解釈 (2026-06-03、Phase 4 プロダクト層 / エントリ自動検出)
+
+起動 .bat を「作者が書いた機械可読の起動レシピ」として解釈し、主プログラム + 引数を自動導出する経路を追加
+(`web/player/batscript.js`)。**JS のみ・Wasm 不変。**`db/games.json` への手書き (entry/cmdline) が実質不要に。
+
+- **調査根拠**: `games/` の 40 書庫中 14 本 (35%) が .bat 同梱。パターン = ①引数パススルー (`ZAR %1`)
+  ②音源ドライバ TSR で包む (`mdrv98`→game→`mdrv98 -r`、最多) ③複数 .bat = 起動方法の選択肢
+  (音源モード beep/fm/midi 等が多いが音源限定ではない) ④制御フロー (`:LOOP`/`IF ERRORLEVEL`、コーパス唯一の finalty)。
+- **① 実装済 (JS 起動レシピ抽出)**: パーサ + `resolveMain` (`.COM`>`.EXE`・ドライブレター/パス剥がし・大小無視) +
+  `buildCmdline` (`%N` 置換・リテラルフラグ保持)。`bridge.js` は .bat 最優先自動選択 / 複数 .bat は一覧選択 /
+  レシピ起動。検証: `tools/batscript_test.js` 26/0 + 実書庫 26 .bat 全解決 + 回帰なし。
+- **② 未実装 (次セッション)**: 音源ドライバ TSR の実常駐。`mdrv98 → game → mdrv98 -r` を **1 セッションで
+  EXEC** する COMMAND.COM もどき (C 側、AH=4Bh EXEC + AH=31h TSR の Ray IV rin.com 経路を再利用)。
+  「MDRV98/middrv 等が HLE で実際に FM を鳴らせるか」の互換フロンティア込み。**スコープ = まず 1 ドライバ
+  (mdrv98) を 1 タイトル (cz/oz/tw 系) で鳴らす**。制御フロー .bat の完全逐次 (finalty の demo→main ループ) もここ。
+  - 現状の暫定動作: ドライバは読み飛ばし、主プログラムだけ起動 → ゲームが FM ポート直叩きなら鳴る /
+    ドライバ依存音源なら無音 or BEEP のグレースフル (起動・プレイ自体はブロックしない)。
+
 ## LZH 対応状況と残ギャップ (2026-06-01)
 
 `web/player/archive.js` の対応: **メソッド** lh0 / **lh1** / lh4 / lh5 / lh6 / lh7、**ヘッダ** Level 0 / 1 / 2。

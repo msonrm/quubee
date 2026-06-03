@@ -1,5 +1,34 @@
 # CHANGELOG
 
+## [起動 .bat を「作者の起動レシピ」として解釈 — エントリ自動検出に統合] — 2026-06-03
+
+PC-98 フリーソフトの約 1/3 (調査: `games/` 40 書庫中 14 本) は起動 .bat を同梱し、主プログラム名・
+引数 (`%1..%9`)・音源ドライバの常駐手順を書いている。この .bat を「作者が書いた機械可読の起動レシピ」
+として解釈し、「実際に走らせる主プログラム + cmdline」を導出してフロントのエントリ自動検出に橋渡しした。
+**純 JS・Wasm 不変。**`db/games.json` への手書き (entry/cmdline) が実質不要になる。
+
+- **新規 `web/player/batscript.js`** (`qbBatScript`): .bat バイト列 → 起動レシピ。`^Z`(0x1A) 切り・
+  CRLF 分割・`rem`/`echo`/`@`/`:label`/`goto`/`if` 除去 → コマンド行を `{program,args}` に。音源ドライバ /
+  セットアップ常駐 (mdrv98/middrv/middrv98/middrvpc/opndrv/ssgdrv/tkydrv/cats/calib/mfree 等) を分類して
+  主プログラムを特定。`resolveMain` (ドライブ `X:`・パス剥がし → DOS の `.COM`>`.EXE` 解決・大小無視) と
+  `buildCmdline` (`%1..%9` をユーザー入力で置換、リテラルフラグ `-B1` 等は保持、`%0`/未入力 `%N` は除去)。
+- **`web/player/bridge.js`**: エントリ検出を .bat 対応に。**起動 .bat があれば最優先で自動選択** (作者の
+  意図したレシピ)、複数 .bat (起動方法/音源モードの選択肢) は一覧から選ばせる、Run 時にレシピ引数へ
+  cmdline 欄の `%N` を差し込んで主プログラムを起動。.bat 行は金色太字 (▷) で強調しランク上位に。
+- **`web/index.html`**: batscript.js 読込 + `.frow.bat` CSS。
+- **`db/games.json` は元々 Run 経路から未参照** (dev fixture)。.bat 化でフリーソフト一般に対し手書き辞書なしで
+  entry/引数が決まる。.bat を持たない裸タイトル用の薄いフォールバックとしてのみ残す。
+
+検証: `tools/batscript_test.js` 新規 **26/0** (合成 fixture。games/ は再配布不可でコミットしないので調査パターンを
+再現)。実書庫の全 .bat 26 個をローカル横断 → すべて妥当な主プログラムに解決 (zar.bat→zar.exe、
+tw0.bat→twopn "1 0 0 0"、finaltyb→findemo "-B0"、ドライバ全除外)。回帰: `diskimage_test` 30/0・
+`lzh_l1ext_test` PASS・`lh5_test` 420/0、JS 構文クリーン。
+
+**既知の MVP 制約 (= 次の課題 ②)**: 制御フロー付き .bat (コーパス唯一の finalty 系) は demo 止まり。
+音源ドライバ TSR の実常駐 (mdrv98 → game → mdrv98 -r を 1 セッションで保つ) は、Run 毎に `pccore_reset` で
+別セッションになる都合上 JS だけでは無理 → C 側に AH=4Bh EXEC ベースの COMMAND.COM もどきが要る
+(別セッションで実装予定。Ray IV の rin.com 常駐経路を再利用)。
+
 ## [ディスクイメージ取り出しの実機目視確認 + SJIS 名テストの恒久化] — 2026-06-03
 
 ディスクイメージ「ブートせず中身取り出し」(2026-06-02 実装) の **ブラウザ実機目視を消化**。
