@@ -88,6 +88,27 @@
   や別の I/O port を見る可能性が高い。再開時は「ゲームから読まれる全 I/O port をログ」
   「BIOS sound ID メモリの内容を確認」で検出経路を特定すべき。
 
+- **MIDI 調査 (2026-06-04、TW212 = bio_100% TWMIDI.BAT)** — `?midi=1` で freepats を MEMFS に
+  載せ `np2kai_enable_midi(1)` する検証足場を一時的に作り、実機＋headless で切り分け (足場・計測は
+  すべて revert 済、本項に結論だけ残す)。**判明したこと**:
+  - **我々の MIDI エンジンは動く**: VERMOUTH 合成器ロード (`qb_vermouth_init` で module≠NULL)、
+    MPU98II↔VERMOUTH 接続 (`commng_create`→`cmmidi_create(…, "VERMOUTH", …, "GM")` が非NULL、
+    `cmmidi.connect=COMCONNECT_MIDI`) まで headless で成立。**無音は soft-clip でも freepats 品質でも
+    CPU でもない**。`commng_create` は `sdl/commng.c` でなく `native/qb_commng.c` が提供 (mout 既に
+    "VERMOUTH"。`sdl/commng.c` の `#if !defined(EMSCRIPTEN)` は対象外なので無関係)。
+  - **真因は game 側インターフェース**: TWMIDI.BAT は `middrv -X1 -t3` / `twins2` / `middrv -r`。
+    全 I/O OUT を重複排除ログした結果、MIDDRV (常駐 CS=`0314`) は **MPU98II(0xC0D0) に一切書かず**、
+    RS-232C シリアル (8251: `0x30`/`0x32`、`0x30`←`0xFE`=アクティブセンシング) ＋ 謎ポート `0x7FDF`
+    (←`0x90`=MIDI ノートオン) に出している。**`-X1` ≈ RS-MIDI (シリアル MIDI) 選択**で、我々が
+    VERMOUTH に繋いでいる MPU98II とは別経路。プリメ2 の「write 0 件」と同類 (game が我々の MPU を
+    使わない)。
+  - **Phase 4 の打ち手**: ①`-X1` の RS-MIDI(シリアル 0x30/0x32) または 0x7FDF ボードを VERMOUTH へ
+    ルーティング。②**逆に、MPU モードで起動する別 .bat があれば現状でも鳴る可能性**が高い
+    (我々の MPU↔VERMOUTH は動く) → 複数 .bat の音源モード違いを当たるのが安い。
+  - **MIDI 検証レシピ (再開用)**: create 前に freepats を MEMFS の CWD(/tmp) へ
+    (`/tmp/timidity.cfg` + `/tmp/freepats/{Tone,Drum}_000/*.pat`、layout は `qb_vermouth.c` 参照) →
+    `np2kai_enable_midi(1)` → create。freepats は deploy から除外 (33MB) なので production は MIDI OFF。
+
 - **FreeDOS(98) の完走** — 現状は HMA buffer 確保まで進むが、BIOS 拡張ハンドラ不足で
   `E869:075B` 付近に飛び込んで暴走。実機 `bios.rom` 利用 (著作権問題) か、
   `nosyscode` ベースの BIOS フック拡張で解決可能。優先度は低い（ゲームは
