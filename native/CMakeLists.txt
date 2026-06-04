@@ -173,6 +173,7 @@ set(EXPORTED_FUNCTIONS
     _np2kai_audio_get_bufsize
     _np2kai_audio_get_rate
     _np2kai_enable_midi
+    _np2kai_enable_midi_now
     _np2kai_debug_get_pc
     _np2kai_debug_get_cs
     _np2kai_debug_get_linear_pc
@@ -183,6 +184,8 @@ set(EXPORTED_FUNCTIONS
     _np2kai_debug_int21_count
     _np2kai_debug_int21_reset
     _np2kai_debug_get_reg16
+    _np2kai_debug_serial_midi_bytes
+    _np2kai_debug_serial_midi_active
     _np2kai_dos_stage_com
     _np2kai_dos_stage_exe
     _np2kai_dos_stage_script

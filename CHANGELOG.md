@@ -1,5 +1,55 @@
 # CHANGELOG
 
+## [MIDI が鳴る — RS-MIDI を VERMOUTH に結線 (遅延 on-demand + reset 跨ぎ修正)] — 2026-06-05
+
+TW212 (bio_100%) の TWMIDI.BAT で、FM とは別の **MIDI 音色がブラウザ実機で鳴る**ようになった。
+
+**真因の特定 (MIDDRV.DOC 精読 + コード突き合わせ):**
+- `MIDDRV.EXE` は常駐型 **標準 MIDI ファイル (SMF Format 0) 演奏ドライバ**。game (`twins2`) は INT 47h で
+  「曲 N を鳴らせ」と依頼し、MIDDRV が同梱 .mid をシーケンス→デバイスへ送出する。`-X1` = **RS-MIDI**
+  (シリアル MIDI)、`-t3` = マウスタイマでシーケンス。
+- NP2kai `io/serial.c` は 8251 を完全エミュし、データ書き込みを `cm_rs232c->write()` まで運んでいた。
+  ところが **`native/qb_commng.c` が `COMCREATE_SERIAL` を `com_nc` (no-connect) に落とし全バイト破棄**
+  していた = 無音の真因。本物の MIDDRV が本物の .mid を正しくワイヤまで出していたのに受け手が未接続だった。
+
+**実装 (A) — `qb_commng.c` で RS-MIDI を VERMOUTH に結線 (cmmidi.c は無改造):**
+- `device==COMCREATE_SERIAL && qb_vermouth_ready()` の時、内側 cmmidi (VERMOUTH シンク) を作り薄いラッパ
+  `com_serial` を返す。設計の肝 = 「送信が成立する `com_nc` の挙動 (getstat/lastwritesuccess/msg) を流用し、
+  `write` だけカウント+VERMOUTH へ転送」。8251 の TxRDY/FIFO drain が不変・`msg` が no-op なので MIDIRESET も無害。
+- cmmidi.c が無改造で済む確認: Emscripten では OS MIDI デバイス open ブロックが `#if !defined(EMSCRIPTEN)` で
+  除外され常に -1 → device 非依存で `midiout=="VERMOUTH"` 分岐に入る。`midiwrite` は running-status 対応の
+  完全な MIDI バイトパーサで realtime (0xFE 等) も吸収して `midiout_vermouth` へ流す。
+
+**ブラウザ遅延 on-demand — `enable_midi` は create 前必須 / ゲーム選択は起動後、を「reset で繋ぎ直す」で解決:**
+- `pccore_reset → iocore_reset → rs232c_reset` が毎リセットで `commng_create(SERIAL)` を呼ぶので、VERMOUTH を
+  後から読んでから reset すれば `com_nc → com_serial` に昇格する (コア再生成 不要)。
+- `bridge.c:np2kai_enable_midi_now()` (create 後に VERMOUTH 構築、mpuenable は触らない) +
+  `batscript.js:usesMidi()` (MIDI ドライバ検出) + `bridge.js:ensureMidiLoaded()` (MIDI レシピ Run 時のみ
+  freepats を `index.json` から fetch → `/tmp` 配置 → `enable_midi_now` → runStaged の reset で結線)。
+  **非 MIDI ゲームは freepats を一切 DL しない = 即プレイ維持**。診断 `qbDebug.midi()` → `{active, bytes}`。
+
+**reset 跨ぎの無音バグ修正 (実機で発覚):** 1 回目は鳴るが別 .bat を挟んで再起動すると無音 (active=true・
+bytes 増えるのに音だけ出ない)。真因 = `sound_reset` の `streamreset` が `sound_streamregist` 登録を全消去
+するのに cmmidi を singleton 保持していたため初回しか登録されなかった。`commng_destroy(com_serial)` で inner を
+release+NULL 化し、毎リセット作り直す = 毎回再登録 (stock MPU98II の「reset で NULL→遅延再生成」と同型。
+`rs232c_open` は `cm_rs232c==NULL` ガード付きなので生成はサイクル毎 1 回 = 重複/dangling 無し)。
+
+**思わぬ収穫 (音量):** 旧 create 前 `enable_midi(1)` は `mpuenable=1` で MPU 経路も VERMOUTH stream を二重登録し、
+同一 `vermouth_module` を 2 つの getpcm が食い合って音量激減していた。`enable_midi_now` は serial 単独 stream
+なので **peak ~27800/32767 (=77%) と健全**。MPU を触らない判断が音量面でも正解だった。
+
+**deploy:** freepats (33MB) を本番 (Cloudflare Pages) に同梱する方針に変更 (`tools/deploy.sh` の除外解除)。
+遅延 on-demand なので MIDI ゲーム起動時のみ初回 DL される。
+
+- **`native/qb_commng.c`** (+結線/再登録)、**`native/qb_vermouth.c`** (`qb_vermouth_ready()`)、
+  **`native/bridge.c` + `CMakeLists.txt`** (`np2kai_enable_midi_now` + 診断 export)、
+  **`web/player/batscript.js`** (`usesMidi`)、**`web/player/bridge.js`** (`ensureMidiLoaded` + Run フック + `qbDebug.midi`)。
+- **`tools/midi_serial_test.js`** 新設: TW212 を lha 展開→freepats を MEMFS→TWMIDI.BAT を実 Run 経路で
+  **2 サイクル**起動し、active / MIDI byte 増分 / audio peak を検証 (reset 跨ぎ回帰ガード)。
+
+検証: ビルド clean、2 サイクルとも active=true・bytes+2058・peak~27800、回帰なし (exec_env PASS / batscript 33-0 /
+JS 構文 OK、MIDI OFF 既定は `com_nc` で従来不変)。残: `-X0` MPU 直叩き経路 / MIDI+FM 同時の音量バランス。
+
 ## [快適化: async 自動クロック — 達成フレーム時間から CPU 倍率を逆算 (既定 ON)] — 2026-06-04
 
 CPU クロック倍率 (`np2cfg.multiple`) の「快適化」を計測で詰めた結果**当初前提が反転**し、最終的に

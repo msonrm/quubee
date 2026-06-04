@@ -29,7 +29,7 @@
 - [x] **サウンド対応 (基本)** — qb_soundmng リングバッファ + AudioContext + ScriptProcessorNode、プリメ2 で FM 音源確認、テンポはほぼ正しい
 - [x] **サウンド品質向上 (AudioWorklet 移行)** — `web/player/audio-worklet.js` 新規。postMessage で Int16Array 転送、Worklet 内部リング ~680ms。実機聴感で微ノイズ・途切れが大幅減
 - [x] **テンポ・音質チューニング (2026-05-27)** — wall-clock 56Hz catch-up 駆動でテンポ正規化、RGB565→RGBA32 LUT 化で主スレッド負荷削減、ソフトクリップ + vol_master=65 + `usefmgen=0` (opngen 採用) で低音ビリビリ歪みを実用レベルまで低減
-- [~] **MIDI (VERMOUTH + freepats) 配線一式** — MPU98II → cmmidi → VERMOUTH → sound_streamregist の経路を構築、`tools/setup_freepats.sh` で freepats 128 楽器のロードまで動作確認。ただし **音質に課題** (FM 音源との加算で「ビリビリ」歪み、freepats のサンプル品質も含む)。デフォルト OFF (= `np2cfg.mpuenable=0`) で同梱、`np2kai_enable_midi(1)` で再開可能だが JS 側 UI は外してある。詳細は将来課題を参照
+- [x] **MIDI (VERMOUTH + freepats) — 鳴る (2026-06-05)** — RS-MIDI (`-X1`, MIDDRV) を `qb_commng.c` で VERMOUTH に結線し、TW212 TWMIDI.BAT で実機ブラウザ発音をユーザー確認。boot は MIDI OFF (即プレイ)、MIDI レシピ Run 時だけ freepats を遅延ロードして有効化 (`enable_midi_now`)。reset 跨ぎ再登録も修正済。MPU98II 直叩き経路は別途 (未対応)。詳細は下記「✅ MIDI 鳴った」を参照
 - [~] **HDD スロット (C:/D:) と `np2kai_insert_hdd` ブリッジ (2026-05-27)** — SASI/IDE 4 ドライブのうち先頭 2 つを UI 露出。`.hdi/.thd/.nhd/.hdd` を `file-input` の accept に追加、ドロップ → `sxsi_devopen` → `pccore_reset` の流れで配線。`np2kai_eject_hdd` も追加。ただし **DOS 起動の HDD イメージは未確認** (BIOS ホールで FreeDOS と同じ壁にぶつかる可能性大、将来課題参照)
 
 ### 次のステップ（優先順）
@@ -88,26 +88,33 @@
   や別の I/O port を見る可能性が高い。再開時は「ゲームから読まれる全 I/O port をログ」
   「BIOS sound ID メモリの内容を確認」で検出経路を特定すべき。
 
-- **MIDI 調査 (2026-06-04、TW212 = bio_100% TWMIDI.BAT)** — `?midi=1` で freepats を MEMFS に
-  載せ `np2kai_enable_midi(1)` する検証足場を一時的に作り、実機＋headless で切り分け (足場・計測は
-  すべて revert 済、本項に結論だけ残す)。**判明したこと**:
+- [x] **✅ MIDI 鳴った (2026-06-05、TW212 = bio_100% TWMIDI.BAT)** — RS-MIDI (`-X1`) を VERMOUTH へ
+  結線し、実機ブラウザで FM とは別の MIDI 音色が鳴ることをユーザー確認。**遅延 on-demand 配線 + reset 跨ぎ
+  修正 + 本番 deploy 同梱**まで完了。経緯と実装は以下 (調査足場・計測は revert 済、結論だけ残す):
+  - **MIDDRV.DOC 精読で構造判明**: MIDDRV.EXE は常駐型 標準 MIDI ファイル(SMF Format 0) 演奏ドライバ。
+    game は INT 47h で「曲 N を鳴らせ」と依頼、MIDDRV が同梱 .mid をシーケンス→デバイスへ送出。
+    `-X` = デバイス (0:MPU / 1:RS-MIDI / 2:RS-MIDI ST1)、`-t` = タイマ (1:INT08h / 2:FM-B / 3:マウス割込)。
+  - **穴 = `qb_commng.c` が `COMCREATE_SERIAL` を `com_nc` で捨てていた**。NP2kai `io/serial.c` は 8251 を
+    完全エミュし `cm_rs232c->write()` までバイトを運んでいたのに受け手未接続だった。
+  - **実装 (A)**: `qb_commng.c` で `COMCREATE_SERIAL && qb_vermouth_ready()` 時に cmmidi の VERMOUTH シンク
+    (`com_serial` ラッパ) を返す。cmmidi.c は無改造 (Emscripten では OS MIDI デバイス open が `#if` で除外
+    され device 非依存で VERMOUTH 分岐、`midiwrite` が生 MIDI バイトをパース)。診断 `qbDebug.midi()`。
+  - **判明したこと (旧調査)**: 我々の MIDI エンジン (VERMOUTH 合成器+接続) は動いていた。無音は soft-clip でも
+    freepats 品質でも CPU でもなく、上記の「シリアル受け手未接続」だった。
   - **我々の MIDI エンジンは動く**: VERMOUTH 合成器ロード (`qb_vermouth_init` で module≠NULL)、
-    MPU98II↔VERMOUTH 接続 (`commng_create`→`cmmidi_create(…, "VERMOUTH", …, "GM")` が非NULL、
-    `cmmidi.connect=COMCONNECT_MIDI`) まで headless で成立。**無音は soft-clip でも freepats 品質でも
-    CPU でもない**。`commng_create` は `sdl/commng.c` でなく `native/qb_commng.c` が提供 (mout 既に
-    "VERMOUTH"。`sdl/commng.c` の `#if !defined(EMSCRIPTEN)` は対象外なので無関係)。
-  - **真因は game 側インターフェース**: TWMIDI.BAT は `middrv -X1 -t3` / `twins2` / `middrv -r`。
-    全 I/O OUT を重複排除ログした結果、MIDDRV (常駐 CS=`0314`) は **MPU98II(0xC0D0) に一切書かず**、
-    RS-232C シリアル (8251: `0x30`/`0x32`、`0x30`←`0xFE`=アクティブセンシング) ＋ 謎ポート `0x7FDF`
-    (←`0x90`=MIDI ノートオン) に出している。**`-X1` ≈ RS-MIDI (シリアル MIDI) 選択**で、我々が
-    VERMOUTH に繋いでいる MPU98II とは別経路。プリメ2 の「write 0 件」と同類 (game が我々の MPU を
-    使わない)。
-  - **Phase 4 の打ち手**: ①`-X1` の RS-MIDI(シリアル 0x30/0x32) または 0x7FDF ボードを VERMOUTH へ
-    ルーティング。②**逆に、MPU モードで起動する別 .bat があれば現状でも鳴る可能性**が高い
-    (我々の MPU↔VERMOUTH は動く) → 複数 .bat の音源モード違いを当たるのが安い。
-  - **MIDI 検証レシピ (再開用)**: create 前に freepats を MEMFS の CWD(/tmp) へ
-    (`/tmp/timidity.cfg` + `/tmp/freepats/{Tone,Drum}_000/*.pat`、layout は `qb_vermouth.c` 参照) →
-    `np2kai_enable_midi(1)` → create。freepats は deploy から除外 (33MB) なので production は MIDI OFF。
+  - **ブラウザ遅延 on-demand 配線**: `enable_midi` は create 前必須だがゲーム選択は起動後、という
+    lifecycle 制約は「reset で繋ぎ直す」で回避 (`pccore_reset→iocore_reset→rs232c_reset` が毎リセットで
+    `commng_create(SERIAL)` を呼ぶ)。`bridge.c:np2kai_enable_midi_now()` + `batscript.js:usesMidi()` +
+    `bridge.js:ensureMidiLoaded()` (MIDI レシピ Run 時だけ freepats を `index.json` から fetch→`/tmp`→
+    `enable_midi_now`→runStaged の reset で結線)。非 MIDI ゲームは freepats を一切 DL しない=即プレイ維持。
+  - **reset 跨ぎバグ修正**: `sound_reset` の `streamreset` が `sound_streamregist` 登録を全消去するのに
+    cmmidi を singleton 保持していたため、別 .bat を挟んで再起動すると無音 (active=true・bytes 増えるのに音だけ
+    出ない) になった。`commng_destroy(com_serial)` で inner を release+NULL 化し、毎リセット作り直す=毎回再登録
+    (stock MPU と同型)。`tools/midi_serial_test.js` を 2 サイクル実行に拡張して恒久ガード。
+  - **deploy**: freepats (33MB) を本番 (Cloudflare Pages) に同梱する方針に変更 (`tools/deploy.sh` の除外解除)。
+    遅延 on-demand なので MIDI ゲーム起動時のみ初回 DL。
+  - **残**: ①実機で音量/音色のさらなる詰め (headless peak ~27800/32767=健全) ②`-X0` MPU 直叩きゲームは
+    別経路 (現状未対応・mpuenable 再 init が要る) ③MIDI+FM 同時 (twmidifm.bat) の音量バランス。
 
 - **FreeDOS(98) の完走** — 現状は HMA buffer 確保まで進むが、BIOS 拡張ハンドラ不足で
   `E869:075B` 付近に飛び込んで暴走。実機 `bios.rom` 利用 (著作権問題) か、

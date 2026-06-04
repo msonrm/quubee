@@ -36,3 +36,11 @@ void qb_vermouth_term(void) {
         vermouth_module = NULL;
     }
 }
+
+/* VERMOUTH 合成器が利用可能か (= MIDI 有効化 + freepats ロード成功)。
+ * qb_commng.c が RS-MIDI(シリアル) を VERMOUTH に繋ぐかの gate に使う。
+ * vermouth_module != NULL は「enable_midi(1) → qb_vermouth_init で midimod_create+loadall 成功」
+ * と同値なので、これ 1 つで「MIDI 経路を生かすか」を判定できる。 */
+int qb_vermouth_ready(void) {
+    return vermouth_module != NULL;
+}

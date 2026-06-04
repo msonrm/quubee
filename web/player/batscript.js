@@ -24,6 +24,11 @@
         'pmd', 'pmd98', 'pmdb2', 'cats', 'calib', 'mfree',
     ]);
 
+    // MIDI (RS-MIDI/MPU) を鳴らす常駐ドライバ。これらを使うレシピは VERMOUTH (soundfont) が
+    // 要るので、Run 時に遅延ロード+有効化する (FM 専用の mdrv98 等とは区別する)。MIDDRV は
+    // 標準 MIDI ファイル演奏ドライバ (-X1 で RS-MIDI シリアルへ送出)。
+    const MIDI_DRIVER_NAMES = new Set(['middrv', 'middrv98', 'middrvpc']);
+
     // .bat の 1 行を解釈して { kind, ... } に分類する。
     function parseLine(line) {
         let t = line.trim();
@@ -148,7 +153,16 @@
         return out.join(' ');
     }
 
-    const api = { parse, resolveMain, resolveSequence, buildCmdline, programBasename, DRIVER_NAMES };
+    // レシピが MIDI ドライバ (MIDDRV 等) を起動するか。Run 時に VERMOUTH (soundfont) を
+    // 遅延ロードするかの判定に使う。
+    function usesMidi(recipe) {
+        if (!recipe || !recipe.lines) return false;
+        return recipe.lines.some((l) =>
+            l.kind === 'command' &&
+            MIDI_DRIVER_NAMES.has(l.base.toLowerCase().replace(/\.(com|exe|bat)$/, '')));
+    }
+
+    const api = { parse, resolveMain, resolveSequence, buildCmdline, programBasename, usesMidi, DRIVER_NAMES };
     if (typeof module !== 'undefined' && module.exports) {
         module.exports = api;
     } else {

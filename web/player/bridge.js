@@ -681,6 +681,42 @@ NP2KaiModule({
     // np2kai_dos_get_exit(int* code) — JS では HEAP に書き込み番地を渡す
     const dosGetExitFn = M.cwrap('np2kai_dos_get_exit', 'number', ['number']);
 
+    // ---- MIDI 遅延 on-demand ロード ----
+    // MIDI ドライバ (MIDDRV 等) を使うレシピを Run した時だけ、soundfont (freepats) を取得して
+    // VERMOUTH を構築する。非 MIDI ゲームは一切ダウンロードしない (「即プレイ」維持)。
+    // VERMOUTH を読んだ後の reset (runStaged 内) で rs232c_reset が COMCREATE_SERIAL を VERMOUTH に
+    // 繋ぎ直し、RS-MIDI (-X1) の MIDI バイトが合成される (C 側 qb_commng.c)。create のやり直しは不要。
+    const enableMidiNow = M.cwrap('np2kai_enable_midi_now', 'number', ['number']);
+    let midiLoadState = 'none';   // 'none' | 'ready' | 'failed'
+    const mkdirSafe = (p) => { try { M.FS.mkdir(p); } catch (_) { /* 既存 */ } };
+    async function ensureMidiLoaded() {
+        if (midiLoadState === 'ready')  return true;
+        if (midiLoadState === 'failed') return false;   // 同セッション内の再試行はしない
+        try {
+            runStatusEl.textContent = 'MIDI: 音色データ (freepats) を取得中…';
+            const idx = await (await fetch('assets/freepats/index.json')).json();
+            // timidity.cfg は data dir (CWD=/tmp) 直下、.pat は /tmp/freepats/<rel> に置く
+            // (cfg 内 `dir freepats` 前提。C 側 qb_vermouth_init が CWD から読む)。
+            const cfgBuf = await (await fetch('assets/freepats/' + idx.cfg)).arrayBuffer();
+            M.FS.writeFile('/tmp/' + idx.cfg, new Uint8Array(cfgBuf));
+            mkdirSafe('/tmp/freepats');
+            await Promise.all(idx.pats.map(async (rel) => {
+                const slash = rel.lastIndexOf('/');
+                if (slash > 0) mkdirSafe('/tmp/freepats/' + rel.slice(0, slash));
+                const buf = await (await fetch('assets/freepats/' + rel)).arrayBuffer();
+                M.FS.writeFile('/tmp/freepats/' + rel, new Uint8Array(buf));
+            }));
+            const ok = enableMidiNow(handle);   // VERMOUTH 構築 (次の reset で結線)
+            midiLoadState = ok ? 'ready' : 'failed';
+            if (!ok) console.warn('[midi] VERMOUTH ロード失敗 (freepats 配置/timidity.cfg を確認)');
+            return !!ok;
+        } catch (e) {
+            midiLoadState = 'failed';
+            console.warn('[midi] freepats 取得失敗 (production は未配備の可能性):', e);
+            return false;
+        }
+    }
+
     let loaderDiskCached = null;  // 一度 fetch すれば再利用 (毎回 reset で再ロード)
     async function loadLoaderDisk() {
         if (!loaderDiskCached) {
@@ -840,6 +876,13 @@ NP2KaiModule({
         runButton.blur();            // Enter で Run が再 click されないよう focus を外す
         const userArgs = runCmdline.value;
         try {
+            // MIDI ドライバ (MIDDRV 等) を使うレシピなら、staging 前に soundfont を遅延ロードして
+            // VERMOUTH を構築する。直後の runStaged 内 reset でシリアル→VERMOUTH が結線される。
+            // 失敗しても続行 (= FM/BEEP 経路でそのまま起動、無音にはならない)。
+            if (selectedRecipe && qbBatScript.usesMidi(selectedRecipe.recipe)) {
+                const ok = await ensureMidiLoaded();
+                if (!ok) runStatusEl.textContent = 'MIDI 準備に失敗 — 音源無しで起動します';
+            }
             // ② .bat がドライバ+本体の複数コマンド (制御フロー無し) なら、ミニ COMMAND.COM で
             // 1 DOS セッション内に順次 EXEC する (音源ドライバ TSR が本体に効く)。
             if (selectedRecipe) {
@@ -996,8 +1039,10 @@ NP2KaiModule({
     const getReg16    = M.cwrap('np2kai_debug_get_reg16',    'number', ['number', 'number']);
     const setFmgen    = M.cwrap('np2kai_set_fmgen',          'number', ['number']);
     const setMul      = M.cwrap('np2kai_set_clock_multiple', 'number', ['number']);
+    const midiBytes   = M.cwrap('np2kai_debug_serial_midi_bytes',  'number', ['number']);
+    const midiActive  = M.cwrap('np2kai_debug_serial_midi_active', 'number', ['number']);
 
-    // ---- async 自動クロック (快適化, プロトタイプ・既定 OFF) ----
+    // ---- async 自動クロック (快適化, 既定 ON) ----
     // 達成フレーム時間から CPU クロック倍率を「逆算」する適応コントローラ。run_frame の
     // wall-time を EMA で測り、1 step の real-time 予算 (= MS_PER_STEP) に対する負荷比で
     // multiple を [floor, ceil] 内で 1 段ずつ増減する。host が速ければ自動で上げて快適化し
@@ -1112,6 +1157,10 @@ NP2KaiModule({
             return stats;
         },
         int21Reset: () => { resetInt21(); return 'int21 counters reset'; },
+        // RS-MIDI 診断: シリアル(8251)へ流れた MIDI バイト数と、RS-MIDI→VERMOUTH ルーティングの生死。
+        // active=false なら MIDI 無効 or VERMOUTH 未ロード (com_nc 落ち)。bytes が増えていれば MIDDRV が
+        // 実際に送出している。bytes>0 かつ無音なら VERMOUTH 合成/freepats 側を疑う。
+        midi: () => ({ active: !!midiActive(handle), bytes: midiBytes(handle) }),
         sample: (n=5, intervalMs=200) => {
             const out = [];
             let i = 0;
@@ -1229,8 +1278,8 @@ NP2KaiModule({
             } else {
                 runFrame(handle);
             }
-            // 音声は SDL コールバック (audio DAC 駆動) が pull するので、ここで
-            // 明示ポンプは不要 (C1)。run_frame は sndstream に逐次レンダするだけ。
+            // 音声は ScriptProcessorNode.onaudioprocess (audio DAC 駆動) が pull する
+            // ので、ここで明示ポンプは不要 (C1)。run_frame は sndstream に逐次レンダするだけ。
             nextDue += MS_PER_STEP;
             steps++;
         }

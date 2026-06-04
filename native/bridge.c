@@ -32,6 +32,7 @@
 void initload(void);          /* defined in qb_ini.c */
 void qb_vermouth_init(void);  /* defined in qb_vermouth.c */
 void qb_vermouth_term(void);  /* defined in qb_vermouth.c */
+int  qb_vermouth_ready(void); /* defined in qb_vermouth.c (vermouth_module != NULL) */
 
 typedef struct {
 	int initialized;
@@ -63,6 +64,22 @@ int np2kai_set_data_dir(const char *path) {
 void np2kai_enable_midi(int enable) {
 	s_midi_enable = enable ? 1 : 0;
 	LOGD("np2kai_enable_midi: %d", s_midi_enable);
+}
+
+/* 遅延 MIDI 有効化 (ブラウザ on-demand)。create 後に VERMOUTH を構築する。
+ * 前提: freepats (CWD/timidity.cfg と CWD/freepats/{Tone,Drum}_000/ の .pat 群) を呼び出し前に配置済み
+ * (CWD は create 内の chdir(data_dir) で data dir になっている)。
+ * 直後に np2kai_reset を呼ぶと iocore_reset→rs232c_reset が COMCREATE_SERIAL を VERMOUTH に
+ * 繋ぎ直し、RS-MIDI (-X1, 例 MIDDRV) の MIDI バイトが合成されるようになる。
+ * MPU は使わない経路なので mpuenable は触らない (VERMOUTH stream を二重登録しないため)。
+ * 戻り値: VERMOUTH ロード成否 (1=成功 / 0=失敗: freepats 不在等)。冪等。 */
+int np2kai_enable_midi_now(np2kai_handle h) {
+	if (!h) return 0;
+	s_midi_enable = 1;
+	if (!qb_vermouth_ready()) {
+		qb_vermouth_init();
+	}
+	return qb_vermouth_ready();
 }
 
 np2kai_handle np2kai_create(void) {
@@ -202,6 +219,13 @@ extern int  qb_dos_dbg_ah_count(int ah);
 extern void qb_dos_dbg_ah_reset(void);
 int  np2kai_debug_int21_count(int ah) { return qb_dos_dbg_ah_count(ah); }
 void np2kai_debug_int21_reset(void)   { qb_dos_dbg_ah_reset(); }
+
+/* RS-MIDI 診断 (qbDebug.midi): シリアル(8251)へ流れた MIDI バイト数と、RS-MIDI→VERMOUTH
+ * ルーティングが生きているか。MIDDRV -X1 が実際に送出しているか / 受け手が繋がったかの確認用。 */
+extern UINT32 qb_serial_midi_bytes(void);   /* qb_commng.c */
+extern int    qb_serial_midi_active(void);  /* qb_commng.c */
+uint32_t np2kai_debug_serial_midi_bytes(np2kai_handle h)  { if (!h) return 0; return (uint32_t)qb_serial_midi_bytes(); }
+int      np2kai_debug_serial_midi_active(np2kai_handle h) { if (!h) return 0; return qb_serial_midi_active(); }
 
 uint64_t np2kai_debug_get_pc(np2kai_handle h) {
 	if (!h) return 0;
