@@ -101,11 +101,14 @@ int np2kai_set_audio_rate(uint32_t rate);
 __attribute__((visibility("default")))
 int np2kai_set_fmgen(int on);
 
-/* リングバッファから PCM をステレオ int16 で取り出す。
- * dst には max_frames * 2 個の int16 ぶんの領域が必要。
- * 返り値は実際に書いたフレーム数 (0 ならバッファ空)。 */
+/* 音声 pull 型 (C1)。JS の ScriptProcessorNode.onaudioprocess から呼ばれ、
+ * dst に frames ぶんのステレオ int16 (L,R 交互) を書き出す。 */
 __attribute__((visibility("default")))
-uint32_t np2kai_audio_drain(np2kai_handle h, int16_t *dst, uint32_t max_frames);
+void np2kai_audio_fill(np2kai_handle h, int16_t *dst, uint32_t frames);
+
+/* ScriptProcessorNode に使うバッファ長 (ステレオフレーム数) を返す */
+__attribute__((visibility("default")))
+uint32_t np2kai_audio_get_bufsize(np2kai_handle h);
 
 /* 現在のサンプリングレートを返す (sound_create に渡された値) */
 __attribute__((visibility("default")))

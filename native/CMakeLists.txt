@@ -169,7 +169,8 @@ set(EXPORTED_FUNCTIONS
     _np2kai_mouse_move
     _np2kai_mouse_button
     _np2kai_set_audio_rate
-    _np2kai_audio_drain
+    _np2kai_audio_fill
+    _np2kai_audio_get_bufsize
     _np2kai_audio_get_rate
     _np2kai_enable_midi
     _np2kai_debug_get_pc

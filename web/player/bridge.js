@@ -181,50 +181,35 @@ NP2KaiModule({
         setDriveName('fdd', 0, '(no disk)');
     }
 
-    // ---- オーディオ再生 (AudioWorklet) ----
-    // ScriptProcessorNode から移行。Worklet は別スレッドで動くため、メインスレッ
-    // ドのジャンクで audio コールバックが詰まらず micro-underrun を減らせる。
-    // Wasm ↔ Worklet 間は postMessage で Int16Array を転送 (SharedArrayBuffer 不要)。
-    let pumpAudio = null;
+    // ---- オーディオ再生 (pull 型, C1) ----
+    // ScriptProcessorNode.onaudioprocess が audio DAC クロックで発火し、毎回 C の
+    // np2kai_audio_fill を呼んで出力バッファを直接埋める。生成 (sound_pcmlock) が
+    // この pull の中で起きるので、マスタークロックは audio DAC ただ 1 つ = ドリフト無し
+    // (旧: rAF で生成して push する二重クロック構成を撤去)。別スレッド化 (AudioWorklet +
+    // SharedArrayBuffer) は将来の C2。SPN は非推奨 API だが全ブラウザで動作し、Emscripten
+    // SDL2 の非 worklet 音声も内部でこれを使う。
     if (audioCtx && handle) {
-        const drainFn = M.cwrap('np2kai_audio_drain', 'number',
-            ['number', 'number', 'number']);
-        const CHUNK = 1024;  // 1 回の drain で取り出すフレーム数 (~21ms @48k)
-        const heapPtr = M._malloc(CHUNK * 2 * 2);  // ステレオ int16
+        const bufSize = M.ccall('np2kai_audio_get_bufsize', 'number', ['number'], [handle]) || 2048;
+        const fillFn  = M.cwrap('np2kai_audio_fill', null, ['number', 'number', 'number']);
+        const heapPtr = M._malloc(bufSize * 2 * 2);  // ステレオ int16
+        const node = audioCtx.createScriptProcessor(bufSize, 0, 2);
+        node.onaudioprocess = (e) => {
+            fillFn(handle, heapPtr, bufSize);
+            // ALLOW_MEMORY_GROWTH で heap が再確保されることがあるので毎回 view を取り直す
+            const pcm = new Int16Array(M.HEAPU8.buffer, heapPtr, bufSize * 2);
+            const L = e.outputBuffer.getChannelData(0);
+            const R = e.outputBuffer.getChannelData(1);
+            for (let i = 0; i < bufSize; i++) {
+                L[i] = pcm[i * 2]     / 32768;
+                R[i] = pcm[i * 2 + 1] / 32768;
+            }
+        };
+        node.connect(audioCtx.destination);
+        M._qbAudioNode = node;  // GC 防止: SPN を永続参照に固定
 
-        try {
-            await audioCtx.audioWorklet.addModule('player/audio-worklet.js');
-            const node = new AudioWorkletNode(audioCtx, 'qb-player', {
-                numberOfInputs: 0,
-                numberOfOutputs: 1,
-                outputChannelCount: [2],
-            });
-            node.connect(audioCtx.destination);
-
-            // メインスレッドから Wasm リングを drain → Worklet へ送る。
-            // rAF ループから毎フレーム呼ぶ。1 rAF (16ms) で約 800 frame 生産される
-            // ので、通常は 1 回の drain で吸い切れる。詰まった時のために CHUNK 単位で
-            // ループする。
-            pumpAudio = () => {
-                while (true) {
-                    const n = drainFn(handle, heapPtr, CHUNK);
-                    if (n <= 0) break;
-                    const view = new Int16Array(M.HEAPU8.buffer, heapPtr, n * 2);
-                    const out = new Int16Array(n * 2);
-                    out.set(view);
-                    node.port.postMessage(out, [out.buffer]);
-                    if (n < CHUNK) break;
-                }
-            };
-        } catch (e) {
-            console.error('AudioWorklet setup failed:', e);
-        }
-
-        // ブラウザのオートプレイ規制により、最初のユーザー操作まで AudioContext は
-        // 'suspended' 状態。canvas クリックでまとめて resume する。
+        // ブラウザのオートプレイ規制対策: 最初のユーザー操作で AudioContext を resume。
         const resumeAudio = () => {
             if (audioCtx.state !== 'suspended') return;
-            // resume 成功後にだけリスナを外す (失敗時は次のジェスチャで再試行)。
             audioCtx.resume().then(() => {
                 canvas.removeEventListener('click',       resumeAudio);
                 canvas.removeEventListener('keydown',     resumeAudio);
@@ -1141,7 +1126,7 @@ NP2KaiModule({
     // RGB565 → RGBA8888 LUT (65536 × 4 byte = 256KB)。
     // 旧実装は per-pixel で 4 つのビット演算 + 4 つの代入 = 640×400 で
     // 5-15ms / frame を主スレッドで消費していた。LUT 1 回引きに置き換えて
-    // ~1-2ms に短縮し、その分を pumpAudio や run_frame の余裕に回す。
+    // ~1-2ms に短縮し、その分を run_frame の余裕に回す。
     // little-endian 前提で Uint32 を直接書く (RGBA バイト並び = AABBGGRR)。
     const RGB565_LUT = new Uint32Array(65536);
     for (let p = 0; p < 65536; p++) {
@@ -1176,8 +1161,8 @@ NP2KaiModule({
         let steps = 0;
         while (now >= nextDue && steps < MAX_CATCHUP) {
             runFrame(handle);
-            // 音は step ごとに即ポンプ (リングを最新に保つ)
-            if (pumpAudio) pumpAudio();
+            // 音声は SDL コールバック (audio DAC 駆動) が pull するので、ここで
+            // 明示ポンプは不要 (C1)。run_frame は sndstream に逐次レンダするだけ。
             nextDue += MS_PER_STEP;
             steps++;
         }

@@ -95,6 +95,12 @@ np2kai_handle np2kai_create(void) {
 	 * が出る)。CPU は重めだが -O3 で吸収できる。実行時 A/B は np2kai_set_fmgen /
 	 * qbDebug.fmgen(0|1) で可能 (次の Run で反映)。 */
 	np2cfg.usefmgen = 1;
+	/* オーディオレイテンシ (ms)。soundmng_create が rate*ms/(2*1000) を 2 の冪へ丸めて
+	 * バッファ長にする。ini 既定 0 のままだと最小 (20ms→512frame) になり、メインスレッド
+	 * の ScriptProcessor コールバックがジャンクで underrun しやすい。100 で ~170ms の
+	 * 安全側に置く (48k: 2400→4096frame×2)。詰めたければ下げる。pull 型 (C1) なので
+	 * このバッファはレイテンシのみに効き、ドリフトには無関係。 */
+	np2cfg.delayms = 100;
 	commng_initialize();      /* cmmidi_initailize で midictrlindex テーブル初期化 */
 	if (s_data_dir[0]) {
 		file_setcd(s_data_dir);   /* writable dir for font.tmp, saves, etc. */
@@ -299,9 +305,17 @@ int np2kai_set_fmgen(int on) {
 	return np2cfg.usefmgen;
 }
 
-uint32_t np2kai_audio_drain(np2kai_handle h, int16_t *dst, uint32_t max_frames) {
-	if (!h || !dst) return 0;
-	return qb_audio_drain(dst, max_frames);
+/* 音声 pull 型 (C1)。JS の ScriptProcessorNode.onaudioprocess (audio DAC クロック)
+ * が呼ぶ唯一の consumer。dst に frames ぶんのステレオ int16 を書く。 */
+void np2kai_audio_fill(np2kai_handle h, int16_t *dst, uint32_t frames) {
+	if (!h || !dst) return;
+	qb_audio_fill(dst, frames);
+}
+
+/* ScriptProcessorNode のバッファ長 (= sndstream ブロック長)。JS が SPN 生成時に使う。 */
+uint32_t np2kai_audio_get_bufsize(np2kai_handle h) {
+	if (!h) return 0;
+	return qb_audio_get_bufsize();
 }
 
 uint32_t np2kai_audio_get_rate(np2kai_handle h) {

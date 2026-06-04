@@ -1,5 +1,40 @@
 # CHANGELOG
 
+## [音声を pull 型に再設計 — ドリフト由来のプチ/途切れを根絶 (劇的音質向上)] — 2026-06-04
+
+FM 音声が比較対象 **irori/np2-wasm** より明確に劣る (数秒ごとの「プチッ」「一瞬の途切れ」) 問題を、
+**音声デリバリのアーキテクチャを pull 型に戻して**根治。実機 A/B で「AM ラジオと CD くらい違う」レベルの
+劇的改善・途切れ皆無をユーザー確認済み。
+
+**真因 = クロックのマスターが2つでドリフト**: 旧実装はプッシュ型だった — `np2kai_run_frame` を rAF
+(`performance.now` の 56Hz catch-up) で回して生成 PCM を C リング→postMessage→AudioWorklet リング(~680ms)
+に push し、Worklet が再生。生成レートは system 時計、消費レートは audio DAC の水晶発振器で、**別クロックが
+必ずドリフト**し、リングが周期的に溢れ (古サンプル破棄=プチ) / 枯れ (無音=途切れ) ていた。`-O0` 時代に
+メインスレッドジャンクから再生を守るため Worklet を足したが、**生成をメインスレッドに残したまま**だったため
+ドリフトを再混入していた (調査で `sound.c` が CPU 駆動で呼ぶ `soundmng_sync` を乗っ取って push していたのが
+スモーキングガン)。NP2kai の `sound.c` (`sound_pcmlock`/`pcmunlock`) は本来**オーディオコールバックから
+引かれる pull 型前提**の設計で、irori はそれを SDL でそのまま使うから綺麗だった。
+
+- **`native/qb_soundmng.c`**: 自前リング + `qb_audio_drain` を撤去。`qb_audio_fill(dst,frames)` を公開し、
+  `sound_pcmlock`→soft-clip→`sound_pcmunlock` を引く**唯一の consumer** に。`soundmng_sync` は **no-op 化**
+  (二重消費回避)。`streamprepare` は `remain` 上限管理で、consumer が fill だけでも sndstream は溢れない。
+  バッファ長 = `soundmng_create` が `rate*ms/2000` を 2 の冪へ丸めた値 (= ScriptProcessorNode バッファ長)。
+- **`web/player/bridge.js`**: AudioWorklet + メインスレッド pump + postMessage を撤去し、
+  **`ScriptProcessorNode.onaudioprocess` (audio DAC クロックで発火) が毎回 `np2kai_audio_fill` を直接 pull**
+  する形に。これでマスタークロックが audio DAC ただ 1 つ = **ドリフト原理的に消滅**。`audio-worklet.js` 削除。
+- **`native/bridge.c/.h`・`CMakeLists.txt`**: `np2kai_audio_drain` → `np2kai_audio_fill` +
+  `np2kai_audio_get_bufsize` に置換。`np2cfg.delayms=100` を明示 (ini 既定 0 だと最小バッファで underrun)。
+- **SDL を使わなかった理由**: irori と同じ `SDL_OpenAudio` 経路 (`-sUSE_SDL=2`) も検討したが、SDL2 ポートの
+  ネットワーク取得 + 書き込み可能 emscripten cache (`/usr/share/emscripten/cache` は root 所有で不可) を要求し
+  環境と不適合。**SDL 依存を捨て、ScriptProcessorNode で同型 pull を自前 glue で実装** (我々の独自プラットフォーム
+  層方針とも一致・SAB 不要なのでデプロイに COOP/COEP も不要)。音色は変えず (soft-clip 据え置き)、変えたのは
+  デリバリ方式だけ。CPU 負荷は不変 (FM 合成量は同じ・むしろ postMessage コピー撤去で微減)。
+- **別スレッド化 (AudioWorklet + SharedArrayBuffer でオーディオスレッド生成 = C2)** は将来課題。SPN は非推奨
+  API だが全ブラウザで動作し、Emscripten SDL2 の非 worklet 音声も内部でこれを使う。
+
+検証: ビルド clean、headless bench **77.6fps** (CPU 退行なし)、exec_env_test PASS (DOS ローダ/EXEC 回帰なし)、
+**ブラウザ実機でユーザーが劇的音質向上・途切れ皆無を確認**。
+
 ## [HLE-DOS: EXEC 子の env を per-child 化し argv[0] を子パスに正規化 (C1)] — 2026-06-04
 
 AH=4Bh EXEC の継承 (env_seg=0) で、子の PSP[0x2C] が最上位プログラムの env を共有し argv[0] が
