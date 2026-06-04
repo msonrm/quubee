@@ -1,5 +1,45 @@
 # CHANGELOG
 
+## [快適化: async 自動クロック — 達成フレーム時間から CPU 倍率を逆算 (既定 ON)] — 2026-06-04
+
+CPU クロック倍率 (`np2cfg.multiple`) の「快適化」を計測で詰めた結果**当初前提が反転**し、最終的に
+**自作の適応コントローラ (async 自動クロック)** を実装した。実機ブラウザで「おおむね快適・音切れ無し」を
+ユーザー確認済み。
+
+**計測で判明したこと (CPU 飽和の自作 busy-loop 自己起動ディスクで headless 計測):**
+- run_frame コストは `fps(M) ≈ 3300 / M` (反比例)。real-time 目標 = PC-98 vsync 56.4Hz に対し
+  **multiple=42 は headless 78.6fps で楽に超える** (余裕 1.4×)。TODO の「42 で音声 underrun 再発」懸念は
+  非代表的な FreeDOS ベンチからの誤外挿だった。
+- **大半のゲームは vsync 待ちで HLT する → HLT fast-forward (`hltflag=pccore.multiple`) で倍率が
+  ほぼ無料**。倍率コストが効くのは「毎フレーム CPU 飽和する稀なゲーム」だけ。
+  → **静的な multiple バンプは低価値** (共通ケース=HLT に無益・稀な CPU 飽和に危険) という結論。
+
+**multiple を live 変更する罠:** `gdc.dispclock ∝ pccore.multiple` (gdc.c) がフレームあたり CPU 予算を
+決めるため、`pccore.multiple` だけ書いても `gdc_updateclock()` を呼ばないと**倍率変更が一切効かない**
+(実測で確認)。正しい live 反映は pccore.c の async-CPU クロック変更と同一カスケード
+(`pcm86/nevent/sound/beep/mpu98ii/keyboard/mouseif_changeclock` + `gdc_updateclock`) が必須。
+
+**engine の `SUPPORT_ASYNC_CPU` は使えない:** 実時間フィードバック `lastTimingValue` が初期化以外
+どこにも代入されず**未結線** → 有効化しても throttle-down せず maxmultiple へ上げ続けるだけ。なので
+フラグ有効化ではなく、engine の調整カスケードだけ借りて**フィードバックは我々の実時間信号で駆動**する。
+
+- **`native/bridge.{c,h}` + `CMakeLists.txt`**: `np2kai_set_clock_multiple()` を追加 (reset 不要の
+  live カスケード。np2cfg.multiple も書くので次 Run でも保持)。
+- **`web/player/bridge.js`**: 適応コントローラ `autoClock` を run loop に実装。run_frame の wall-time を
+  EMA で測り、1 step 予算 (1000/56ms) に対する負荷比で multiple を **[floor=20, ceil=42]** で 1 段ずつ
+  増減 (hi=0.70/lo=0.40 ヒステリシス、評価 30rAF 毎)。host が速ければ自動で上げ (HLT-idle ゲームは
+  ceil 張り付き)、遅ければ下げて pull 音声の枯渇を未然に防ぐ。**既定 ON** (重い host では floor=20 まで
+  絞れるので最悪でも現挙動と同等)。`qbDebug.autoclock(0|1[,ceil])` / `qbDebug.multiple(n)` 手動固定を公開。
+- **ceil=42 の根拠**: 60 だと vsync ロックゲームの CPU-bound バースト (ステージ遷移等) が速すぎになる
+  (Nyahax で確認)。HLT 中の高倍率はプレイに無益で遷移だけ速くなる純粋な downside のため、速度上限を
+  仕様の x42 快適化目標に固定。
+- **`tools/bench_cpu/`**: CPU 飽和ベンチ資産を新設 (`boot_busy.asm` + `busy.d88` + `build.sh` +
+  倍率 sweep `bench_multiple.js` + コントローラ収束テスト `test_autoclock.js`)。収束テスト合格:
+  busy→24 安定 / HLT-idle→42 安定、発振なし。
+
+検証: ビルド clean、headless bench (default path) 退行なし、exec_env_test PASS、JS スイート4本 pass、
+収束テスト PASS、ブラウザ実機でユーザー確認済 (快適・音切れ無し)。
+
 ## [音声を pull 型に再設計 — ドリフト由来のプチ/途切れを根絶 (劇的音質向上)] — 2026-06-04
 
 FM 音声が比較対象 **irori/np2-wasm** より明確に劣る (数秒ごとの「プチッ」「一瞬の途切れ」) 問題を、

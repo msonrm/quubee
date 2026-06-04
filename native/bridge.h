@@ -101,6 +101,14 @@ int np2kai_set_audio_rate(uint32_t rate);
 __attribute__((visibility("default")))
 int np2kai_set_fmgen(int on);
 
+/* CPU クロック倍率の live 設定 (快適化 A/B / async 自動クロック / ベンチ用)。倍率↑ = エミュ CPU
+ * 高速化だが host 負荷も比例増 (CPU-bound 時。HLT-idle 時は HLT fast-forward でほぼ無影響)。
+ * pull 型音声では host が追いつかない倍率にすると音声が枯れて途切れるので real-time を割らない
+ * 範囲で使う。reset 不要でその場反映 (engine と同一の changeclock + gdc_updateclock カスケード)、
+ * np2cfg.multiple も書くので次の Run でも保持。戻り値: クランプ後の適用倍率。 */
+__attribute__((visibility("default")))
+int np2kai_set_clock_multiple(int multiple);
+
 /* 音声 pull 型 (C1)。JS の ScriptProcessorNode.onaudioprocess から呼ばれ、
  * dst に frames ぶんのステレオ int16 (L,R 交互) を書き出す。 */
 __attribute__((visibility("default")))

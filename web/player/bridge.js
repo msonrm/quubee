@@ -995,6 +995,48 @@ NP2KaiModule({
     const resetInt21  = M.cwrap('np2kai_debug_int21_reset',  null, []);
     const getReg16    = M.cwrap('np2kai_debug_get_reg16',    'number', ['number', 'number']);
     const setFmgen    = M.cwrap('np2kai_set_fmgen',          'number', ['number']);
+    const setMul      = M.cwrap('np2kai_set_clock_multiple', 'number', ['number']);
+
+    // ---- async 自動クロック (快適化, プロトタイプ・既定 OFF) ----
+    // 達成フレーム時間から CPU クロック倍率を「逆算」する適応コントローラ。run_frame の
+    // wall-time を EMA で測り、1 step の real-time 予算 (= MS_PER_STEP) に対する負荷比で
+    // multiple を [floor, ceil] 内で 1 段ずつ増減する。host が速ければ自動で上げて快適化し
+    // (HLT-idle ゲームは HLT fast-forward で倍率がほぼ無料なので ceil まで張り付く)、遅ければ
+    // 下げて pull 音声バッファの枯渇 (途切れ) を未然に防ぐ。engine の SUPPORT_ASYNC_CPU は
+    // 実時間フィードバック (lastTimingValue) が未結線で機能しないため、調整カスケード
+    // (np2kai_set_clock_multiple = engine と同手順の changeclock + gdc_updateclock) だけ
+    // 借りて、フィードバックは我々の最も信頼できる実時間信号 = run_frame 実測で駆動する。
+    const autoClock = {
+        enabled: true,            // 既定 ON (実機検証で快適・音切れ無しを確認)。重い host では
+                                  // floor=20 まで自動で絞るので最悪でも現挙動 (固定20) と同等。
+        floor: 20, ceil: 42, step: 2,   // ceil=42: 仕様の x42 快適化目標。これ以上 (例 60) だと
+                                  // vsync ロックゲームの CPU-bound バースト (ステージ遷移等) が
+                                  // 速すぎになる (Nyahax で確認) ため、速度の上限として 42 を採用。
+        cur: 20,                  // 現在の倍率 (= pccore.multiple と同期)
+        emaMs: 0,                 // run_frame 1 回の所要 ms の指数移動平均
+        budgetMs: 1000 / 56,      // 1 step の real-time 予算 (run loop の TARGET_HZ=56 と一致)
+        evalEvery: 30,            // 評価間隔 (rAF 単位 ≈ 0.5s)。頻繁すぎる発振を防ぐ
+        evalCount: 0,
+        hi: 0.70, lo: 0.40,       // 負荷ヒステリシス帯。残り (0.30〜0.60) は描画+音声+jitter 用
+        sample(ms) { this.emaMs = this.emaMs ? this.emaMs * 0.9 + ms * 0.1 : ms; },
+        tick() {
+            if (!this.enabled || ++this.evalCount < this.evalEvery) return;
+            this.evalCount = 0;
+            const load = this.emaMs / this.budgetMs;
+            let next = this.cur;
+            if      (load > this.hi && this.cur > this.floor) next = Math.max(this.floor, this.cur - this.step);
+            else if (load < this.lo && this.cur < this.ceil)  next = Math.min(this.ceil,  this.cur + this.step);
+            if (next !== this.cur) this.cur = setMul(next);
+        },
+        setEnabled(on) {
+            this.enabled = !!on;
+            if (!this.enabled) this.cur = setMul(20);   // OFF で既定 20 に戻す
+            else this.emaMs = 0;                        // ON で EMA を初期化し測り直す
+            return this.enabled;
+        },
+        setManual(m) { this.enabled = false; this.cur = setMul(m); return this.cur; },  // 手動固定
+    };
+
     window.qbDebug = {
         cs:     () => '0x' + (getCs(handle)       >>> 0).toString(16),
         linear: () => '0x' + (getLinearPc(handle) >>> 0).toString(16),
@@ -1002,6 +1044,25 @@ NP2KaiModule({
         // FM 音源エンジンの A/B 切替。fmgen(1)=fmgen(既定) / fmgen(0)=opngen。
         // 次の Run (reset) から反映 → 同じ FM ゲームを再実行して聴き比べる。
         fmgen:  (on=1) => `usefmgen=${setFmgen(on ? 1 : 0)} (1=fmgen/0=opngen) — 次の Run から反映。同じゲームを再実行して聴き比べてください`,
+        // async 自動クロック (快適化, 既定 ON)。autoclock(1)=ON で host の余裕に応じ multiple を
+        // floor..ceil 内で自動調整 (達成フレーム時間から逆算)。autoclock(0)=OFF で 20 固定。
+        // 第2引数で ceil (上限倍率) を調整可: 例 autoclock(1, 30) で遷移をさらに緩く、(1, 60) で攻める。
+        autoclock: (on=1, ceil) => {
+            if (ceil !== undefined) autoClock.ceil = Math.max(autoClock.floor, ceil | 0);
+            const en = autoClock.setEnabled(on ? 1 : 0);
+            // ceil を下げた直後、現在値が上限超なら即座に従わせる。tick の上げ条件 (cur<ceil) /
+            // 下げ条件 (高負荷) はどちらも発火しないので、ここで明示的にクランプしないと降りてこない。
+            if (en && autoClock.cur > autoClock.ceil) autoClock.cur = setMul(autoClock.ceil);
+            return en
+                ? `autoclock ON — host 余裕に応じ multiple を ${autoClock.floor}..${autoClock.ceil} で自動調整 (現 ${autoClock.cur})。重い時は自動で下げて音切れを防ぎます`
+                : `autoclock OFF — multiple=20 固定`;
+        },
+        // CPU クロック倍率の手動上書き (autoclock を OFF にして固定)。引数なしで現状表示。
+        // 快適化の A/B 用 (例: qbDebug.multiple(42) で速さ・音切れを体感比較)。
+        multiple: (m) => {
+            if (m === undefined) return `multiple=${autoClock.cur} (autoclock ${autoClock.enabled ? 'ON' : 'OFF'})`;
+            return `multiple=${autoClock.setManual(m)} に固定 (autoclock OFF)`;
+        },
         // 16-bit レジスタ一覧 (ハング時の状態確認用)
         regs:   () => {
             const n = ['AX','BX','CX','DX','SI','DI','BP','SP','DS','ES','SS','CS','IP'];
@@ -1160,7 +1221,14 @@ NP2KaiModule({
         // 経過時間分の emulator step を消化
         let steps = 0;
         while (now >= nextDue && steps < MAX_CATCHUP) {
-            runFrame(handle);
+            if (autoClock.enabled) {
+                // 自動クロックの実時間フィードバック: run_frame 1 回の wall-time を測って EMA へ。
+                const _t = performance.now();
+                runFrame(handle);
+                autoClock.sample(performance.now() - _t);
+            } else {
+                runFrame(handle);
+            }
             // 音声は SDL コールバック (audio DAC 駆動) が pull するので、ここで
             // 明示ポンプは不要 (C1)。run_frame は sndstream に逐次レンダするだけ。
             nextDue += MS_PER_STEP;
@@ -1171,6 +1239,8 @@ NP2KaiModule({
         if (steps === MAX_CATCHUP && now > nextDue) {
             nextDue = now + MS_PER_STEP;
         }
+        // 自動クロック: 評価間隔ごとに負荷から multiple を調整 (OFF 時は即 return)。
+        autoClock.tick();
 
         const fbPtr = getFb(handle, pW, pH, pBpp);
 

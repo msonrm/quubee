@@ -305,6 +305,53 @@ int np2kai_set_fmgen(int on) {
 	return np2cfg.usefmgen;
 }
 
+/* CPU クロック倍率の live 設定 (快適化 A/B / async 自動クロック / ベンチ用)。
+ * realclock = baseclock × multiple が 1 表示フレームあたりの実行 CPU クロック数
+ * (gdc.dispclock ∝ multiple) を決め、これが CPU-bound タイトルでの run_frame 負荷に比例する
+ * (HLT-idle タイトルでは HLT fast-forward でほぼ無影響)。倍率↑ = エミュ CPU 高速化だが host
+ * 負荷増。pull 型音声では DAC がマスタークロックなので、host が追いつかない倍率にすると音声
+ * バッファが枯れて途切れる → real-time を割らない範囲で使う (JS の自動クロックが達成フレーム
+ * 時間から逆算して [floor, ceil] 内で調整する)。
+ *
+ * reset 不要でその場 (live) 反映する。np2cfg.multiple も書くので次の Run (reset) でも保持。
+ * 重要: 正しい live 反映は pccore.c の async-CPU 経路と同一の changeclock カスケードが必須。
+ * gdc.dispclock を gdc_updateclock で再計算しないと「フレームあたり CPU 予算が古い倍率のまま」
+ * になり倍率変更が一切効かない (実測で確認済みの罠)。nevent_changeclock は係属中イベントを
+ * 新クロックへ再スケール、各デバイス *_changeclock は音源/BEEP/MPU/キーボード/マウスの
+ * タイミング基準を追従させる。maxmultiple も合わせて非 async 既定 (=multiple) と整合させる。
+ * 戻り値: クランプ後の適用倍率。 */
+int np2kai_set_clock_multiple(int multiple) {
+	/* pccore.c の async-CPU クロック変更と同一手順。include 増を避け extern 前方宣言。 */
+	extern void pcm86_changeclock(UINT oldmultiple);
+	extern void nevent_changeclock(UINT32 oldclock, UINT32 newclock);
+	extern void sound_changeclock(void);
+	extern void beep_changeclock(void);
+	extern void mpu98ii_changeclock(void);
+	extern void keyboard_changeclock(void);
+	extern void mouseif_changeclock(void);
+	extern void gdc_updateclock(void);
+	UINT oldmultiple;
+
+	if (multiple < 1) multiple = 1;
+	else if (multiple > CPU_MULTIPLE_MAX) multiple = CPU_MULTIPLE_MAX;
+	oldmultiple = pccore.multiple;
+	np2cfg.multiple = (UINT)multiple;          /* 次の reset でも保持 */
+	if ((UINT)multiple == oldmultiple) return multiple;   /* 変化なし: カスケード省略 */
+
+	pccore.multiple    = (UINT)multiple;
+	pccore.maxmultiple = (UINT)multiple;
+	pccore.realclock   = pccore.baseclock * (UINT)multiple;
+	pcm86_changeclock(oldmultiple);
+	nevent_changeclock(oldmultiple, pccore.multiple);
+	sound_changeclock();
+	beep_changeclock();
+	mpu98ii_changeclock();
+	keyboard_changeclock();
+	mouseif_changeclock();
+	gdc_updateclock();
+	return multiple;
+}
+
 /* 音声 pull 型 (C1)。JS の ScriptProcessorNode.onaudioprocess (audio DAC クロック)
  * が呼ぶ唯一の consumer。dst に frames ぶんのステレオ int16 を書く。 */
 void np2kai_audio_fill(np2kai_handle h, int16_t *dst, uint32_t frames) {
