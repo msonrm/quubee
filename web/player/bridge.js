@@ -693,19 +693,30 @@ NP2KaiModule({
         if (midiLoadState === 'ready')  return true;
         if (midiLoadState === 'failed') return false;   // 同セッション内の再試行はしない
         try {
-            runStatusEl.textContent = 'MIDI: 音色データ (freepats) を取得中…';
+            runStatusEl.textContent = 'MIDI: 初回のみ音色データ (約33MB) を取得します…';
             const idx = await (await fetch('assets/freepats/index.json')).json();
             // timidity.cfg は data dir (CWD=/tmp) 直下、.pat は /tmp/freepats/<rel> に置く
             // (cfg 内 `dir freepats` 前提。C 側 qb_vermouth_init が CWD から読む)。
             const cfgBuf = await (await fetch('assets/freepats/' + idx.cfg)).arrayBuffer();
             M.FS.writeFile('/tmp/' + idx.cfg, new Uint8Array(cfgBuf));
             mkdirSafe('/tmp/freepats');
+            // 進捗ライブ表示 (33MB/128 ファイルの DL は数十秒かかるので、件数+MB を出して「進んでいる」を可視化)。
+            const total = idx.pats.length;
+            let done = 0, bytes = 0;
+            const showProgress = () => {
+                const pct = Math.round(done / total * 100);
+                runStatusEl.textContent = `MIDI 音色データ取得中… ${done}/${total} (${pct}%, ${(bytes / 1048576).toFixed(1)}MB)`;
+            };
+            showProgress();
             await Promise.all(idx.pats.map(async (rel) => {
                 const slash = rel.lastIndexOf('/');
                 if (slash > 0) mkdirSafe('/tmp/freepats/' + rel.slice(0, slash));
                 const buf = await (await fetch('assets/freepats/' + rel)).arrayBuffer();
                 M.FS.writeFile('/tmp/freepats/' + rel, new Uint8Array(buf));
+                done++; bytes += buf.byteLength;
+                showProgress();
             }));
+            runStatusEl.textContent = `MIDI 音色データ取得完了 (${(bytes / 1048576).toFixed(1)}MB) — 起動準備中…`;
             const ok = enableMidiNow(handle);   // VERMOUTH 構築 (次の reset で結線)
             midiLoadState = ok ? 'ready' : 'failed';
             if (!ok) console.warn('[midi] VERMOUTH ロード失敗 (freepats 配置/timidity.cfg を確認)');
