@@ -1,5 +1,47 @@
 # CHANGELOG
 
+## [蟹味噌テキスト残留の根因解明 (= 我々のバグではない) + HLE 副産物 (AH=29h / EXEC FCB→PSP) + LZEXE 動作確認] — 2026-06-06
+
+**蟹味噌 (KANI123) の「KANI.SCRを作成します」テキスト残留を徹底調査し、原因を完全に切り分けた。**
+結論: **QuuBee 側 (描画/HLE/ローダ) のバグではなく、kani.exe が HUD 描画前にテキスト面を再クリアしない
+ゲーム固有の挙動**。ユーザー当初の「基本的なことができていない証拠」仮説は今回は外れ — エンジン・ローダ・
+HLE・描画・LZEXE すべて正しく動作している。
+
+**消去法で否定した容疑 (全てハードデータ + framebuffer 画像で確認):**
+- **描画 ↔ NP2kai 食い違い**: 合成は 100% NP2kai `scrndraw`。`qb_scrnmng.c` は単なるサーフェス buffer。
+- **dirty-flag / さめがめ型の明示クリア未通知**: 蟹味噌は HLE tty を一切通らず (AH=09h 皆無)、ゲームが
+  text VRAM へ直接 CPU 書込。起動時の直接書込クリア (frame 242 で boot テキスト→空白) は機能している。
+- **テキスト面 OFF 無視**: `np2kai_debug_get_textdisp` で全期間 `0x8a` (GDCSCRN_ENABLE=1)。ゲームは
+  GDC STOP も INT 18h AH=0Dh も発行しない。NP2kai は両者を正しく honor する (gdc.c:308 / bios18)。
+- **secret(非表示)属性**: row0 の attr=0xE1 (通常可視)。
+- **SAD/表示幾何**: `np2kai_debug_get_gdc_para` で master GDC partition (gdc.m.para[12..19]) を観測 → 全期間
+  SAD=0。ゲームはテキストをスクロール/ずらしていない。表示 row0 = VRAM offset 0。
+- **first-run 限定 / KANI.SCR 作成失敗**: AH=3Ch で正常に生成 (429B、保存して再投入も検証)。有効 SCR を
+  置いてもメッセージは残る。
+- **kanipic.exe (タイトル表示) の不全 / LZEXE**: **kanipic.exe は LZEXE v0.91 圧縮 EXE** (`LZ91` @0x1C、
+  reloc 0、e_minalloc 0x16b5)。framebuffer 画像でタイトル ("KANIMISO Ver1.23" + 球 + HIT ANY KEY) が
+  **完璧に描画** = 我々のローダは **LZEXE 自己展開 EXE を正しく実行できている** (bio100 目標に追い風)。
+
+**真の仕組み (確定):** ゲームは起動時にテキスト面を一度クリア → row0 に "KANI.SCR…" 直接書込 → 以降
+二度とクリアせず、本編では HUD (`SCORE / <<KANIMISO>> / LEFT`) を**位置指定でフィールドだけ重ね書き**
+(隙間は空白前提)。隙間に起動メッセージの漢字が残り、本編 HUD の score に被って化ける (画像で確認)。
+PC-98 はテキスト面を常にグラフィック面の上に合成 (グラフィック優先命令は無い) ため可視化される。
+残る不確実性 = 実機では「タイトル→本編」遷移でクリアが入るか初回限定で実機も被るか。断定には kani.exe の
+逆アセンブルかブラウザでの遷移時 `qbDebug.textVram()` 観測が必要 (headless は本ゲームの入力が不安定で遷移を
+踏めず)。**Phase 4 の既知美観課題として保留。**
+
+**HLE 副産物 (調査の過程で実装、最初の仮説は外したが実 DOS 忠実化として独立に有用・回帰なし):**
+- **INT 21h AH=29h (Parse Filename) 実装** (`native/dos_int21.c`): DS:SI の文字列を drive/8.3 に解析して
+  ES:DI の FCB へ (AL フラグ準拠、`*`→`?` 展開、ワイルドカード有無で AL、SI 前進)。従来 UNIMPL の純加算。
+- **EXEC が param block の FCB1/FCB2 を子 PSP(0x5C/0x6C) へ複写** (`dos_loader.c`): 親が AH=29h で組んだ
+  FCB を子へ渡す実 DOS 経路。null ポインタの caller (.bat shell 等) は従来どおり複写せず (`if(fcb_lin)` ガード)。
+- 回帰: `tools/exec_env_test.js` PASS / `tools/batscript_test.js` 33/0。
+
+**デバッグ補助 (恒久):**
+- `np2kai_dos_set_int21_trace(on)` (bridge.c): INT 21h 全コールトレース on/off (既定 OFF)。今後の HLE 調査用。
+- `np2kai_debug_get_gdc_para(which,index)` (bridge.c): GDC para バイト読取 (which=0:master/1:slave)。
+  テキスト/グラフィック表示幾何 (SAD/partition/pitch) のデバッグ用。
+
 ## [bio 100% 互換性目標を設定 + XMS 実クライアント検証 + EMS 据え置き判断] — 2026-06-05
 
 **新目標「bio 100% 純ゲーム 31 本中 20 本を T3(プレイ可能)」を設定** (詳細・スコアボードは TODO.md)。

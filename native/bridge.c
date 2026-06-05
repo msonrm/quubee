@@ -226,6 +226,10 @@ extern void qb_dos_dbg_ah_reset(void);
 int  np2kai_debug_int21_count(int ah) { return qb_dos_dbg_ah_count(ah); }
 void np2kai_debug_int21_reset(void)   { qb_dos_dbg_ah_reset(); }
 
+/* INT 21h 全コールトレース on/off (デバッグ用)。dos_int21.c の g_int21_trace を切替える。 */
+extern void qb_dos_set_int21_trace(int on);
+void np2kai_dos_set_int21_trace(int on) { qb_dos_set_int21_trace(on); }
+
 /* RS-MIDI 診断 (qbDebug.midi): シリアル(8251)へ流れた MIDI バイト数と、RS-MIDI→VERMOUTH
  * ルーティングが生きているか。MIDDRV -X1 が実際に送出しているか / 受け手が繋がったかの確認用。 */
 extern UINT32 qb_serial_midi_bytes(void);   /* qb_commng.c */
@@ -284,6 +288,14 @@ uint32_t np2kai_debug_get_textdisp(np2kai_handle h) {
 uint32_t np2kai_debug_get_grphdisp(np2kai_handle h) {
 	if (!h) return 0;
 	return (uint32_t)gdcs.grphdisp;
+}
+
+/* GDC の para バイトを読む (表示幾何デバッグ用)。which=0:master(テキスト)/1:slave(グラフィック)。
+ * 例: master GDC_SCROLL(=12) から テキスト表示開始アドレス(SAD)/パーティション長、PITCH(=28)。
+ * SAD が非ゼロなら「表示 row0 = VRAM offset SAD」= row0 のメモリ直書きが画面外に追い出されている。 */
+uint32_t np2kai_debug_get_gdc_para(np2kai_handle h, int which, int index) {
+	if (!h || index < 0 || index > 255) return 0;
+	return (uint32_t)(which ? gdc.s.para[index] : gdc.m.para[index]);
 }
 
 /* デバッグ: 16-bit CPU レジスタを idx で読む (ハング時のレジスタ確認用)。

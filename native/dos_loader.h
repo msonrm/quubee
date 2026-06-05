@@ -104,10 +104,13 @@ int qb_dos_loader_start_hook(void);
  * cmdtail=子 PSP[0x80] に入れるコマンドテイル (先頭スペース込み可)、
  * env_seg=パラメータブロック由来の環境セグメント (0 なら親 env 継承)、
  * child_name=子の basename (argv[0] を "A:\\NAME" に正規化するのに使う。NULL/空なら既定)。
+ * fcb1_lin/fcb2_lin=EXEC パラメータブロックの FCB1/FCB2 linear addr (0=複写しない)。
+ *   子 PSP の 0x5C/0x6C へ 16B 複写する (親が AH=29h で組んだ FCB を子へ渡す経路)。
  * 戻り値 0=成功、<0=失敗。 */
 int qb_dos_exec_load(const uint8_t *image, size_t size,
                      const char *cmdtail, uint16_t env_seg,
-                     const char *child_name);
+                     const char *child_name,
+                     uint32_t fcb1_lin, uint32_t fcb2_lin);
 
 /* AH=31h Keep Process (TSR): 子を keep_paras パラグラフに縮めて常駐させ、親へ復帰。
  * code = 子の終了コード (AL)。Ray の RIN.COM 等の常駐ドライバ用。

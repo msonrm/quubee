@@ -933,7 +933,8 @@ int qb_dos_loader_start_hook(void) {
  *     済みのため、子を別 base に置くこのパスは MZ パースを別途行う (意図的な重複)。 */
 int qb_dos_exec_load(const uint8_t *image, size_t size,
                      const char *cmdtail, uint16_t env_seg,
-                     const char *child_name) {
+                     const char *child_name,
+                     uint32_t fcb1_lin, uint32_t fcb2_lin) {
     if (!image || size < 2) return -1;
     uint16_t magic = read_le16(image);
     int is_exe = (magic == 0x5A4D || magic == 0x4D5A);   /* MZ/ZM=EXE、それ以外=COM */
@@ -1051,6 +1052,13 @@ int qb_dos_exec_load(const uint8_t *image, size_t size,
         for (size_t i = 0; i < cl; i++) poke8(pbase + 0x81 + i, (uint8_t)cmdtail[i]);
         poke8(pbase + 0x81 + cl, 0x0D);
     }
+    /* EXEC パラメータブロックの FCB1/FCB2 を子 PSP:005C/006C へ複写 (実機 DOS faithful)。
+     * 親が AH=29h で組んだ FCB から子が出力ファイル名を得る (kanipic.exe の KANI.SCR 生成経路)。
+     * null ポインタの caller (.bat shell 等、FCB 不使用) は fcb*_lin=0 で複写せず従来どおり 0 のまま。 */
+    if (fcb1_lin) for (int i = 0; i < 16; i++)
+        poke8(pbase + 0x5C + i, mem[(fcb1_lin + i) & QB_GUEST_MEM_MASK]);
+    if (fcb2_lin) for (int i = 0; i < 16; i++)
+        poke8(pbase + 0x6C + i, mem[(fcb2_lin + i) & QB_GUEST_MEM_MASK]);
 
     /* ---- 段階2: 親コンテキストを退避 (子終了でここへ戻る) ----
      * この時点で CPU_SS:SP はまだ親スタックを指し、その先頭に親の INT 21h AH=4Bh が

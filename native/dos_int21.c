@@ -1349,6 +1349,7 @@ static void int21_4b_exec(void) {
      *   +0 = env segment (0 なら親 env 継承)
      *   +2 = コマンドテイル far ptr (PSP[0x80] 形式: 長さ 1B + 文字列 + 0x0D) */
     uint16_t env_seg;
+    uint32_t fcb1_lin = 0, fcb2_lin = 0;
     char cmdtail[128];
     cmdtail[0] = '\0';
     {
@@ -1367,6 +1368,14 @@ static void int21_4b_exec(void) {
             cmdtail[n++] = (char)c;
         }
         cmdtail[n] = '\0';
+
+        /* +0x06=FCB1 far ptr, +0x0A=FCB2 far ptr。親が AH=29h 等で組んだ FCB を子 PSP の
+         * 0x5C/0x6C へ複写するため linear に解決する。ポインタが null (seg:off=0) の caller
+         * (.bat shell 等、FCB を使わない) は 0 のまま → exec_load 側で複写しない。 */
+        uint16_t f1_off = peek16(pb + 0x06), f1_seg = peek16(pb + 0x08);
+        uint16_t f2_off = peek16(pb + 0x0A), f2_seg = peek16(pb + 0x0C);
+        if (f1_seg || f1_off) fcb1_lin = lin(f1_seg, f1_off);
+        if (f2_seg || f2_off) fcb2_lin = lin(f2_seg, f2_off);
     }
 
     /* 子イメージを host から読む。buffer を超えるサイズはサイレントに切り捨てると
@@ -1392,9 +1401,12 @@ static void int21_4b_exec(void) {
     for (const char *q = host; *q; q++) if (*q == '/' || *q == '\\') base = q + 1;
     fprintf(stderr, "[int21h/4B] EXEC child=%s size=%zu env=%04X cmdtail=\"%s\" (stage1.5: parent resident)\n",
             base, sz, (unsigned)env_seg, cmdtail);
+    if (fcb1_lin)
+        fprintf(stderr, "[int21h/4B] fcb1 drv=%d name=\"%.8s\" ext=\"%.3s\"\n",
+                (int)peek8(fcb1_lin), (char *)&mem[fcb1_lin + 1], (char *)&mem[fcb1_lin + 9]);
 
     /* 親常駐のまま子を上にロードして CPU を子へ切替える (base = 子の basename → argv[0] 正規化用)。 */
-    int r = qb_dos_exec_load(childbuf, sz, cmdtail, env_seg, base);
+    int r = qb_dos_exec_load(childbuf, sz, cmdtail, env_seg, base, fcb1_lin, fcb2_lin);
     if (r != 0) {
         fprintf(stderr, "[int21h/4B] exec_load failed r=%d\n", r);
         CPU_AX = (r == -10) ? 8 : 0x0B;   /* -10=メモリ不足(8), 他=書式不正(11) */
@@ -1560,6 +1572,88 @@ static void int21_3b_chdir(void) {
     CPU_FLAG &= ~C_FLAG;
 }
 
+/* AH=29h: Parse Filename。DS:SI の文字列を 8.3 名に解析して ES:DI の (未オープン) FCB へ格納。
+ * AL = 制御フラグ: bit0=先頭の区切り(空白)をスキップ / bit1=ドライブ指定がある時のみ FCB ドライブ
+ * を書く / bit2=ファイル名がある時のみ書く / bit3=拡張子がある時のみ書く。
+ * 返り: AL=0 (ワイルドカード無し) / 1 (有り)。DS:SI は解析後の位置へ前進。
+ * 出力 FCB: +0 drive(0=既定,1=A..) / +1..8 name(空白詰め,大文字) / +9..B ext(空白詰め,大文字)。
+ * 用途: kanipic.exe は親 kani.exe が EXEC で渡した PSP の FCB から出力名 "KANI.SCR" を読む。 */
+#define IS_FCB_SEP(ch) ((ch)==0 || (ch)==0x0D || (ch)==' ' || (ch)=='\t' || (ch)=='.' || \
+    (ch)==':' || (ch)==';' || (ch)==',' || (ch)=='=' || (ch)=='+' || (ch)=='/' || \
+    (ch)=='\\' || (ch)=='"' || (ch)=='[' || (ch)==']' || (ch)=='<' || (ch)=='>' || (ch)=='|')
+
+static uint8_t ds_byte(uint16_t off) { return peek8(lin(CPU_DS, off)); }
+
+static void int21_29_parse_filename(void) {
+    uint8_t  ctrl = CPU_AL;
+    uint16_t si   = CPU_SI;
+    uint32_t fcb  = lin(CPU_ES, CPU_DI);
+    int has_wild  = 0;
+
+    if (ctrl & 0x01) {                         /* bit0: 先頭の空白/タブを読み飛ばす */
+        while (ds_byte(si) == ' ' || ds_byte(si) == '\t') si++;
+    }
+
+    /* ---- ドライブ (X:) ---- */
+    uint8_t c0 = ds_byte(si), c1 = ds_byte((uint16_t)(si + 1));
+    if (c1 == ':' && ((c0 >= 'A' && c0 <= 'Z') || (c0 >= 'a' && c0 <= 'z'))) {
+        poke8(fcb + 0, (uint8_t)((c0 | 0x20) - 'a' + 1));   /* A→1 */
+        si += 2;
+    } else if (!(ctrl & 0x02)) {
+        poke8(fcb + 0, 0);                     /* 既定ドライブ */
+    }
+
+    /* ---- ファイル名 (最大 8) ---- */
+    uint8_t name[8]; int nlen = 0, name_present = 0;
+    while (nlen < 8) {
+        uint8_t c = ds_byte(si);
+        if (IS_FCB_SEP(c)) break;
+        name_present = 1;
+        if (c == '*') {                        /* '*' は残りを '?' で埋め、後続名前文字を捨てる */
+            while (nlen < 8) name[nlen++] = '?';
+            has_wild = 1; si++;
+            while (!IS_FCB_SEP(ds_byte(si))) si++;
+            break;
+        }
+        if (c == '?') has_wild = 1;
+        if (c >= 'a' && c <= 'z') c -= 0x20;
+        name[nlen++] = c; si++;
+    }
+    if (name_present || !(ctrl & 0x04)) {
+        for (int i = 0; i < 8; i++) poke8(fcb + 1 + i, (uint8_t)(i < nlen ? name[i] : ' '));
+    }
+
+    /* ---- 拡張子 (最大 3) ---- */
+    uint8_t ext[3]; int elen = 0, ext_present = 0;
+    if (ds_byte(si) == '.') {
+        si++; ext_present = 1;
+        while (elen < 3) {
+            uint8_t c = ds_byte(si);
+            if (IS_FCB_SEP(c)) break;
+            if (c == '*') {
+                while (elen < 3) ext[elen++] = '?';
+                has_wild = 1; si++;
+                while (!IS_FCB_SEP(ds_byte(si))) si++;
+                break;
+            }
+            if (c == '?') has_wild = 1;
+            if (c >= 'a' && c <= 'z') c -= 0x20;
+            ext[elen++] = c; si++;
+        }
+    }
+    if (ext_present || !(ctrl & 0x08)) {
+        for (int i = 0; i < 3; i++) poke8(fcb + 9 + i, (uint8_t)(i < elen ? ext[i] : ' '));
+    }
+
+    CPU_SI = si;
+    CPU_AL = has_wild ? 1 : 0;
+
+    fprintf(stderr, "[int21h/29] ctrl=%02X → drv=%d name=\"%.8s\" ext=\"%.3s\" wild=%d\n",
+            (unsigned)ctrl, (int)peek8(fcb + 0),
+            (char *)&mem[fcb + 1], (char *)&mem[fcb + 9], has_wild);
+}
+#undef IS_FCB_SEP
+
 /* ---------------- ディスパッチ ---------------- */
 
 /* AH 別カウンタ + qbDebug.int21Stats() で読めるよう export */
@@ -1572,10 +1666,22 @@ void qb_dos_dbg_ah_reset(void) {
     for (int i = 0; i < 256; i++) g_dbg_ah_count[i] = 0;
 }
 
+/* INT 21h 全コールトレース (qbDebug / 各 game のデバッグ用、既定 OFF)。
+ * 普段は dispatch 入口で何も出さない方針なので、解析時だけ on にする。 */
+int g_int21_trace = 0;
+void qb_dos_set_int21_trace(int on) { g_int21_trace = on ? 1 : 0; }
+
 void qb_dos_int21_dispatch(void) {
     uint8_t ah = CPU_AH;
     g_int21_repoll = 0;
     g_dbg_ah_count[ah]++;
+    if (g_int21_trace) {
+        fprintf(stderr, "[i21] AH=%02X AL=%02X BX=%04X CX=%04X DX=%04X "
+                "DS=%04X SI=%04X ES=%04X DI=%04X @%04X:%04X\n",
+                (unsigned)ah, (unsigned)CPU_AL, (unsigned)CPU_BX, (unsigned)CPU_CX,
+                (unsigned)CPU_DX, (unsigned)CPU_DS, (unsigned)CPU_SI,
+                (unsigned)CPU_ES, (unsigned)CPU_DI, (unsigned)CPU_CS, (unsigned)CPU_IP);
+    }
     /* 全コール log は debug 中以外うるさいので、open/close/delete/find/exit
      * 等「ファイル系」と UNIMPL のみ各 handler 側で log する方針。
      * dispatch 入口では何も出さない (cstartup の AH=30/4A/35/25/44 が連発するため)。*/
@@ -1592,6 +1698,7 @@ void qb_dos_int21_dispatch(void) {
     case 0x19: int21_19_curdrive();     break;
     case 0x1A: int21_1a_set_dta();   break;
     case 0x25: int21_25_set_vec();   break;
+    case 0x29: int21_29_parse_filename(); break;
     case 0x2A: int21_2a_get_date();  break;
     case 0x2C: int21_2c_get_time();  break;
     case 0x2F: int21_2f_get_dta();      break;
