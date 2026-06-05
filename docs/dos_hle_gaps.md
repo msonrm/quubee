@@ -76,6 +76,15 @@
   - 制御/診断: `qbDebug.xms(0|1)`（既定 ON、A/B 用に切替可）→ `{enabled, handles, usedKB, freeKB}`。
     検証 = `tools/xms_test.js`（合成 COM で検出→entry→alloc→Move 往復のバイト一致）。実証 = AMEL `/X` が
     338KB EMB を確保（games/mem_test）。
+  - ⚠ **既定 ON は全タイトルへの提示挙動を変える（許容済みの設計判断、2026-06-05 記録）**: INT 2Fh `AX=4300h`
+    が全ゲームに「XMS あり」と返すようになった。これまで XMS 無しで conventional にフォールバックして動いていた
+    タイトルが XMS 経路に入り、未実装 fn（`default`→`BL=0x80` NOTIMPL や HMA 拒否 `0x90`）に当たって挙動が
+    変わる可能性がある（実装済みは EMB 標準ライフサイクルを網羅するのでリスクは低い）。**回帰が疑わしい時は
+    `qbDebug.xms(0)` と ON で A/B** すれば切り分けできる。困ったらタイトル別に既定を OFF へ落とす余地あり。
+  - ⚠ **Move（`0Bh`）は奇数長を `BL=0xA7`(BADLEN) で弾く（仕様準拠だが実 HIMEM より厳格、2026-06-05 記録）**:
+    XMS 3.0 仕様は「長さ偶数」だが実 HIMEM.SYS は奇数長も通す。当方は素の `memmove` で偶奇に依存しないため、
+    奇数長 Move を要求するタイトルが現れたら `dos_xms.c` の `if (length & 1)` ガードを外せば寛容化できる
+    （faithful 寄りにするなら外す方が互換的）。現 corpus に該当は未確認。
 - **EMS（EMM386 相当）= 未実装**。INT 67h は需要プローブのみ（検出ログ+カウント、応答は「無し」）。
   - **需要プローブ常設（2026-06-05）**: INT 2Fh `AX=43xx` / INT 67h / `EMMXXXX0` デバイス open を
     「検出ログ + 件数カウント」化。XMS 無効時は INT 2Fh も「無し」と応答。集計は `qbDebug.memprobe()`

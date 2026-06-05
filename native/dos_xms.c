@@ -128,8 +128,13 @@ static void xms_free_query(uint32_t *largest, uint32_t *total) {
  * それ以外は EMB。範囲外なら NULL + *err にエラーコード。 */
 static uint8_t *xms_resolve(uint16_t handle, uint32_t off, uint32_t len, int is_src, int *err) {
     if (handle == 0) {
-        uint32_t lin = ((off >> 16) << 4) + (off & 0xFFFFu);   /* 遠ポインタ seg:off */
-        return &mem[lin & QB_GUEST_MEM_MASK];
+        uint32_t lin = (((off >> 16) << 4) + (off & 0xFFFFu)) & QB_GUEST_MEM_MASK;  /* 遠ポインタ seg:off */
+        /* 実 mem[] (2MB = QB_GUEST_MEM_MASK+1) 配列外への memmove を防ぐ。EMB 側と対称に、
+         * start+len がゲスト RAM を超えたら offset-invalid を返す (Wasm の配列外トラップを回避)。 */
+        if ((uint64_t)lin + len > (uint64_t)QB_GUEST_MEM_MASK + 1) {
+            *err = is_src ? XMS_E_SRCOFF : XMS_E_DSTOFF; return NULL;
+        }
+        return &mem[lin];
     }
     if (handle >= XMS_MAX_HANDLES || !g_h[handle].used) {
         *err = is_src ? XMS_E_SRCHANDLE : XMS_E_DSTHANDLE; return NULL;
