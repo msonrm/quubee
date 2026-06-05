@@ -111,10 +111,13 @@
     cmmidi を singleton 保持していたため、別 .bat を挟んで再起動すると無音 (active=true・bytes 増えるのに音だけ
     出ない) になった。`commng_destroy(com_serial)` で inner を release+NULL 化し、毎リセット作り直す=毎回再登録
     (stock MPU と同型)。`tools/midi_serial_test.js` を 2 サイクル実行に拡張して恒久ガード。
-  - **deploy**: freepats (33MB) を本番 (Cloudflare Pages) に同梱する方針に変更 (`tools/deploy.sh` の除外解除)。
-    遅延 on-demand なので MIDI ゲーム起動時のみ初回 DL。
+  - **deploy + 進捗表示**: freepats (33MB) を本番 (Cloudflare Pages) に同梱 (`tools/deploy.sh` の除外解除)。
+    遅延 on-demand なので MIDI ゲーム起動時のみ初回 DL。**本番で MIDI 発音をユーザー確認済 (2026-06-05)**。
+    初回 DL の進捗を `ensureMidiLoaded` で件数+%+MB ライブ表示 (固定文字で止まって見えた不満を解消)。
   - **残**: ①実機で音量/音色のさらなる詰め (headless peak ~27800/32767=健全) ②`-X0` MPU 直叩きゲームは
-    別経路 (現状未対応・mpuenable 再 init が要る) ③MIDI+FM 同時 (twmidifm.bat) の音量バランス。
+    別経路 (現状未対応・mpuenable 再 init が要る) ③MIDI+FM 同時 (twmidifm.bat) の音量バランス
+    ④freepats を IndexedDB/Cache Storage に保存して再訪時も DL スキップ (現状はブラウザ HTTP キャッシュ任せ) /
+    進捗をプログレスバー化。
 
 - **FreeDOS(98) の完走** — 現状は HMA buffer 確保まで進むが、BIOS 拡張ハンドラ不足で
   `E869:075B` 付近に飛び込んで暴走。実機 `bios.rom` 利用 (著作権問題) か、

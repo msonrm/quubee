@@ -50,6 +50,12 @@ release+NULL 化し、毎リセット作り直す = 毎回再登録 (stock MPU98
 検証: ビルド clean、2 サイクルとも active=true・bytes+2058・peak~27800、回帰なし (exec_env PASS / batscript 33-0 /
 JS 構文 OK、MIDI OFF 既定は `com_nc` で従来不変)。残: `-X0` MPU 直叩き経路 / MIDI+FM 同時の音量バランス。
 
+**本番デプロイ + 進捗表示の追記:** freepats(33MB) 同梱で Cloudflare Pages にデプロイし、**本番で MIDI 発音を
+ユーザー確認済**。初回 freepats DL (128 ファイル) が固定文字「取得中…」で進捗不明だった不満を受け、
+`ensureMidiLoaded` の DL ループで完了件数+累積バイトを数え `MIDI 音色データ取得中… 47/128 (37%, 12.3MB)` と
+runStatusEl をライブ更新するようにした (JS のみ・wasm 不変)。今後の候補: DL 済 freepats を IndexedDB/Cache
+Storage に保存して再訪時もスキップ / プログレスバー化。
+
 ## [快適化: async 自動クロック — 達成フレーム時間から CPU 倍率を逆算 (既定 ON)] — 2026-06-04
 
 CPU クロック倍率 (`np2cfg.multiple`) の「快適化」を計測で詰めた結果**当初前提が反転**し、最終的に
