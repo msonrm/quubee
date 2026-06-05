@@ -150,6 +150,7 @@ set(QB_SOURCES
     # Phase 3 ミニマル DOS ローダ (boot sector → 0xFFE0 → C トランポリン)
     ${CMAKE_CURRENT_SOURCE_DIR}/dos_loader.c
     ${CMAKE_CURRENT_SOURCE_DIR}/dos_int21.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/dos_xms.c
 )
 
 # Exported bridge functions (prefixed with _ for Emscripten)
@@ -186,6 +187,9 @@ set(EXPORTED_FUNCTIONS
     _np2kai_debug_get_reg16
     _np2kai_debug_serial_midi_bytes
     _np2kai_debug_serial_midi_active
+    _np2kai_debug_memprobe
+    _np2kai_xms_enable
+    _np2kai_xms_stat
     _np2kai_dos_stage_com
     _np2kai_dos_stage_exe
     _np2kai_dos_stage_script

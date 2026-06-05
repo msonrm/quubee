@@ -1047,6 +1047,20 @@ static void int21_3c_create(void) {
 }
 
 static void int21_3d_open(void) {
+    /* EMS 需要プローブ: MS 標準の EMS 検出は "EMMXXXX0" デバイスを open → IOCTL で entry 取得。
+     * デバイスは未実装なので open は失敗する (= EMS 無しと判定される) が、試行を記録する。 */
+    {
+        uint32_t la = ((uint32_t)CPU_DS << 4) + (uint16_t)CPU_DX;
+        char nm[16];
+        int k;
+        for (k = 0; k < 15; k++) {
+            uint8_t c = peek8(la + (uint32_t)k);
+            if (c == 0) break;
+            nm[k] = (c >= 'a' && c <= 'z') ? (char)(c - 32) : (char)c;  /* 大文字化 */
+        }
+        nm[k] = 0;
+        if (strstr(nm, "EMMXXXX0")) qb_dos_memprobe_note_emm_open();
+    }
     /* AL = mode: 0=read, 1=write, 2=rw */
     const char *m = "rb";
     switch (CPU_AL & 0x07) {

@@ -36,6 +36,14 @@
  * ただ単に IRET して戻る)。同じ NOP+IRET だと毎回 biosfunc 経由になり重い + ログが
  * 騒がしい + UNIMPL 警告が出るので別経路。 */
 #define QB_TRAMP_IRET_STUB      0xFEE40u  /* F000:EE40 — 1 byte: 0xCF */
+/* XMS/EMS 需要プローブ (2026-06-05)。INT 2Fh / INT 67h を IRET スタブから「NOP+IRET で
+ * C フックを踏みログ」に格上げする計測器用。応答は従来通り「未インストール」を保つ
+ * (レジスタ不変) ので回帰ゼロ。将来 XMS/EMS を HLE する時の entry 足場にもなる。 */
+#define QB_TRAMP_INT2F          0xFEE50u  /* F000:EE50 — INT 2Fh (XMS AX=43xx 検出) */
+#define QB_TRAMP_INT67          0xFEE60u  /* F000:EE60 — INT 67h (EMS 検出) */
+/* XMS (HIMEM 相当) ドライバ entry。INT 2Fh AX=4310h が ES:BX=F000:EE70 として返す far アドレス。
+ * INT で踏まれず far CALL されるので NOP + RETF (0xCB)。NOP が biosfunc→qb_dos_xms_entry_hook を踏む。 */
+#define QB_TRAMP_XMS_ENTRY      0xFEE70u  /* F000:EE70 */
 
 /* PSP/COM のロードセグメント (PSP 自体もここに置く)。
  * EXE は PSP の直後 (256 byte = 16 paragraphs 先) に image を配置する慣例。 */
@@ -114,6 +122,20 @@ int qb_dos_int21_hook(void);
 
 /* INT 20h (DOS exit ショートカット) (0xFEE20 で biosfunc から呼ばれる)。常に 1。 */
 int qb_dos_int20_hook(void);
+
+/* XMS/EMS 需要プローブのフック (0xFEE50 / 0xFEE60 で biosfunc から呼ばれる)。検出だけして
+ * ログ+カウントし、レジスタは変えず (= 未インストール応答を維持) 1 を返す。 */
+int qb_dos_int2f_hook(void);   /* INT 2Fh: AX=43xx (XMS インストールチェック) を記録/応答 */
+int qb_dos_int67_hook(void);   /* INT 67h: EMS 呼び出しを記録 */
+
+/* XMS ドライバ entry フック (0xFEE70 で biosfunc から呼ばれる)。qb_xms_dispatch へ委譲。 */
+int qb_dos_xms_entry_hook(void);
+
+/* 需要プローブのカウンタ取得 (bridge → qbDebug.memprobe)。which: 0=XMS / 1=EMS / 2=EMMXXXX0 open。
+ * カウンタは Run 毎 (loader-start) にリセットされ、現タイトルの要求回数を表す。 */
+uint32_t qb_dos_memprobe_count(int which);
+/* dos_int21 の AH=3Dh open が "EMMXXXX0" デバイスを開こうとした時に呼ぶ (EMS 検出の別経路)。 */
+void qb_dos_memprobe_note_emm_open(void);
 
 /* exit 状態の取得 (JS bridge から polling)。
  * 0 = まだ動作中、1 = INT 21h AH=4Ch / INT 20h で終了済み。

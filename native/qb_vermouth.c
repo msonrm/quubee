@@ -13,15 +13,18 @@ extern void    midimod_loadall(MIDIMOD hdl);
  * 楽器バンク (tone[]) は midimod_create + midimod_loadall で構築する。 */
 MIDIMOD vermouth_module = NULL;
 
-/* JS 側が pccore_init の前に呼ぶ。timidity.cfg と .pat 群は事前に Emscripten FS の
- * CWD (= np2kai_set_data_dir で設定したディレクトリ) に配置されている前提。
+/* VERMOUTH 合成器 (soundfont = freepats) を構築する。timidity.cfg と .pat 群は事前に
+ * Emscripten FS の CWD (= np2kai_set_data_dir で設定したディレクトリ) に配置されている前提。
  *  - CWD/timidity.cfg
  *  - CWD/freepats/Tone_000/NNN_*.pat, CWD/freepats/Drum_000/NNN_*.pat
- * 失敗時は vermouth_module = NULL のまま (cmmidi_create が NULL を返し no-connect)。
+ * midimod_create 失敗時は vermouth_module = NULL のまま (cmmidi_create が NULL を返し no-connect)。
  *
- * 注意: Phase 3 段階では VERMOUTH 経路は鳴るが、FM 音源との加算で「ビリビリ」歪み
- * が出る問題があり、bridge.js から np2kai_enable_midi(1) は現在呼ばれていない。
- * 配線は将来の再開用に残してある。 */
+ * 現状 (2026-06-05): MIDI は遅延 on-demand で有効化される。MIDI レシピ Run 時に bridge.js が
+ * freepats を配置 → np2kai_enable_midi_now() がここを呼び → 次の reset で RS-MIDI (-X1) が
+ * VERMOUTH に結線され鳴る (実機確認済)。create 前 enable の旧経路 (np2kai_enable_midi + MPU98II)
+ * は -X0 MPU 直叩きゲーム用の足場として温存 (bridge.c 参照)。
+ * かつての「FM との加算でビリビリ」は opngen + ハードクリップ時代の問題で、soft-clip 化 +
+ * RS-MIDI 単独ストリーム化で解消済み。 */
 void qb_vermouth_init(void) {
     if (vermouth_module != NULL) return;
     vermouth_module = midimod_create(np2cfg.samplingrate);
@@ -37,10 +40,12 @@ void qb_vermouth_term(void) {
     }
 }
 
-/* VERMOUTH 合成器が利用可能か (= MIDI 有効化 + freepats ロード成功)。
- * qb_commng.c が RS-MIDI(シリアル) を VERMOUTH に繋ぐかの gate に使う。
- * vermouth_module != NULL は「enable_midi(1) → qb_vermouth_init で midimod_create+loadall 成功」
- * と同値なので、これ 1 つで「MIDI 経路を生かすか」を判定できる。 */
+/* VERMOUTH 合成器が利用可能か (= midimod_create 成功)。qb_commng.c が RS-MIDI(シリアル) を
+ * VERMOUTH に繋ぐかの gate に使う。
+ * 注意: ここでの「利用可能」は midimod_create でモジュールが確保できたこと止まり。楽器ロード
+ * (midimod_loadall) は upstream が void 返しで、欠損/壊れた .pat を黙って飛ばす (inst_bankloadex は
+ * SUCCESS のまま) ため、個々の音色ロード成否はここでは判定できない。.pat の健全性は取得段
+ * (bridge.js ensureMidiLoaded の res.ok 検査) で担保する。 */
 int qb_vermouth_ready(void) {
     return vermouth_module != NULL;
 }

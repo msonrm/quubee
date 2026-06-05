@@ -1,5 +1,54 @@
 # CHANGELOG
 
+## [XMS (HIMEM 相当) Tier 1 HLE — 640KB の壁の外へ] — 2026-06-05
+
+「実 DOS で HIMEM.SYS がロードされている」状態を素直に再現する XMS ドライバを HLE で実装。
+**ブラウザ実機で AMEL `/X` が 338KB の拡張メモリを確保**することをユーザー確認済 (「オーバーレイにプロテクト
+メモリを使用します」表示 + `qbDebug.xms()`)。`native/dos_xms.{c,h}`、既定 ON。
+
+**動機 (需要サーベイ):** `games/mem_test` の 14 本を doc/binary スキャン → 拡張メモリ需要は実在 (XMS=VZ Editor/AMEL、
+EMS=JED/mm46/5ds/FD)。多くは optional だが、AMEL `/X` は XMS が無いと `amel_NN.dat` オーバーレイをディスクから
+何度も読み直す (XMS で消えるアクセス)。
+
+**設計 (faithful HIMEM):**
+- 経路 = ゲームが `INT 2Fh AX=4300h` で検出 (→`AL=80h`) → `AX=4310h` で driver entry 取得 (→`ES:BX=F000:EE70`)
+  → その far アドレスを CALL FAR して `AH`=関数番号で各機能。entry は `dos_loader.c` のトランポリン (NOP+RETF,
+  `QB_TRAMP_XMS_ENTRY`)。`biosfunc()` に case 0xFEE70 追加 (patch01 再生成)。
+- **EMB は実拡張メモリ `CPU_EXTMEM`(32MB、`extbase = ext - 0x100000`) のサブ領域に first-fit 確保** (先頭 64KB は
+  HMA 用に予約)。Move (AH=0Bh) は物理 memmove (handle=0 は conventional の seg:off)、Lock (AH=0Ch) は実 linear
+  `0x100000+offset` を返す (ゲストが A20 を上げて memp_* でアクセスすれば同じバイトに届く)。
+- 実装関数: `00`Version / `08`Query free / `09`Alloc / `0A`Free / `0B`**Move** / `0C`/`0D`Lock/Unlock / `0E`Info /
+  `0F`Realloc / `03`-`07`A20。戻り値は XMS 3.0 契約 (成功 AX=1 / 失敗 AX=0+BL=err)。HMA (`01/02`)・UMB (`10/11`)・
+  32-bit版 (`88/89`) は**素直に「無い」と応答** (BL=0x90/0xB1/0x80)。
+- 既定 ON (= HIMEM 常駐想定)。`qbDebug.xms(0|1)` で A/B 切替 → `{enabled, handles, usedKB, freeKB}`。
+  bridge `np2kai_xms_enable / np2kai_xms_stat`。
+
+**検証:** `tools/xms_test.js` (nasm 合成 COM で 検出→entry→alloc→conv↔EMB の Move 往復のバイト一致を自己検証、
+結果 0xAA@DS:0080) PASS。実証 = AMEL `/X` が実機で 338KB EMB を確保。回帰 = exec_env / batscript / lh5 / lzh /
+diskimage / memprobe 全 PASS、ザルバール等も無傷。VZ は起動時クラッシュだが XMS 無関係の既存課題 (未 HLE の DOS 機能)。
+
+## [XMS/EMS 需要プローブ — 拡張メモリ要求を可視化] — 2026-06-05
+
+XMS/EMS が未実装の段階で「ターゲット群が実際に要求してくるか」を測るため、検出だけの計測器を常設。
+INT 2Fh `AX=43xx` (XMS インストールチェック) / INT 67h (EMS) / `EMMXXXX0` デバイス open (EMS の MS 標準検出口) を
+「無言の IRET スタブ」から「検出ログ + 件数カウント」に格上げ。**応答は従来同様「無し」(レジスタ不変) なので互換性は
+不変・回帰ゼロ**。集計は `qbDebug.memprobe()` → `{xms, ems, emmOpen}` (Run 毎リセット)。実装 = `dos_loader.c`
+(trampoline 0xFEE50/0xFEE60 + 専用フック) + `dos_int21.c` (AH=3Dh で `EMMXXXX0` 検出)。検証 = `tools/memprobe_test.js`
+(合成 COM で 3 経路すべて {1,1,1} + 正常終了)。
+
+**発見:** エディタ系 (JED/mm46/VZ 等) の EMS 検出は IVT[0x67] のドライバヘッダ署名をメモリ読みで memcmp する
+パッシブ方式で、INT 67h も open も通らず能動カウント不可 (盲点)。バイナリ内 `EMMXXXX0` の有無がより確実な EMS 需要
+シグナル。一方 XMS 検出 (INT 2Fh AX=4300) は能動的なので確実に捕捉。
+
+## [コードレビュー追随 — MIDI コメント陳腐化 + freepats res.ok] — 2026-06-05
+
+- **陳腐化コメント修正:** `qb_vermouth.c` / `bridge.c` の「MIDI は OFF / FM 加算でビリビリ歪みのため呼ばれていない」
+  という記述が、MIDI on-demand 実装後の現状と矛盾していたのを修正。create 時 MPU 経路は削除せず「将来の `-X0`
+  MPU 直叩き用の足場」と明示 (TODO/CHANGELOG に `-X0` 候補が残るため)。
+- **freepats 取得の堅牢化:** `ensureMidiLoaded` の index.json / cfg / 各 .pat fetch に `res.ok` 検査を追加。
+  fetch は 404 で reject しないため、未配備/欠損を見逃すと HTML を `.pat` として書き込んでしまう (VERMOUTH は
+  欠損 .pat を黙って飛ばす = `inst_bankloadex` が SUCCESS のまま) のを未然に防ぐ。
+
 ## [MIDI が鳴る — RS-MIDI を VERMOUTH に結線 (遅延 on-demand + reset 跨ぎ修正)] — 2026-06-05
 
 TW212 (bio_100%) の TWMIDI.BAT で、FM とは別の **MIDI 音色がブラウザ実機で鳴る**ようになった。

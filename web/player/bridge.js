@@ -694,10 +694,21 @@ NP2KaiModule({
         if (midiLoadState === 'failed') return false;   // 同セッション内の再試行はしない
         try {
             runStatusEl.textContent = 'MIDI: 初回のみ音色データ (約33MB) を取得します…';
-            const idx = await (await fetch('assets/freepats/index.json')).json();
+            // 各 fetch は res.ok を検査する。fetch は 404 等で reject しないので、未配備や欠損を
+            // 見逃すと HTML エラーページの中身を .pat として書き込んでしまう (VERMOUTH は欠損 .pat を
+            // 黙って飛ばす = inst_bankloadex が SUCCESS のままなので無音の原因が分かりにくい)。
+            // 非 OK は throw して下の catch で failed 化する。
+            const fetchBuf = async (url) => {
+                const r = await fetch(url);
+                if (!r.ok) throw new Error(`${url} (HTTP ${r.status})`);
+                return r.arrayBuffer();
+            };
+            const idxRes = await fetch('assets/freepats/index.json');
+            if (!idxRes.ok) throw new Error(`index.json (HTTP ${idxRes.status})`);
+            const idx = await idxRes.json();
             // timidity.cfg は data dir (CWD=/tmp) 直下、.pat は /tmp/freepats/<rel> に置く
             // (cfg 内 `dir freepats` 前提。C 側 qb_vermouth_init が CWD から読む)。
-            const cfgBuf = await (await fetch('assets/freepats/' + idx.cfg)).arrayBuffer();
+            const cfgBuf = await fetchBuf('assets/freepats/' + idx.cfg);
             M.FS.writeFile('/tmp/' + idx.cfg, new Uint8Array(cfgBuf));
             mkdirSafe('/tmp/freepats');
             // 進捗ライブ表示 (33MB/128 ファイルの DL は数十秒かかるので、件数+MB を出して「進んでいる」を可視化)。
@@ -711,7 +722,7 @@ NP2KaiModule({
             await Promise.all(idx.pats.map(async (rel) => {
                 const slash = rel.lastIndexOf('/');
                 if (slash > 0) mkdirSafe('/tmp/freepats/' + rel.slice(0, slash));
-                const buf = await (await fetch('assets/freepats/' + rel)).arrayBuffer();
+                const buf = await fetchBuf('assets/freepats/' + rel);
                 M.FS.writeFile('/tmp/freepats/' + rel, new Uint8Array(buf));
                 done++; bytes += buf.byteLength;
                 showProgress();
@@ -1052,6 +1063,9 @@ NP2KaiModule({
     const setMul      = M.cwrap('np2kai_set_clock_multiple', 'number', ['number']);
     const midiBytes   = M.cwrap('np2kai_debug_serial_midi_bytes',  'number', ['number']);
     const midiActive  = M.cwrap('np2kai_debug_serial_midi_active', 'number', ['number']);
+    const memprobeFn  = M.cwrap('np2kai_debug_memprobe',           'number', ['number', 'number']);
+    const xmsEnableFn = M.cwrap('np2kai_xms_enable',               'number', ['number', 'number']);
+    const xmsStatFn   = M.cwrap('np2kai_xms_stat',                 'number', ['number', 'number']);
 
     // ---- async 自動クロック (快適化, 既定 ON) ----
     // 達成フレーム時間から CPU クロック倍率を「逆算」する適応コントローラ。run_frame の
@@ -1172,6 +1186,17 @@ NP2KaiModule({
         // active=false なら MIDI 無効 or VERMOUTH 未ロード (com_nc 落ち)。bytes が増えていれば MIDDRV が
         // 実際に送出している。bytes>0 かつ無音なら VERMOUTH 合成/freepats 側を疑う。
         midi: () => ({ active: !!midiActive(handle), bytes: midiBytes(handle) }),
+        // XMS/EMS 需要プローブ: 現タイトルが拡張メモリを要求した回数 (Run 毎リセット)。
+        // xms=INT 2Fh AX=43xx / ems=INT 67h / emmOpen=EMMXXXX0 デバイス open。いずれも未実装で
+        // 「無し」と応答済みなので、>0 なら XMS/EMS HLE の実装価値あり (= 640KB の壁に当たっている)。
+        memprobe: () => ({ xms: memprobeFn(handle, 0), ems: memprobeFn(handle, 1), emmOpen: memprobeFn(handle, 2) }),
+        // XMS (HIMEM 相当) HLE。引数なしで状態表示、xms(0|1) で有効/無効を切替 (次の Run/現状で反映)。
+        // 既定 ON (= HIMEM ロード済の DOS を再現)。enabled/確保中ハンドル数/使用・空き KB を返す。
+        xms: (on) => {
+            if (on !== undefined) xmsEnableFn(handle, on ? 1 : 0);
+            return { enabled: !!xmsStatFn(handle, 0), handles: xmsStatFn(handle, 1),
+                     usedKB: (xmsStatFn(handle, 2) / 1024) | 0, freeKB: (xmsStatFn(handle, 3) / 1024) | 0 };
+        },
         sample: (n=5, intervalMs=200) => {
             const out = [];
             let i = 0;

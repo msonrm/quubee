@@ -26,6 +26,7 @@
 
 #include "dos_loader.h"
 #include "dos_int21.h"
+#include "dos_xms.h"          /* XMS (HIMEM 相当) HLE */
 #include "dos_shell_blob.h"   /* tools/dos_loader/shell.asm の assemble 済 blob (build.sh 生成) */
 
 /* 直接アクセスする NP2kai のゲスト RAM (linear address indexed) */
@@ -578,6 +579,71 @@ static void put_trampoline(uint32_t linear) {
     poke8(linear + 1, 0xCF);  /* IRET */
 }
 
+/* ---- XMS/EMS 需要プローブ (計測器, 2026-06-05) ----
+ * XMS/EMS は未 HLE。だが「フロッピー 2D・〜1998 同人」群が実際に XMS/EMS を要求するか
+ * が不明なので、まず検出だけの計測器を常設する。INT 2Fh AX=43xx (XMS インストールチェック)、
+ * INT 67h (EMS)、および "EMMXXXX0" デバイス open (EMS 検出の MS 標準口、dos_int21 から通知) を
+ * カウント + stderr ログ。応答は従来通り「無し」(レジスタ不変) を保つので互換性に影響しない。
+ * 集計は qb_dos_memprobe_count() → bridge → qbDebug.memprobe()。カウンタは Run 毎にリセット
+ * (loader-start) するので、現在のタイトルが拡張メモリを要求したかを直接読める。 */
+static uint32_t g_probe_xms = 0;       /* INT 2Fh AX=43xx */
+static uint32_t g_probe_ems = 0;       /* INT 67h */
+static uint32_t g_probe_emm_open = 0;  /* open("EMMXXXX0") */
+
+void qb_dos_memprobe_note_emm_open(void) {
+    g_probe_emm_open++;
+    fprintf(stderr, "[memprobe] EMS: open(\"EMMXXXX0\") attempt "
+                    "(unimplemented -> open fails = no EMS, total %u)\n", g_probe_emm_open);
+}
+
+uint32_t qb_dos_memprobe_count(int which) {
+    switch (which) {
+        case 0:  return g_probe_xms;
+        case 1:  return g_probe_ems;
+        case 2:  return g_probe_emm_open;
+        default: return 0;
+    }
+}
+
+/* INT 2Fh フック (0xFEE50)。AX=43xx (XMS インストールチェック/entry 取得) だけ記録する。
+ * 未実装なのでレジスタは変えない → 呼び出し側は AL!=0x80 で「XMS 無し」と判定 (旧 IRET スタブと同値)。
+ * 43xx 以外の multiplex 2Fh はそのまま素通し (レジスタ不変で IRET)。 */
+int qb_dos_int2f_hook(void) {
+    uint16_t ax = (uint16_t)CPU_AX;
+    if ((ax & 0xFF00) == 0x4300) {
+        g_probe_xms++;
+        if (qb_xms_enabled()) {
+            /* HIMEM ロード済として応答する。AX=4300h→AL=80h (在)、AX=4310h→ES:BX=entry。 */
+            if (ax == 0x4300) {
+                CPU_AL = 0x80;
+            } else if (ax == 0x4310) {
+                CPU_ES = 0xF000;
+                CPU_BX = (uint16_t)(QB_TRAMP_XMS_ENTRY & 0xFFFF);
+            }
+            fprintf(stderr, "[xms] INT 2Fh AX=%04X -> %s (total %u)\n", ax,
+                    ax == 0x4300 ? "installed AL=80" : "entry F000:EE70", g_probe_xms);
+        } else {
+            fprintf(stderr, "[memprobe] XMS: INT 2Fh AX=%04X "
+                            "(disabled -> reports absent, total %u)\n", ax, g_probe_xms);
+        }
+    }
+    return 1;
+}
+
+/* XMS ドライバ entry (0xFEE70 の NOP) → ディスパッチャへ委譲。 */
+int qb_dos_xms_entry_hook(void) {
+    return qb_xms_dispatch();
+}
+
+/* INT 67h フック (0xFEE60)。EMS 呼び出し (AH=40h status / 46h version / 41h frame / 43h alloc 等)。
+ * 未実装なのでレジスタを変えず IRET = 旧 IRET スタブと同じ挙動 (EMS 検出側は不在と判定)。記録のみ。 */
+int qb_dos_int67_hook(void) {
+    g_probe_ems++;
+    fprintf(stderr, "[memprobe] EMS: INT 67h AH=%02X "
+                    "(unimplemented -> reports absent, total %u)\n", (uint8_t)CPU_AH, g_probe_ems);
+    return 1;
+}
+
 /* bios_initialize() から毎リセット呼ばれる。トランポリン本体を BIOS area に置く。
  * loader-start は JMP FAR で踏まれる (戻り不要) ので NOP + HLT、
  * INT 21h/INT 20h は INT で踏まれる (IRET で戻る) ので NOP + IRET、
@@ -590,6 +656,14 @@ void qb_dos_install_trampolines(void) {
     /* INT 21h / INT 20h: NOP + IRET */
     put_trampoline(QB_TRAMP_INT21);
     put_trampoline(QB_TRAMP_INT20);
+
+    /* XMS/EMS 需要プローブ: INT 2Fh / INT 67h も NOP + IRET (C フックでログだけ) */
+    put_trampoline(QB_TRAMP_INT2F);
+    put_trampoline(QB_TRAMP_INT67);
+
+    /* XMS ドライバ entry: far CALL で踏まれるので NOP + RETF (0xCB)。NOP が biosfunc を踏む。 */
+    poke8(QB_TRAMP_XMS_ENTRY + 0, 0x90);  /* NOP */
+    poke8(QB_TRAMP_XMS_ENTRY + 1, 0xCB);  /* RETF */
 
     /* HLT ループ: F4 (HLT); EB FD (JMP -3) */
     poke8(QB_TRAMP_HALT_LOOP + 0, 0xF4);
@@ -760,6 +834,13 @@ int qb_dos_loader_start_hook(void) {
             set_ivt(v, 0xF000, (uint16_t)(QB_TRAMP_IRET_STUB & 0xFFFF));
         }
     }
+
+    /* XMS/EMS 需要プローブ: INT 2Fh / INT 67h を IRET スタブでなく専用フックへ向ける
+     * (上のループで一旦スタブ化された分を上書き)。検出ログを出すだけで応答は従来同様「無し」。 */
+    set_ivt(0x2F, 0xF000, (uint16_t)(QB_TRAMP_INT2F & 0xFFFF));
+    set_ivt(0x67, 0xF000, (uint16_t)(QB_TRAMP_INT67 & 0xFFFF));
+    g_probe_xms = g_probe_ems = g_probe_emm_open = 0;  /* この Run の計測をリセット */
+    qb_xms_reset();   /* XMS ハンドル表を Run 毎にクリア + プールを CPU_EXTMEM から再計算 */
 
     /* 環境セグメント (PSP[0x2C] で指される) を先に作っておく */
     build_env(QB_DOS_ENV_SEG);

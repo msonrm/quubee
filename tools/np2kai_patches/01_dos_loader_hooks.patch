@@ -1,8 +1,8 @@
 diff --git a/bios/bios.c b/bios/bios.c
-index 59758ca..f7ed703 100755
+index 59758ca..c5126a3 100755
 --- a/bios/bios.c
 +++ b/bios/bios.c
-@@ -410,6 +410,12 @@ static void setbiosseed(UINT8 *ptr, UINT size, UINT seedpos) {
+@@ -410,6 +410,15 @@ static void setbiosseed(UINT8 *ptr, UINT size, UINT seedpos) {
  	ptr[seedpos + 1] -= y;
  }
  
@@ -10,12 +10,15 @@ index 59758ca..f7ed703 100755
 +extern int qb_dos_loader_start_hook(void);
 +extern int qb_dos_int21_hook(void);
 +extern int qb_dos_int20_hook(void);
++extern int qb_dos_int2f_hook(void);   /* qb: XMS 需要プローブ (INT 2Fh AX=43xx) */
++extern int qb_dos_int67_hook(void);   /* qb: EMS 需要プローブ (INT 67h) */
++extern int qb_dos_xms_entry_hook(void); /* qb: XMS (HIMEM 相当) ドライバ entry */
 +extern void qb_dos_install_trampolines(void);
 +
  void bios_initialize(void) {
  
  	BOOL	biosrom;
-@@ -517,6 +523,9 @@ void bios_initialize(void) {
+@@ -517,6 +526,9 @@ void bios_initialize(void) {
  	mem[0xffff0] = 0xea;
  	STOREINTELDWORD(mem + 0xffff1, 0xfd800000);
  
@@ -25,7 +28,7 @@ index 59758ca..f7ed703 100755
  	CopyMemory(mem + 0x0fd800 + 0x0e00, keytable[0], 0x60 * 8);
  	
  	//fh = file_create_c(_T("emuitf.rom"));
-@@ -911,7 +920,7 @@ void biosioemu_proc(void) {
+@@ -911,7 +923,7 @@ void biosioemu_proc(void) {
  UINT MEMCALL biosfunc(UINT32 adrs) {
  
  	UINT16	bootseg;
@@ -34,7 +37,7 @@ index 59758ca..f7ed703 100755
  // np21w ver0.86 rev46 BIOS I/O emulation
  #if defined(BIOS_IO_EMULATION)
  	UINT32	oldEIP;
-@@ -1172,6 +1181,20 @@ UINT MEMCALL biosfunc(UINT32 adrs) {
+@@ -1172,6 +1184,33 @@ UINT MEMCALL biosfunc(UINT32 adrs) {
  			CPU_REMCLOCK -= 2000;
  			bootstrapload();
  			return(0);
@@ -52,6 +55,19 @@ index 59758ca..f7ed703 100755
 +		case 0xFEE20:  /* INT 20h (DOS exit ショートカット) */
 +			CPU_REMCLOCK -= 50;
 +			return qb_dos_int20_hook();
++
++		/* ---- qb: XMS/EMS 需要プローブ (検出ログのみ、応答は未実装=無しを維持) ---- */
++		case 0xFEE50:  /* INT 2Fh (XMS インストールチェック AX=43xx) */
++			CPU_REMCLOCK -= 50;
++			return qb_dos_int2f_hook();
++
++		case 0xFEE60:  /* INT 67h (EMS) */
++			CPU_REMCLOCK -= 50;
++			return qb_dos_int67_hook();
++
++		case 0xFEE70:  /* XMS (HIMEM 相当) ドライバ entry (far CALL) */
++			CPU_REMCLOCK -= 50;
++			return qb_dos_xms_entry_hook();
  	}
  
  	if ((adrs >= 0xf9950) && (adrs <= 0x0f9990) && (!(adrs & 3))) {

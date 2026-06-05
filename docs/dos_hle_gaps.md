@@ -62,7 +62,30 @@
 
 ## 3. INT 21h の外（DOS 周辺機能）
 
-- **EMS / XMS なし**（INT 67h は IRET スタブ）。EXTMEM 32MB はあるがドライバが無い。
+- **XMS（HIMEM.SYS 相当）= 実装済み（Tier 1 MVP、2026-06-05、既定 ON）**。EXTMEM 32MB は
+  `i386core.e.ext`（`CPU_EXTMEM`、`extbase = ext - 0x100000`）に実在し、これを「HIMEM ロード済の DOS」
+  として素直に再現する。`native/dos_xms.{c,h}`。
+  - 経路: ゲームが INT 2Fh `AX=4300h` で検出（→`AL=80h`）→ `AX=4310h` で driver entry 取得
+    （→`ES:BX = F000:EE70`）→ その far アドレスを CALL FAR して `AH`=関数番号で各機能。entry は
+    `dos_loader.c` のトランポリン（NOP+RETF, `QB_TRAMP_XMS_ENTRY`）。
+  - EMB は `CPU_EXTMEM` のサブ領域に first-fit 確保（先頭 64KB は HMA 用に予約）。実装関数 = `00h`Version /
+    `08h`Query free / `09h`Alloc / `0Ah`Free / `0Bh`**Move**（物理 memmove、handle=0 は conventional の seg:off）/
+    `0Ch`/`0Dh`Lock/Unlock（実 linear `0x100000+offset` を返す）/ `0Eh`Info / `0Fh`Realloc / `03h-07h`A20（成功応答）。
+    戻り値は XMS 3.0 契約（成功 AX=1 / 失敗 AX=0+BL=err）。
+  - 未提供（素直に「無い」と応答）: HMA（`01h/02h`→BL=0x90）/ UMB（`10h/11h`→BL=0xB1）/ 32-bit版（`88h/89h`）。
+  - 制御/診断: `qbDebug.xms(0|1)`（既定 ON、A/B 用に切替可）→ `{enabled, handles, usedKB, freeKB}`。
+    検証 = `tools/xms_test.js`（合成 COM で検出→entry→alloc→Move 往復のバイト一致）。実証 = AMEL `/X` が
+    338KB EMB を確保（games/mem_test）。
+- **EMS（EMM386 相当）= 未実装**。INT 67h は需要プローブのみ（検出ログ+カウント、応答は「無し」）。
+  - **需要プローブ常設（2026-06-05）**: INT 2Fh `AX=43xx` / INT 67h / `EMMXXXX0` デバイス open を
+    「検出ログ + 件数カウント」化。XMS 無効時は INT 2Fh も「無し」と応答。集計は `qbDebug.memprobe()`
+    → `{xms, ems, emmOpen}`（Run 毎リセット）。実装 = `dos_loader.c`（trampoline 0xFEE50/0xFEE60）+
+    `dos_int21.c`（AH=3Dh で `EMMXXXX0` 検出）。検証 = `tools/memprobe_test.js`。
+  - **盲点**: エディタ系（JED/mm46/VZ 等）の EMS 検出は IVT[0x67] のドライバヘッダ署名をメモリ読みで
+    memcmp するパッシブ方式で、INT 67h も open も通らず能動カウント不可。バイナリ内 `EMMXXXX0` の有無が
+    より確実な EMS 需要シグナル。
+  - 実装する場合: EMS はページフレーム（D000:0000 の 64KB 窓）の copy 同期エミュが要るため XMS より重い。
+    DPMI/DOS エクステンダは射程外。
 - **INT 25h/26h（絶対セクタ R/W）= IRET スタブ** → 直接セクタアクセス・一部コピープロテクト不可。
 - **INT 33h マウスドライバ = スタブ**。ただし**ハード（バスマウス）経由は NP2kai 側で動く**。
 - **COMMAND.COM は起動 .bat 専用のミニ実装のみ**（2026-06-03、`tools/dos_loader/shell.asm` +

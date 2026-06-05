@@ -40,9 +40,11 @@ typedef struct {
 
 static QB_State s_state;
 static char s_data_dir[MAX_PATH];
-/* MIDI を有効化するかどうか。create 前に np2kai_enable_midi() で立てる。
- * デフォルト OFF: MPU98II ハードは検出されず、ゲームは FM 専用 (= 音源選択 UI が出る)。
- * ON にすると pccore_init 内で MPU98II ポートが attach され、VERMOUTH が PCM 合成。 */
+/* create 時に MPU98II ハードを attach するか (= -X0 MPU 直叩き経路用)。create 前に
+ * np2kai_enable_midi() で立てる旧 API でのみ ON になる。デフォルト OFF: MPU98II は検出されず、
+ * ゲームは FM 専用 (= 音源選択 UI が出る)。
+ * 現行の MIDI 経路 (RS-MIDI -X1) は create 後の np2kai_enable_midi_now() を使い、この flag の
+ * create 時分岐 (下記) は通らない。create 時分岐は将来の -X0 MPU 直叩き対応のための足場。 */
 static int s_midi_enable = 0;
 
 int np2kai_set_data_dir(const char *path) {
@@ -54,13 +56,14 @@ int np2kai_set_data_dir(const char *path) {
 	return 0;
 }
 
-/* JS から np2kai_create の前に呼ぶ。1=MIDI 有効化 (MPU98II + VERMOUTH)、0=無効。
- * 呼ばないと既定の 0 のまま (= MIDI OFF)。create 後の切り替えはできない (要 reset)。
+/* create 前に呼ぶ MPU98II 有効化 API。1=MPU98II ポート attach + VERMOUTH 構築、0=無効。
+ * create 後の切り替えはできない (要 reset)。
  *
- * 注意: Phase 3 段階では VERMOUTH 経路は鳴るが、FM 音源との合算で「ビリビリ」歪み
- * が出る品質課題があり、bridge.js からは現状呼ばれない (= 常に OFF)。
- * 配線一式 (qb_commng.c / qb_vermouth.c / sdl/cmmidi.c) と freepats のセット
- * アップスクリプトは将来の再開用に残してある。 */
+ * 現状フロントエンドはこちらを呼ばない: 実プレイ可能な MIDI ゲーム (MIDDRV 等) は RS-MIDI
+ * (-X1, シリアル) 経路で、create 後の np2kai_enable_midi_now() で結線する方が筋が良いため
+ * (core 再生成不要・MPU stream 二重登録による音量半減も無い)。
+ * この API と create 時の mpuenable 分岐は、ゲームが MPU98II (0xC0D0) を直接叩く -X0 経路への
+ * 対応を将来入れる時の足場として温存している (TODO「-X0 MPU 直叩き」参照)。 */
 void np2kai_enable_midi(int enable) {
 	s_midi_enable = enable ? 1 : 0;
 	LOGD("np2kai_enable_midi: %d", s_midi_enable);
@@ -127,8 +130,11 @@ np2kai_handle np2kai_create(void) {
 		chdir(s_data_dir);
 	}
 	if (s_midi_enable) {
-		/* MIDI 有効化: MPU98II ポート attach + VERMOUTH 合成器を起動。
-		 * file_setcd 後に timidity.cfg を読みに行くので順序は守る。 */
+		/* -X0 MPU 直叩き経路用の足場 (将来対応)。現行 MIDI は create 後の
+		 * np2kai_enable_midi_now() で RS-MIDI を繋ぐので、この分岐は通常通らない
+		 * (s_midi_enable は np2kai_enable_midi でのみ create 前に立つ)。
+		 * MPU98II ポート attach + VERMOUTH 合成器を起動。file_setcd 後に
+		 * timidity.cfg を読みに行くので順序は守る。 */
 		np2cfg.mpuenable = 1;
 		np2cfg.mpuopt = 0;        /* port 0xc0d0, IRQ 3 (NP2kai 既定) */
 		qb_vermouth_init();
@@ -226,6 +232,20 @@ extern UINT32 qb_serial_midi_bytes(void);   /* qb_commng.c */
 extern int    qb_serial_midi_active(void);  /* qb_commng.c */
 uint32_t np2kai_debug_serial_midi_bytes(np2kai_handle h)  { if (!h) return 0; return (uint32_t)qb_serial_midi_bytes(); }
 int      np2kai_debug_serial_midi_active(np2kai_handle h) { if (!h) return 0; return qb_serial_midi_active(); }
+
+/* XMS/EMS 需要プローブ (qbDebug.memprobe): 現タイトルが拡張メモリ (XMS/EMS) を要求した回数。
+ * which 0=XMS(INT 2Fh AX=43xx) / 1=EMS(INT 67h) / 2=EMMXXXX0 open。いずれも未実装で「無し」と
+ * 応答済みなので、>0 は「この方式の HLE 実装価値あり」のシグナル。dos_loader.c が更新。 */
+extern uint32_t qb_dos_memprobe_count(int which);   /* dos_loader.c */
+uint32_t np2kai_debug_memprobe(np2kai_handle h, int which) { if (!h) return 0; return qb_dos_memprobe_count(which); }
+
+/* XMS (HIMEM 相当) HLE の制御/診断 (qbDebug.xms)。enable: 1=有効化/0=無効化、戻り値=反映後の実効状態。
+ * stat which: 0=有効か / 1=確保中ハンドル数 / 2=使用バイト / 3=空きバイト。dos_xms.c が実装。 */
+extern void     qb_xms_set_enabled(int on);   /* dos_xms.c */
+extern int      qb_xms_enabled(void);
+extern uint32_t qb_xms_stat(int which);
+int      np2kai_xms_enable(np2kai_handle h, int on) { if (!h) return 0; qb_xms_set_enabled(on); return qb_xms_enabled(); }
+uint32_t np2kai_xms_stat(np2kai_handle h, int which) { if (!h) return 0; return qb_xms_stat(which); }
 
 uint64_t np2kai_debug_get_pc(np2kai_handle h) {
 	if (!h) return 0;
