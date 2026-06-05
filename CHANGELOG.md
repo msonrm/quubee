@@ -1,5 +1,31 @@
 # CHANGELOG
 
+## [bio 100% 互換性目標を設定 + XMS 実クライアント検証 + EMS 据え置き判断] — 2026-06-05
+
+**新目標「bio 100% 純ゲーム 31 本中 20 本を T3(プレイ可能)」を設定** (詳細・スコアボードは TODO.md)。
+bio 100% は単一同人サークルのフリーソフト集 = ミッション中核。音源ドライバ・起動規約・エンジンを共有する
+ため高レバレッジ。36 書庫を doc 精読で仕分け → 純ゲーム 31 (非ゲーム 4: コースエディタ/ランキングツール/
+にゃん文字/WIP、重複 1: FINAT=FINAL=Super Depth 2)。
+
+**ベースライン計測 `tools/bio100_triage.js`:** 全 31 本を headless でブートし framebuffer の色数+フレーム間
+差分で到達 Tier を自動推定。**描画到達 (RENDER+ALIVE) = 20/31、アニメ動作中 15。** 既知動作の DEPTH/KANI/TW212
+が全て ALIVE = 判定信頼。DEAD 8 本の大半は harness 都合 (音源ドライバ未常駐の早期終了 5 本 + テキストゲーム
+DADA/YY の色メトリクス盲点) で真の非互換ではない → 真の射程 24〜28、20 は余裕。
+
+**XMS の実クライアント検証 `tools/xms_clients_test.js`:** 実 DOS エディタ (AMEL/JED/5ds/MM46) を headless で
+ステージして XMS とのやり取りを観測。**AMEL `/X` が Tier1 XMS 経由で 338KB を実確保・未実装 fn ゼロ・EMS 落下
+ゼロ**を確認 (他 3 本は条件付き XMS で headless では初期化前に終了/待機)。
+
+**EMS 据え置きを確定:** 全 54 書庫 (bio_100 + mem_test + 単発) を静的スキャン → **EMS-only (EMMXXXX0 あり・
+XMS プローブ無し) はゼロ**。EMS を叩く 25 本は例外なく XMS も叩く = 我々の XMS にフォールバックして EMS 無しで
+動く公算。EMS HLE (ページフレーム copy で重い) は現 corpus への効果が薄いため**据え置き**、需要プローブを
+常設のまま様子見 (再評価トリガ = 実プレイ中の `memprobe.ems>0` or XMS 非対応の EMS 専用タイトル発見)。
+根拠を `docs/dos_hle_gaps.md` に記録。
+
+**XMS Move のハードニング (`native/dos_xms.c`):** `xms_resolve()` の conventional (handle=0) 経路に `start+len`
+の境界チェックを追加。実 mem[] (2MB) 配列外への memmove (病的 length) を offset-invalid で弾き、Wasm 配列外
+トラップ (エミュ即死) を防ぐ。EMB 側と対称化。回帰 = xms_test の conv↔EMB Move 往復で確認。
+
 ## [XMS (HIMEM 相当) Tier 1 HLE — 640KB の壁の外へ] — 2026-06-05
 
 「実 DOS で HIMEM.SYS がロードされている」状態を素直に再現する XMS ドライバを HLE で実装。

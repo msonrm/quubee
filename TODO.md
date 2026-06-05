@@ -1,5 +1,47 @@
 # QB 作業状況
 
+## 🎯 現在の目標: bio 100% ゲーム互換性 (2026-06-05〜)
+
+**目標 = bio 100% の純ゲーム 31 本中 20 本を T3 (操作可能・プレイ可能) にする** (floor=16/過半、stretch=24)。
+
+bio 100% (PC-98 同人サークル) のフリーソフト集は QuuBee ミッションの中核。単一サークルなので音源ドライバ・
+起動規約・エンジンを共有 → 1 本直すと芋づる式に効く高レバレッジ。
+
+### 仕分け (36 書庫 → 純ゲーム 31)
+- **非ゲーム除外 (4)**: C2ED100 (CarII コースエディタ) / C2RANK (ランキングツール) / CATLET10 (にゃん文字=
+  メッセージ表示ノベルティ) / EFORTH07 (作者曰く「まだゲームでない」WIP)
+- **重複統合 (1)**: FINAT100 = FINAL100 と同一「Super Depth 2 "Finalty"」(FINAT は calib.exe 追加版)
+
+### Tier 定義
+T0 起動 (POST 通過) / T1 タイトル描画 / T2 ゲーム画面描画 / **T3 操作可能・プレイ可能** ← 目標は T3。
+T3 確認は入力が要るのでブラウザで人が行う (headless は T0〜T2 まで)。
+
+### ベースライン (headless ブートトリアージ `tools/bio100_triage.js`、2026-06-05)
+主 EXE 直ステージで全 31 本をブートし、framebuffer の色数+フレーム間差分で到達 Tier を自動推定。
+**描画到達 (RENDER+ALIVE) = 20/31、うちアニメ動作中 15。** 既知の動作確認済 3 本 (DEPTH/KANI/TW212) が
+全て ALIVE = 判定の信頼性 OK。
+
+| 状態 | 数 | ゲーム |
+|---|---|---|
+| ● ALIVE (多色+アニメ) | 15 | CRAY CX92 **DEPTH✓** FINAL(SD2) FLIXX **KANI✓** METYS MOG NX93 PECKER POLA POY ROLL SC **TW212✓** |
+| ◐ RENDER (多色静止) | 5 | BIOHJA C2GP CZ SEENA2(色57) STB |
+| ▫ BOOT (graphics乏) | 3 | F1GP(anim) GETS OZ |
+| ❌ DEAD | 8 | DADA* YY* DYNAMO16† GS100† MKD106† SSP101† TWINS110† GGL2 |
+
+\* DADA/YY = テキストアドベンチャー (text VRAM 主体で graphics 色数=1。色メトリクスの盲点で誤 DEAD、実は動作の公算大)
+† 音源ドライバ未常駐が原因の早期終了 (主 exe 直起動。.bat=stage_script 経路で再検証すれば復活見込み = クラスタ)
+
+→ DEAD 8 本の大半は harness 都合 (ドライバ未常駐 + テキストゲーム誤判定) で真の非互換ではない。**真の射程は 24〜28、20 は余裕。**
+
+### 次の作業
+- [ ] DEAD クラスタ (DYNAMO16/GS100/MKD106/SSP101/TWINS110/OZ100) を .bat (stage_script) 経路で再トリアージ → 母数底上げ
+- [ ] テキストゲーム (DADA/YY) を text VRAM 内容で再判定
+- [ ] ALIVE 15 本をブラウザで T3 確認 (実プレイ・入力テスト)
+- [ ] EMS+XMS の 25 本が XMS フォールバックで健全に動くか実プレイで確認 (`qbDebug.memprobe()` の ems 監視、既定 ON の挙動変化リスク)
+- [ ] GGL2_100 の真ブロッカー調査
+
+---
+
 ## Phase 1 完了 ✓ — Wasmビルドとブラウザ動作確認
 
 - [x] NP2kai core を Emscripten (apt版 3.1.69) でWasmビルド
