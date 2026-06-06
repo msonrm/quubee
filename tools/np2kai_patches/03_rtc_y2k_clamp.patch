@@ -1,0 +1,21 @@
+diff --git a/calendar.c b/calendar.c
+index 2ff2698..d45ae5e 100755
+--- a/calendar.c
++++ b/calendar.c
+@@ -173,7 +173,15 @@ static void date2deg(_SYSTIME *t, const UINT8 *bcd) {
+ 
+ static void date2bcd(UINT8 *bcd, const _SYSTIME *t) {
+ 
+-	bcd[0] = AdjustAfterMultiply((UINT8)(t->year % 100));
++	/* qb: Y2K 対策。90 年代の PC-98 ゲームは RTC の年を「年-1900」の 2 桁前提で扱う
++	 * (例: 蟹味噌 1992 の KANI.SCR は固定幅レコードに "YY/MM/DD" を書く)。現在年 2026 等を
++	 * 素直に渡すと "2026-1900=126" の 3 桁になり固定幅セーブが壊れてゲームが自分の出力を
++	 * 読めなくなる。RTC を読む唯一の出口であるここで 20xx → 199x に写像し 2 桁を保証する
++	 * (種/ドリフト/cal_vofs 汚染に関わらず常に効く)。BCD 下 2 桁が 90-99 ⇒ ゲームの世紀判定が
++	 * 必ず 19xx 側になる。 */
++	UINT16 qb_y = t->year;
++	if (qb_y >= 2000) qb_y = 1999;
++	bcd[0] = AdjustAfterMultiply((UINT8)(qb_y % 100));
+ 	bcd[1] = (UINT8)((t->month << 4) + t->week);
+ 	bcd[2] = AdjustAfterMultiply((UINT8)t->day);
+ 	bcd[3] = AdjustAfterMultiply((UINT8)t->hour);

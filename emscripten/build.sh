@@ -3,16 +3,20 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-# NP2kai サブモジュールへの qb 固有パッチを適用 (未適用の場合のみ)。
+# NP2kai サブモジュールへの qb 固有パッチを per-patch 冪等で適用。
 # 詳細は tools/np2kai_patches/README.md を参照。
-if ! grep -q "qb_dos_install_trampolines" core/np2kai/bios/bios.c 2>/dev/null; then
-    echo "Applying NP2kai patches..."
-    for p in tools/np2kai_patches/*.patch; do
-        [ -f "$p" ] || continue
+echo "Applying NP2kai patches..."
+for p in tools/np2kai_patches/*.patch; do
+    [ -f "$p" ] || continue
+    if (cd core/np2kai && git apply --reverse --check "../../$p") 2>/dev/null; then
+        echo "  skip (already applied): $(basename "$p")"
+    elif (cd core/np2kai && git apply --check "../../$p") 2>/dev/null; then
         (cd core/np2kai && git apply "../../$p")
-        echo "  applied: $p"
-    done
-fi
+        echo "  applied: $(basename "$p")"
+    else
+        echo "  WARN: cannot apply (conflict?): $(basename "$p")"
+    fi
+done
 
 # --clean で再configure
 if [[ "${1:-}" == "--clean" ]]; then

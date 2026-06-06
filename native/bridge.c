@@ -275,6 +275,13 @@ uint32_t np2kai_debug_peek8(np2kai_handle h, uint32_t linear_addr) {
 	return memp_read8(linear_addr);
 }
 
+/* デバッグ用書込プリミティブ (peek8 の対)。テキスト VRAM へマーカーを仕込んで
+ * 「ゲームが属性を書くか／既定値を継ぐか」を切り分ける等の調査に使う。 */
+void np2kai_debug_poke8(np2kai_handle h, uint32_t linear_addr, uint32_t val) {
+	if (!h) return;
+	memp_write8(linear_addr, (REG8)(val & 0xff));
+}
+
 uint32_t np2kai_debug_get_gdc_mode1(np2kai_handle h) {
 	if (!h) return 0;
 	return gdc.mode1;
@@ -296,6 +303,16 @@ uint32_t np2kai_debug_get_grphdisp(np2kai_handle h) {
 uint32_t np2kai_debug_get_gdc_para(np2kai_handle h, int which, int index) {
 	if (!h || index < 0 || index > 255) return 0;
 	return (uint32_t)(which ? gdc.s.para[index] : gdc.m.para[index]);
+}
+
+/* PC-98 RTC (μPD4990A) が「いま返す」日付 BCD を読む (Y2K クランプ検証用)。
+ * idx 0=年(BCD 下2桁) 1=(月<<4|曜) 2=日 3=時 4=分 5=秒。年が 0x99 等 (<0xA0) なら 2 桁で健全。 */
+extern void calendar_getvir(UINT8 *bcd);
+uint32_t np2kai_debug_rtc_bcd(np2kai_handle h, int idx) {
+	UINT8 bcd[6];
+	if (!h || idx < 0 || idx > 5) return 0;
+	calendar_getvir(bcd);
+	return (uint32_t)bcd[idx];
 }
 
 /* デバッグ: 16-bit CPU レジスタを idx で読む (ハング時のレジスタ確認用)。

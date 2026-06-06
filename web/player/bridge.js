@@ -1252,6 +1252,42 @@ NP2KaiModule({
                 lines.push(r.toString().padStart(2) + ': ' + s);
             }
             return '\n' + lines.join('\n');
+        },
+        // 指定 row (既定 0) の内容変化を時系列で記録する。画面遷移時に row が「空白化(=クリア)」を
+        // 通るかを捉えるための watcher。textVram と違い漢字セル(高位 bit7)を '#'、空白を ' ' で区別
+        // するので「全部空白に戻った瞬間」が分かる。タイトル→本編 遷移で残留テキストがクリアされる
+        // (= 我々が取りこぼしている) のか、メッセージのまま HUD を重ね書きするのかの最終判定用。
+        // 使い方: qbDebug.watchTextRow(0, 30) を実行 → キーを押して本編へ進入 → 変化ログを見る。
+        watchTextRow: (row = 0, durationSec = 30, intervalMs = 30) => {
+            const decode = () => {
+                let s = '';
+                for (let c = 0; c < 80; c++) {
+                    const lo = peek8(handle, 0xA0000 + (row * 80 + c) * 2) & 0xff;
+                    const hi = peek8(handle, 0xA0000 + (row * 80 + c) * 2 + 1) & 0xff;
+                    if (hi & 0x80) s += '#';
+                    else if (lo >= 0x20 && lo < 0x7f) s += String.fromCharCode(lo);
+                    else s += ' ';
+                }
+                return s.replace(/\s+$/, '');
+            };
+            let last = null;
+            const t0 = performance.now();
+            console.log(`[watchTextRow ${row}] 開始。今からキーを押して本編へ進めてください。`);
+            const id = setInterval(() => {
+                const v = decode();
+                if (v !== last) {
+                    const ms = (performance.now() - t0).toFixed(0);
+                    console.log(`[+${ms}ms] row${row} = "${v}"${v === '' ? '  ← 空白化(クリア!)' : ''}`);
+                    last = v;
+                }
+                if (performance.now() - t0 > durationSec * 1000) {
+                    clearInterval(id);
+                    console.log(`[watchTextRow] ${durationSec}s で停止。row${row} が一度でも "← 空白化" を通れば` +
+                                ` ゲームはクリアを発行している (我々が取りこぼし)。通らず message→HUD なら ゲームが` +
+                                ` クリアしない設計。`);
+                }
+            }, intervalMs);
+            return `watching text row ${row} for ${durationSec}s — キーで本編へ進めてください`;
         }
     };
 

@@ -981,11 +981,24 @@ static void int21_25_set_vec(void) {
     poke16(a + 2, CPU_DS);
 }
 
+/* PC-98 同時代の年へクランプする。対象は 1990 年代のフリーソフト/同人ゲーム (例: 蟹味噌は
+ * 1992 年・PC-9801 用)。当時は完全に pre-Y2K で、年を「年-1900」の 2 桁前提に扱う
+ * (蟹味噌の KANI.SCR は固定幅レコードに "YY/MM/DD" を書く)。現在年 2026 を素直に返すと
+ * "2026-1900=126" の 3 桁になり日付フィールドがオーバーフロー → ファイル形式が壊れてゲームが
+ * 自分の出力を読めず "形式が違います" になる (Y2K 系バグの誘発)。判定基準は pre-Y2K の上限
+ * 1999 に置き、20xx は一律 1999 に丸める (表示 "99"・2 桁)。19xx はそのまま。
+ * ※蟹味噌は DOS の日付でなく PC-98 RTC を読む → 本丸の対策は calendar.c の date2bcd 側
+ *   (同じ 1999 クランプ)。こちらは DOS AH=2Ah を使う他タイトル用の同等対策。 */
+static uint16_t qb_era_year(uint16_t year) {
+    if (year >= 2000) year = 1999;
+    return year;
+}
+
 static void int21_2a_get_date(void) {
     time_t t = time(NULL);
     struct tm *tm = localtime(&t);
-    if (!tm) { CPU_CX = 2026; CPU_DH = 1; CPU_DL = 1; CPU_AL = 0; return; }
-    CPU_CX = (uint16_t)(tm->tm_year + 1900);
+    if (!tm) { CPU_CX = 1999; CPU_DH = 1; CPU_DL = 1; CPU_AL = 0; return; }
+    CPU_CX = qb_era_year((uint16_t)(tm->tm_year + 1900));
     CPU_DH = (uint8_t)(tm->tm_mon + 1);
     CPU_DL = (uint8_t)tm->tm_mday;
     CPU_AL = (uint8_t)tm->tm_wday;
