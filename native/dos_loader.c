@@ -653,8 +653,9 @@ int qb_dos_int67_hook(void) {
 
 /* bios_initialize() から毎リセット呼ばれる。トランポリン本体を BIOS area に置く。
  * loader-start は JMP FAR で踏まれる (戻り不要) ので NOP + HLT、
- * INT 21h/INT 20h は INT で踏まれる (IRET で戻る) ので NOP + IRET、
- * halt loop は終了後の停止用 (HLT; JMP -3)。 */
+ * INT 21h/INT 20h/INT 2Fh/INT 67h/INT 29h は INT で踏まれる (IRET で戻る) ので NOP + IRET、
+ * XMS ドライバ entry は far CALL で踏まれるので NOP + RETF、
+ * halt loop は終了後の停止用 (HLT; JMP -3)。番地は dos_loader.h の QB_TRAMP_* を参照。 */
 void qb_dos_install_trampolines(void) {
     /* loader-start: NOP + HLT (フックで CS:IP が書き換わるので HLT は到達しない) */
     poke8(QB_TRAMP_LOADER_START + 0, 0x90);

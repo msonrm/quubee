@@ -69,8 +69,9 @@ void qb_xms_reset(void) {
 
 /* ---- conventional メモリ read (move struct / handle=0 の解決に使う) ---- */
 static uint16_t cmem16(uint32_t a) {
-    a &= QB_GUEST_MEM_MASK;
-    return (uint16_t)(mem[a] | (mem[a + 1] << 8));
+    /* 上位バイトも個別にマスクする。a==QB_GUEST_MEM_MASK のとき a+1 が mem[] (2MB) の
+     * 1 個外を指すのを防ぐ (現状の呼び出しでは届かないが防御的に)。 */
+    return (uint16_t)(mem[a & QB_GUEST_MEM_MASK] | (mem[(a + 1) & QB_GUEST_MEM_MASK] << 8));
 }
 static uint32_t cmem32(uint32_t a) {
     return (uint32_t)cmem16(a) | ((uint32_t)cmem16(a + 2) << 16);
@@ -99,7 +100,9 @@ static int xms_find_gap(uint32_t size, uint32_t *out) {
 static void xms_free_query(uint32_t *largest, uint32_t *total) {
     uint32_t used = 0;
     for (int i = 1; i < XMS_MAX_HANDLES; i++) if (g_h[i].used) used += g_h[i].size;
-    *total = (g_pool_end - g_pool_base) - used;
+    /* プール未初期化 (g_pool_end<=g_pool_base) では 0 を返す。uint32 アンダーフローで
+     * 「巨大な空き」を誤報しないよう qb_xms_stat(3) と同じガードを掛ける。 */
+    *total = (g_pool_end > g_pool_base) ? (g_pool_end - g_pool_base) - used : 0;
 
     /* 最大連続空き: 候補開始点 = pool_base と各使用ブロック末尾。各点から次の使用ブロック開始までの隙間。 */
     uint32_t best = 0;

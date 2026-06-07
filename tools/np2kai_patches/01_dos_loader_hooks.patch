@@ -23,7 +23,7 @@ index 59758ca..8053544 100755
  	mem[0xffff0] = 0xea;
  	STOREINTELDWORD(mem + 0xffff1, 0xfd800000);
  
-+	/* Phase 3 ローダ (qb 拡張) — トランポリン (0xFEE00-0xFEE32) を仕込む */
++	/* Phase 3 ローダ (qb 拡張) — トランポリン (0xFEE00 以降、詳細は dos_loader.h) を仕込む */
 +	qb_dos_install_trampolines();
 +
  	CopyMemory(mem + 0x0fd800 + 0x0e00, keytable[0], 0x60 * 8);

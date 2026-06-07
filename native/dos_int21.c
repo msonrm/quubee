@@ -304,15 +304,46 @@ static void sjis_to_jis(uint8_t sh, uint8_t sl, uint8_t *jh, uint8_t *jl) {
     *jl = (uint8_t)(ten + 0x20);
 }
 
-/* 全角文字を tty カーソル位置に描き、カーソルを 2 桁進める (行末は折り返し)。 */
+/* PC-98 半角グラフィック (JIS 区9-11 = ku 9..11) を 1 セルに書く。NEC が JIS X 0208 の
+ * 空き領域 (区9-11) に置いた「半角」の罫線/記号で、SJIS では 0x86xx 帯に当たる。
+ * NP2kai maketext.c はテキスト VRAM セルの低位 (= ku) ∈{9,10,11} を半角 (1 セル) で描くため、
+ * 全角扱いの vram_put_kanji (2 セル書き) を使うと横幅が 2 倍になる (Ray の罫線崩れの真因)。
+ * セル符号化は vram_put_kanji と同じ (低位=ku, 高位=JIS2|0x80) だが書くのは 1 セルだけ。 */
+static void vram_put_kanji_half(int row, int col, uint8_t jis_hi, uint8_t jis_lo) {
+    if (gdc.mode1 & 0x20) {                 /* kanji-access mode を保証 (vram_put_kanji と同じ) */
+        gdc.mode1 &= (uint8_t)~0x20;
+        gdc_restorekacmode();
+    }
+    uint32_t code_off = VRAM_CODE + ((row * TEXT_COLS + col) * 2);
+    uint32_t attr_off = VRAM_ATTR + ((row * TEXT_COLS + col) * 2);
+    mem[code_off]     = (uint8_t)(jis_hi - 0x20);   /* ku (9..11) */
+    mem[code_off + 1] = (uint8_t)(jis_lo | 0x80);
+    mem[attr_off]     = DEF_ATTR;
+    mem[attr_off + 1] = 0;
+    gdcs.textdisp |= GDCSCRN_ALLDRAW2;
+}
+
+/* 全角文字を tty カーソル位置に描き、カーソルを 2 桁進める (行末は折り返し)。
+ * ただし PC-98 半角グラフィック (区9-11) は 1 セル幅なので 1 桁だけ進める。 */
 static void tty_kanji_putc(uint8_t sjis_hi, uint8_t sjis_lo) {
+    uint8_t jh, jl;
+    sjis_to_jis(sjis_hi, sjis_lo, &jh, &jl);
+    uint8_t ku = (uint8_t)(jh - 0x20);
+    if (ku >= 9 && ku <= 11) {              /* PC-98 半角グラフィック (NEC 罫線等) = 1 セル */
+        vram_put_kanji_half(g_cur_row, g_cur_col, jh, jl);
+        g_cur_col++;
+        if (g_cur_col >= TEXT_COLS) {
+            g_cur_col = 0;
+            g_cur_row++;
+            if (g_cur_row >= TEXT_ROWS) { vram_scroll_one(); g_cur_row = TEXT_ROWS - 1; }
+        }
+        return;
+    }
     if (g_cur_col >= TEXT_COLS - 1) {       /* 残り 1 桁では全角が入らない → 次行へ */
         g_cur_col = 0;
         g_cur_row++;
         if (g_cur_row >= TEXT_ROWS) { vram_scroll_one(); g_cur_row = TEXT_ROWS - 1; }
     }
-    uint8_t jh, jl;
-    sjis_to_jis(sjis_hi, sjis_lo, &jh, &jl);
     vram_put_kanji(g_cur_row, g_cur_col, jh, jl);
     g_cur_col += 2;
     if (g_cur_col >= TEXT_COLS) {

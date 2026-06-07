@@ -110,7 +110,7 @@ np2kai_handle np2kai_create(void) {
 	np2cfg.vol_master = 100;
 	/* FM 音源は fmgen (cisc C++ ライブラリ) を既定にする。以前は「低音のビリビリ」を理由に
 	 * opngen (NP2 オリジナル) へ切り替えていたが、その歪みの主因は soft-clip 導入前の
-	 * ハードクリップだった。soft-clip + vol_master=65 + -O2/-O3 (CPU 余裕) を揃えた後の実機
+	 * ハードクリップだった。soft-clip + -O2/-O3 (CPU 余裕) を揃えた後の実機
 	 * A/B で、fmgen は opngen より明確に高音質と確認 (opngen では埋もれて聞こえなかったパート
 	 * が出る)。CPU は重めだが -O3 で吸収できる。実行時 A/B は np2kai_set_fmgen /
 	 * qbDebug.fmgen(0|1) で可能 (次の Run で反映)。 */

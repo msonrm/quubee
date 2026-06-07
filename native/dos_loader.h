@@ -8,6 +8,11 @@
  *   0xFEE30 : HLT ループ (image 終了後の停止用)
  *   0xFEE40 : IRET-only stub (未使用 software INT の安全停止用、IVT[0x22..0xFF] の
  *             未初期化エントリをここに向ける。INT 33h 等の事故防止)
+ *   0xFEE50 : INT 2Fh (XMS インストールチェック AX=43xx)
+ *   0xFEE60 : INT 67h (EMS 検出)
+ *   0xFEE70 : XMS (HIMEM 相当) ドライバ entry (far CALL なので NOP + RETF)
+ *   0xFEE80 : INT 29h (DOS 高速文字出力、master.lib text_clear の ESC[2J 用)
+ * (各番地の詳細は下の QB_TRAMP_* マクロ定義を参照。これが正本)
  *
  * IVT セットアップ後、ゲーム image は CS:IP = 0x0100:0x0100 (COM) か
  * image_base + e_cs : e_ip (EXE) から実行開始。
