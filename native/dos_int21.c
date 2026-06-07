@@ -281,6 +281,16 @@ static void tty_normal_putc(uint8_t ch) {
         if (g_cur_col > 0) g_cur_col--;
         return;
     }
+    if (ch == 0x09) {                       /* HT (tab): 次の 8 桁タブストップへ (PC-98 CON 準拠) */
+        g_cur_col = (g_cur_col & ~7) + 8;   /* 文字は書かずカーソルのみ前進 (DOS 標準) */
+        if (g_cur_col >= TEXT_COLS) {
+            g_cur_col = 0;
+            g_cur_row++;
+            if (g_cur_row >= TEXT_ROWS) { vram_scroll_one(); g_cur_row = TEXT_ROWS - 1; }
+        }
+        return;
+    }
+    if (ch == 0x07) return;                 /* BEL: グリフ化しない (可聴ビープは未対応、無視) */
     vram_put_char(g_cur_row, g_cur_col, ch);
     g_cur_col++;
     if (g_cur_col >= TEXT_COLS) {
@@ -1756,6 +1766,20 @@ static void int21_52_list_of_lists(void) {
     CPU_FLAG &= ~C_FLAG;
 }
 
+/* AH=58h メモリ確保ストラテジ / UMB リンク状態の get/set。
+ * 我々は UMB を持たず確保は first-fit 固定なので、get には良性の既定値、set は no-op 成功を返す。
+ * (GBOX の United モードが AX=5803h=「set UMB link state」を呼ぶ。未実装=invalid function だと
+ *  プログラムによっては誤判定するため、素直に「UMB 無し・成功」を返す。) */
+static void int21_58_alloc_strategy(void) {
+    switch (CPU_AL) {
+    case 0x00: CPU_AX = 0x0000; CPU_FLAG &= ~C_FLAG; break;  /* get strategy = 0 (low first fit) */
+    case 0x02: CPU_AX = 0x0000; CPU_FLAG &= ~C_FLAG; break;  /* get UMB link state = 0 (未リンク) */
+    case 0x01:                                               /* set strategy (BL) — no-op 成功 */
+    case 0x03: CPU_FLAG &= ~C_FLAG; break;                   /* set UMB link state (BX) — no-op 成功 */
+    default:   CPU_AX = 0x0001; CPU_FLAG |= C_FLAG; break;   /* invalid subfunction */
+    }
+}
+
 /* ---------------- ディスパッチ ---------------- */
 
 /* AH 別カウンタ + qbDebug.int21Stats() で読めるよう export */
@@ -1843,6 +1867,7 @@ void qb_dos_int21_dispatch(void) {
     case 0x4E: int21_4e_findfirst(); break;
     case 0x4F: int21_4f_findnext();  break;
     case 0x52: int21_52_list_of_lists(); break;
+    case 0x58: int21_58_alloc_strategy(); break;
     default:
         fprintf(stderr, "[int21h] UNIMPL AH=%02X (AX=%04X CS:IP=%04X:%04X)\n",
                 ah, (unsigned)CPU_AX, (unsigned)CPU_CS, (unsigned)CPU_IP);

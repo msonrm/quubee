@@ -50,6 +50,13 @@
 9. **セーブが揮発** — 書き込みは MEMFS `/run`。セッション中（Run 往復）は残るが**ページ再読込で消える**。永続化（IndexedDB 本棚）は別レイヤの将来課題。
 
 10. AH=09h は `$` が無い場合 4096 byte で打ち切り。AH=0Ah のバッファ満杯は BEEP せず黙殺。
+    tty 制御コードは CR/LF/BS に加え **TAB(0x09)→8桁タブストップ前進**・**BEL(0x07)→無視**（2026-06-07 追加。
+    GBOX ヘルプの行頭乱れ対策）。**SJIS 区9-11（NEC 半角グラフィック/罫線、SJIS 0x86xx）は半角=1セル幅**で描く
+    （`vram_put_kanji_half`、同日。全角扱いで2セル書くと横2倍に化けた＝Ray IV の枠崩れの真因）。
+
+12. **AH=58h（メモリ確保ストラテジ/UMB リンク状態）は良性スタブ** — get は既定値（strategy=0 first-fit、UMB link=未リンク）、
+    set は no-op 成功（2026-06-07、GBOX United モードの AX=5803h 対策）。我々は UMB を持たず確保は first-fit 固定なので、
+    実際のストラテジ切替/UMB 管理は行わない。
 
 11. **パス解決が `.`/`..` を畳まない（CHDIR とは非対称）** — `read_dos_rel`/`resolve_dir`（open/create/
     delete/exec/findfirst が通る）は `\`→`/`・大小無視・カレント前置はするが `.`/`..` を正規化しない。一方
