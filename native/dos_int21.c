@@ -74,6 +74,8 @@ extern UINT8 mem[];
 int qb_dos_signal_exit(int code);
 /* AH=4Dh 用: 直近に終了した子の (type<<8 | code)。 */
 uint16_t qb_dos_exec_last_code(void);
+/* AH=52h 用: MCB チェーンの先頭 (空きアリーナ起点) セグメント。List of Lists の [BX-2]。 */
+uint16_t qb_dos_first_mcb_seg(void);
 
 #define TEXT_COLS  80
 #define TEXT_ROWS  25
@@ -1667,6 +1669,53 @@ static void int21_29_parse_filename(void) {
 }
 #undef IS_FCB_SEP
 
+/* AH=52h: Get List of Lists (SysVars)。ES:BX → DOS 内部構造体。元来は未公開関数だが、
+ * master.lib 系 (例: Super Spartan 本体 sspartan.d98) が「先頭 MCB を辿って利用可能メモリを
+ * 算定する」用途で叩く。未実装 (UNIMPL) だと有効ポインタが返らず、呼び出し側は環境を
+ * 不適と判断して exit code 1 で諦める。最小の合成 LoL を低位 RAM (segment 0x00A0 = linear
+ * 0xA00、env 0x00F0 / PSP 0x0100 の手前で未使用) に構築して返す。
+ * フィールド配置は DOS 3.1+ の慣例 (RBIL INT 21/AH=52h) に倣い、得られる範囲で妥当な値を
+ * 埋める。負オフセット (BX-12..BX-2) の余地を残すため BX は 0x26 に置く。
+ * 子が LoL のどのフィールドを読むかは実測で詰める前提 (まずは先頭 MCB を最優先で正しく返す)。 */
+#define QB_LOL_SEG  0x00A0u
+static void int21_52_list_of_lists(void) {
+    uint32_t base = (uint32_t)QB_LOL_SEG << 4;   /* linear */
+    uint16_t bx   = 0x0026;
+    uint32_t p    = base + bx;                     /* LoL[+0] の linear */
+    uint16_t first_mcb = qb_dos_first_mcb_seg();
+    const uint16_t NONE = 0xFFFF;                  /* far ptr「無し」マーカ */
+
+    /* -- 負オフセット (DOS 3.1+) -- */
+    poke16(p - 12, 0);            /* sharing retry count */
+    poke16(p - 10, 1);            /* sharing retry delay */
+    poke16(p - 8, 0); poke16(p - 6, 0);   /* current disk buffer ptr (無し) */
+    poke16(p - 4, 0);             /* unread CON input ptr */
+    poke16(p - 2, first_mcb);     /* ★ segment of first MCB */
+
+    /* -- 正オフセット -- */
+    poke16(p + 0x00, NONE); poke16(p + 0x02, NONE);  /* first DPB (無し) */
+    poke16(p + 0x04, NONE); poke16(p + 0x06, NONE);  /* first SFT (無し) */
+    poke16(p + 0x08, NONE); poke16(p + 0x0A, NONE);  /* CLOCK$ device */
+    poke16(p + 0x0C, NONE); poke16(p + 0x0E, NONE);  /* CON device */
+    poke16(p + 0x10, 512);       /* max bytes per block of any block device */
+    poke16(p + 0x12, 0); poke16(p + 0x14, 0);   /* first disk buffer (無し) */
+    poke16(p + 0x16, NONE); poke16(p + 0x18, NONE);  /* CDS array */
+    poke16(p + 0x1A, NONE); poke16(p + 0x1C, NONE);  /* system FCB tables */
+    poke16(p + 0x1E, 0);         /* number of protected FCBs */
+    poke8 (p + 0x20, 1);         /* number of block devices */
+    poke8 (p + 0x21, 5);         /* LASTDRIVE */
+    /* +0x22: NUL device header (18 byte) = デバイスドライバチェーンの先頭 */
+    poke16(p + 0x22, NONE); poke16(p + 0x24, NONE);  /* next device ptr = チェーン末端 */
+    poke16(p + 0x26, 0x8004);    /* attributes: char device, NUL */
+    poke16(p + 0x28, 0);         /* strategy entry offset */
+    poke16(p + 0x2A, 0);         /* interrupt entry offset */
+    { const char *nm = "NUL     "; for (int i = 0; i < 8; i++) poke8(p + 0x2C + (uint32_t)i, (uint8_t)nm[i]); }
+
+    CPU_ES = QB_LOL_SEG;
+    CPU_BX = bx;
+    CPU_FLAG &= ~C_FLAG;
+}
+
 /* ---------------- ディスパッチ ---------------- */
 
 /* AH 別カウンタ + qbDebug.int21Stats() で読めるよう export */
@@ -1743,6 +1792,7 @@ void qb_dos_int21_dispatch(void) {
     case 0x4D: int21_4d_retcode();      break;
     case 0x4E: int21_4e_findfirst(); break;
     case 0x4F: int21_4f_findnext();  break;
+    case 0x52: int21_52_list_of_lists(); break;
     default:
         fprintf(stderr, "[int21h] UNIMPL AH=%02X (AX=%04X CS:IP=%04X:%04X)\n",
                 ah, (unsigned)CPU_AX, (unsigned)CPU_CS, (unsigned)CPU_IP);

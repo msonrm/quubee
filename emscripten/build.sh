@@ -14,7 +14,11 @@ for p in tools/np2kai_patches/*.patch; do
         (cd core/np2kai && git apply "../../$p")
         echo "  applied: $(basename "$p")"
     else
-        echo "  WARN: cannot apply (conflict?): $(basename "$p")"
+        # build.sh は正典の再現経路。パッチが当たらないまま続行すると、その修正を欠いた
+        # バイナリが黙って出来てしまう (例: RTC Y2K クランプ漏れ)。必ず hard fail させる。
+        echo "  ERROR: cannot apply (conflict?): $(basename "$p")" >&2
+        echo "  → core/np2kai が想定 base からズレています。サブモジュールを確認してください。" >&2
+        exit 1
     fi
 done
 

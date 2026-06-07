@@ -144,6 +144,12 @@ void qb_dos_alloc_reset(uint16_t arena_base_para) {
     mcb_set(g_arena_base, QB_MCB_Z, 0x0000, (uint16_t)(QB_DOS_MEM_TOP_SEG - arena_base_para - 1));
 }
 
+/* INT 21h AH=52h (Get List of Lists) 用: 我々の MCB チェーンの先頭 (= 空きアリーナ起点) を返す。
+ * 実 DOS の「先頭 MCB セグメント」相当。master.lib 系はこれを辿って利用可能メモリを算定する。 */
+uint16_t qb_dos_first_mcb_seg(void) {
+    return g_arena_base;
+}
+
 /* AH=48h: first-fit で空きブロックを確保。大きければ分割。所有者 = g_cur_psp。
  * 戻り 0 = OK (out_seg)、-1 = 不足 (out_largest_free に最大空きサイズ)。 */
 int qb_dos_alloc_request(uint16_t paragraphs, uint16_t *out_seg, uint16_t *out_largest_free) {

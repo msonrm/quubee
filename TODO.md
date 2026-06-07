@@ -16,29 +16,40 @@ bio 100% (PC-98 同人サークル) のフリーソフト集は QuuBee ミッシ
 T0 起動 (POST 通過) / T1 タイトル描画 / T2 ゲーム画面描画 / **T3 操作可能・プレイ可能** ← 目標は T3。
 T3 確認は入力が要るのでブラウザで人が行う (headless は T0〜T2 まで)。
 
-### ベースライン (headless ブートトリアージ `tools/bio100_triage.js`、2026-06-05)
-主 EXE 直ステージで全 31 本をブートし、framebuffer の色数+フレーム間差分で到達 Tier を自動推定。
-**描画到達 (RENDER+ALIVE) = 20/31、うちアニメ動作中 15。** 既知の動作確認済 3 本 (DEPTH/KANI/TW212) が
-全て ALIVE = 判定の信頼性 OK。
+### 進捗 (2026-06-07)
+- **代表作 4 本 (SuperDepth/Dynamo/NyaHaX'93/TURB) のうち SuperDepth + NyaHaX'93 が T3 確定**
+  (NX93 はブラウザ実プレイ確認、`nx93.exe` 単体・改修ゼロ)。
+- **triage を改修** (`tools/bio100_triage.js`): ①ランチャ型は `.bat` を batscript.js で解釈し
+  `stage_script` 経路 (ドライバ常駐込み) でステージ ②最終 PC を **EXIT(0xFEE30 正常終了)/
+  WAIT(0xFEE10 入力待ち=生存)/BIOS(neccheck 暴走)** の 3 状態に分類。`node tools/bio100_triage.js [filter]`。
+- **INT 21h AH=52h (Get List of Lists) を実装** → master.lib 製 **Super Spartan (SSP101) が EXIT→ALIVE**
+  (本体 sspartan.d98 が未実装の AH=52h で諦め code 1 終了していた)。master.lib 系全般に効く土台。
+
+### ベースライン (改修版 triage)
+**描画到達 (ALIVE+RENDER) = 20/31、動作確認 (+WAIT 入力待ち生存) = 22/31、真の BIOS クラッシュ = 0。**
+既知動作の DEPTH/KANI/TW212/NX93/SSP が全 ALIVE = 判定の信頼性 OK。
 
 | 状態 | 数 | ゲーム |
 |---|---|---|
-| ● ALIVE (多色+アニメ) | 15 | CRAY CX92 **DEPTH✓** FINAL(SD2) FLIXX **KANI✓** METYS MOG NX93 PECKER POLA POY ROLL SC **TW212✓** |
-| ◐ RENDER (多色静止) | 5 | BIOHJA C2GP CZ SEENA2(色57) STB |
-| ▫ BOOT (graphics乏) | 3 | F1GP(anim) GETS OZ |
-| ❌ DEAD | 8 | DADA* YY* DYNAMO16† GS100† MKD106† SSP101† TWINS110† GGL2 |
+| ● ALIVE (多色+アニメ) | 16 | CRAY CX92 **DEPTH✓** FINAL(SD2) FLIXX **KANI✓** METYS MKD MOG **NX93✓** PECKER POY ROLL SC **SSP✓** **TW212✓** |
+| ◐ RENDER (多色静止) | 4 | BIOHJA C2GP SEENA2(色57) TWINS(入力待ち) |
+| ▫ BOOT (graphics乏) | 5 | DYNAMO(.bat稼働) F1GP GETS POLA STB |
+| ⌨ WAIT (DOS入力待ち=生存) | 2 | DADA YY (テキストアドベンチャー) |
+| ⏏ EXIT (早期終了・回復余地) | 4 | CZ GGL2 GS OZ |
+| ✗ CRASH (BIOS 暴走) | 0 | — |
 
-\* DADA/YY = テキストアドベンチャー (text VRAM 主体で graphics 色数=1。色メトリクスの盲点で誤 DEAD、実は動作の公算大)
-† 音源ドライバ未常駐が原因の早期終了 (主 exe 直起動。.bat=stage_script 経路で再検証すれば復活見込み = クラスタ)
-
-→ DEAD 8 本の大半は harness 都合 (ドライバ未常駐 + テキストゲーム誤判定) で真の非互換ではない。**真の射程は 24〜28、20 は余裕。**
+→ **真の BIOS クラッシュは皆無 = HLE/BIOS は健全。** 残る EXIT 4 本が母数底上げの主候補、BIOS 領域到達は
+GETS/SEENA2 のみ (描画後)。**目標 20 は達成圏、真の射程 24〜28。**
 
 ### 次の作業
-- [ ] DEAD クラスタ (DYNAMO16/GS100/MKD106/SSP101/TWINS110/OZ100) を .bat (stage_script) 経路で再トリアージ → 母数底上げ
-- [ ] テキストゲーム (DADA/YY) を text VRAM 内容で再判定
-- [ ] ALIVE 15 本をブラウザで T3 確認 (実プレイ・入力テスト)
-- [ ] EMS+XMS の 25 本が XMS フォールバックで健全に動くか実プレイで確認 (`qbDebug.memprobe()` の ems 監視、既定 ON の挙動変化リスク)
-- [ ] GGL2_100 の真ブロッカー調査
+- [x] ~~DEAD クラスタを .bat (stage_script) 経路で再トリアージ~~ → 改修 triage に統合済 (MKD→ALIVE/TWINS→RENDER/Dynamo→稼働)
+- [x] ~~テキストゲーム (DADA/YY) を再判定~~ → PC 状態分類で WAIT (入力待ち=生存) と確定
+- [x] ~~SSP101 の起動~~ → AH=52h 実装で ALIVE 化 (ブラウザ T3 確認待ち)
+- [ ] SSP101 をブラウザで T3 確認 (再デプロイ済み)
+- [ ] ALIVE 16 本をブラウザで T3 確認 (実プレイ・入力テスト)
+- [ ] 残 EXIT 4 本 (CZ/GGL2/GS/OZ) の個別ブロッカー調査
+- [ ] EMS+XMS の 25 本が XMS フォールバックで健全に動くか実プレイで確認 (`qbDebug.memprobe()` の ems 監視)
+- [ ] GETS/SEENA2 の BIOS 領域到達 (neccheck) 調査
 
 ---
 

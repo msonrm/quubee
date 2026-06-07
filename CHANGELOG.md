@@ -1,5 +1,39 @@
 # CHANGELOG
 
+## [INT 21h AH=52h (Get List of Lists) で master.lib 系を救済 + bio 100% triage 精緻化] — 2026-06-07
+
+**Super Spartan (SSP101) が起動するようになった。** ブラウザで「banner 表示後にゲーム開始前で終了」する
+症状を headless で追い込み、**真因 = `INT 21h AH=52h (Get List of Lists / SysVars)` 未実装**と特定した。
+
+**追跡:** sspartan.exe (master.lib 製ランチャ) は banner を出し、グラフィック `sspartan.g00-.g19` を自己展開
+(ファイル I/O は正常動作) した後、**ゲーム本体 `a:\sspartan.d98` (拡張子を偽装した EXE) を AH=4Bh EXEC** する。
+その子が初期化中に **AH=52h を呼び、未実装 (`default`→CF=1) のため有効ポインタを得られず exit code 1** で諦め、
+親もそれを見て終了していた。MIDI 無し直起動でも同一挙動 = MIDI とは無関係と確認。AH=52h は master.lib 系が
+DOS 内部 (先頭 MCB を辿って利用可能メモリ算定) を覗くのに使う関数で、**実装すれば他の master.lib タイトルにも効く。**
+
+**修正:** `dos_int21.c` に `int21_52_list_of_lists` を追加 (dispatch に `case 0x52`)。最小の合成 List of Lists を
+低位 RAM (segment `0x00A0` = env `0x00F0` / PSP `0x0100` の手前の未使用域) に構築して ES:BX で返す。`[BX-2]` =
+先頭 MCB は新アクセサ `dos_loader.c:qb_dos_first_mcb_seg()` (= `g_arena_base`)、DPB/デバイス系は `0xFFFF`「無し」、
+NUL デバイスヘッダ・LASTDRIVE=5・max 512B/block を充填。負オフセット域確保のため BX=0x26。**一発で通り、SSP は
+EXIT→ALIVE (headless で colors=16・anim・走行継続) に。回帰ゼロ。** dos_hle_gaps.md の実装済み AH に 52 を追記。
+
+**bio 100% triage を精緻化** (`tools/bio100_triage.js`):
+- **① .bat 入口解決:** ランチャ型 (音源ドライバ TSR + 本体) は従来「主 exe を裸ステージ」でドライバ未常駐の
+  早期終了 → 偽 DEAD だった。`.bat` があれば `batscript.js` でレシピを解釈し、ブラウザと同じ `stage_script`
+  経路 (ミニ COMMAND.COM が 1 セッション内で順次 EXEC) でステージ。→ MKD106(Markadia) DEAD→ALIVE、
+  TWINS110 DEAD→RENDER、DYNAMO16(Dynamo 代表作) DEAD→稼働。
+- **② PC 状態 3 分類:** 従来 `pc∈[0xE8000,0xFFFFF]` を一律「BIOS クラッシュ」扱いしていたが、この範囲は
+  dos_loader.h のトランポリンを含み別状態が混在 (GBOX.COM スモークで判明) → **EXIT (0xFEE30=HALT_LOOP 正常終了)
+  / WAIT (0xFEE10=INT21 内ブロック=入力待ち生存) / BIOS (neccheck 暴走)** に分離。DADA/YY は WAIT (生存) と確定。
+- **新ベースライン: 描画到達 (ALIVE+RENDER) = 20/31、動作確認 (+WAIT) = 22/31、真の BIOS クラッシュ = 0。**
+  → 31 本に本物のクラッシュは皆無 = HLE/BIOS は健全。`node tools/bio100_triage.js [filter]` で絞り込み可。
+
+**`emscripten/build.sh` を堅牢化:** NP2kai パッチ適用が当たらない場合に WARN で続行していた (= 修正を欠いた
+バイナリが黙って生成される) のを **hard fail (`exit 1`) に変更**。正典の再現経路として安全側に倒した。
+
+**代表作の進捗:** NyaHaX'93 (NX93) をブラウザ実プレイで T3 確認 (`nx93.exe` 単体・改修ゼロ)。Bio_100% 代表作
+4 本 (SuperDepth/Dynamo/NyaHaX'93/TURB) のうち SuperDepth + NyaHaX'93 が T3 確定。
+
 ## [蟹味噌テキスト残留を根治 — 真因は PC-98 RTC の Y2K バグ + 汎用 Y2K シム] — 2026-06-06
 
 **蟹味噌 (KANI123) の「KANI.SCRを作成します / 形式が違います」テキスト残留を完全に根治した。**

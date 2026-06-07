@@ -6,7 +6,7 @@
 > 80〜90% 想定）。BIOS レベル（INT 18h/1Bh/1Ch/DCh 等）は NP2kai の合成 BIOS が担当する
 > ので、本書の「未対応」は **DOS(INT 21h) 層に限った話**。
 
-実装済み AH: `01-0C / 19 1A 25 2A 2C 2F 30 31 33 35 / 3C-49 4A-4F`
+実装済み AH: `01-0C / 19 1A 25 2A 2C 2F 30 31 33 35 / 3C-49 4A-4F / 52`
 （ディスパッチは `dos_int21.c` の `qb_dos_int21_dispatch()`）。
 
 ## 1. 未実装の INT 21h ファンクション（`default` → CF=1, AL=01「invalid function」）
@@ -39,6 +39,7 @@
 4. **ファイル属性 43h** — Get は常に 0x20(archive)、Set は無視。read-only/hidden を区別しない。
 
 5. **MCB チェーンがアリーナ部分のみ**（`g_arena_base`〜0xA000）。プログラム本体ブロックはチェーン外なので、先頭から MCB を歩くメモリツール/一部プロテクトは整合しない。
+   - **AH=52h (Get List of Lists)** は最小の**合成 List of Lists** を返す（segment 0x00A0）。`[BX-2]`=先頭 MCB は `g_arena_base`、DPB/SFT/CDS/デバイス系は `0xFFFF`「無し」、NUL デバイスヘッダ・LASTDRIVE=5・max 512B/block のみ実値。master.lib 系 (例: Super Spartan の本体 `sspartan.d98`) が「先頭 MCB を辿って利用可能メモリを算定する」用途には十分だが、DPB/CDS/SFT を実際に辿るツールとは整合しない（必要になったら実体を足す）。
 
 6. **DOS 経由の拡張キー入力が落ちる** — BIOS キーバッファの**下位バイト(ANK)だけ**返す。矢印/ファンクションキー（DOS では 00h+スキャンコードの2バイト）の2バイト目が失われる。多くは BIOS INT 18h / 生 IRQ で読むので実害限定。
 
