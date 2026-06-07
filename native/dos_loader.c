@@ -14,7 +14,8 @@
  * 既知の制限:
  *  - EXEC は AL=00 のみ (overlay AL=03 非対応)、ネストは g_exec_stack の深さまで
  *  - EXE body は 640KB (PC-98 基本メモリ上限) まで
- *  - EXEC 子の env は env_seg=0 (継承) のとき親 env を共有する (argv[0] の限界は exec_load 参照)
+ *  - EXEC 子の env: env_seg=0 (継承) のときは build_child_env で子固有 env を新規確保し
+ *    argv[0] を子パスに正規化する (C1)。env_seg!=0 (明示 env) はそのまま使う (exec_load 参照)
  */
 
 #include <compiler.h>
@@ -667,6 +668,9 @@ void qb_dos_install_trampolines(void) {
     put_trampoline(QB_TRAMP_INT2F);
     put_trampoline(QB_TRAMP_INT67);
 
+    /* INT 29h (DOS 高速文字出力): NOP + IRET。C フックで AL を tty へ流す。 */
+    put_trampoline(QB_TRAMP_INT29);
+
     /* XMS ドライバ entry: far CALL で踏まれるので NOP + RETF (0xCB)。NOP が biosfunc を踏む。 */
     poke8(QB_TRAMP_XMS_ENTRY + 0, 0x90);  /* NOP */
     poke8(QB_TRAMP_XMS_ENTRY + 1, 0xCB);  /* RETF */
@@ -845,6 +849,11 @@ int qb_dos_loader_start_hook(void) {
      * (上のループで一旦スタブ化された分を上書き)。検出ログを出すだけで応答は従来同様「無し」。 */
     set_ivt(0x2F, 0xF000, (uint16_t)(QB_TRAMP_INT2F & 0xFFFF));
     set_ivt(0x67, 0xF000, (uint16_t)(QB_TRAMP_INT67 & 0xFFFF));
+
+    /* INT 29h (DOS 高速文字出力) を専用フックへ。master.lib text_clear() が ESC[2J を
+     * これで送るため、IRET スタブのままだと画面消去が効かずテキストが残る (上のループで
+     * 一旦スタブ化された分を上書き)。 */
+    set_ivt(0x29, 0xF000, (uint16_t)(QB_TRAMP_INT29 & 0xFFFF));
     g_probe_xms = g_probe_ems = g_probe_emm_open = 0;  /* この Run の計測をリセット */
     qb_xms_reset();   /* XMS ハンドル表を Run 毎にクリア + プールを CPU_EXTMEM から再計算 */
 

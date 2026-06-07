@@ -24,6 +24,11 @@ T3 確認は入力が要るのでブラウザで人が行う (headless は T0〜
   WAIT(0xFEE10 入力待ち=生存)/BIOS(neccheck 暴走)** の 3 状態に分類。`node tools/bio100_triage.js [filter]`。
 - **INT 21h AH=52h (Get List of Lists) を実装** → master.lib 製 **Super Spartan (SSP101) が EXIT→ALIVE**
   (本体 sspartan.d98 が未実装の AH=52h で諦め code 1 終了していた)。master.lib 系全般に効く土台。
+- **INT 29h (DOS 高速文字出力) を実装 → テキスト残留を根治** → SSP のメニュー/ハイスコアに「Super Spartan
+  version 1.0 / Copyright…」が重なって残る症状を根治。真因 = **master.lib `text_clear()` の実体が `INT 29h` で
+  `ESC[2J` 送出**で、INT 29h 未フック (IRET スタブ) のため消去が無効だった。`0xFEE80` トランポリン→tty。
+  master.lib 系全般に効く。SSP の banner ゴースト消滅・回帰ゼロ (CHANGELOG 詳細)。**KANI の「KANI.SCR を作成します」は
+  別系統** — INT 29h 不使用、初回起動 (kani.scr 不在) でのみ出る忠実な通知。スコア登録時にファイル作成・以後消える。
 
 ### ベースライン (改修版 triage)
 **描画到達 (ALIVE+RENDER) = 20/31、動作確認 (+WAIT 入力待ち生存) = 22/31、真の BIOS クラッシュ = 0。**
@@ -44,8 +49,9 @@ GETS/SEENA2 のみ (描画後)。**目標 20 は達成圏、真の射程 24〜28
 ### 次の作業
 - [x] ~~DEAD クラスタを .bat (stage_script) 経路で再トリアージ~~ → 改修 triage に統合済 (MKD→ALIVE/TWINS→RENDER/Dynamo→稼働)
 - [x] ~~テキストゲーム (DADA/YY) を再判定~~ → PC 状態分類で WAIT (入力待ち=生存) と確定
-- [x] ~~SSP101 の起動~~ → AH=52h 実装で ALIVE 化 (ブラウザ T3 確認待ち)
-- [ ] SSP101 をブラウザで T3 確認 (再デプロイ済み)
+- [x] ~~SSP101 の起動~~ → AH=52h 実装で ALIVE 化
+- [x] ~~SSP の banner テキスト残留~~ → INT 29h 実装で根治 (master.lib text_clear=ESC[2J)
+- [ ] SSP101 をブラウザで T3 確認 (再デプロイ済み・画面クリーン)
 - [ ] ALIVE 16 本をブラウザで T3 確認 (実プレイ・入力テスト)
 - [ ] 残 EXIT 4 本 (CZ/GGL2/GS/OZ) の個別ブロッカー調査
 - [ ] EMS+XMS の 25 本が XMS フォールバックで健全に動くか実プレイで確認 (`qbDebug.memprobe()` の ems 監視)

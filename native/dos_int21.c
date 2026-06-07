@@ -1107,6 +1107,13 @@ static void int21_3e_close(void) {
     CPU_FLAG &= ~C_FLAG;
 }
 
+/* DUP/DUP2 でファイルを開き直す時のモード。作成 (AH=3Ch) ハンドルは "w+b" で記録されており、
+ * そのまま fopen し直すと既存内容を 0 バイトに切り詰めてしまう。ファイルは既にディスク上に
+ * 存在するので、切り詰めない読み書きモード "r+b" に写像する (読み取り専用 "rb" 等は不変)。 */
+static const char *fh_reopen_mode(const char *mode) {
+    return (mode && mode[0] == 'w') ? "r+b" : (mode ? mode : "rb");
+}
+
 /* AH=45h Duplicate Handle — BX のハンドルと同じファイルを指す新ハンドルを返す (AX)。
  * FILE* ベースなので「ファイルポインタ共有」は再現できない。同じ path/mode で開き直して
  * 元の現在位置へ seek した独立ハンドルを返す (read 用途では実用上等価。Ray が
@@ -1117,10 +1124,11 @@ static void int21_45_dup(void) {
         CPU_AX = 6; CPU_FLAG |= C_FLAG; return;   /* invalid handle */
     }
     long pos = ftell(g_fh[h].fp);
-    FILE *nf = fopen(g_fh[h].path, g_fh[h].mode);
+    const char *rm = fh_reopen_mode(g_fh[h].mode);
+    FILE *nf = fopen(g_fh[h].path, rm);
     if (!nf) { CPU_AX = 4; CPU_FLAG |= C_FLAG; return; }   /* too many open files */
     if (pos >= 0) fseek(nf, pos, SEEK_SET);
-    int nh = fh_alloc(nf, g_fh[h].path, g_fh[h].mode);
+    int nh = fh_alloc(nf, g_fh[h].path, rm);
     if (nh < 0) { fclose(nf); CPU_AX = 4; CPU_FLAG |= C_FLAG; return; }
     fprintf(stderr, "[int21h/45] DUP handle %d → %d (%s)\n", h, nh, g_fh[h].path);
     CPU_AX = (uint16_t)nh;
@@ -1139,7 +1147,8 @@ static void int21_46_dup2(void) {
     if (src == dst) { CPU_AX = (uint16_t)dst; CPU_FLAG &= ~C_FLAG; return; }  /* 同一ハンドルは no-op (実 DOS 準拠。fh_close(dst) で src の FILE* を閉じてしまう UAF 回避) */
     if (dst >= DOS_HANDLE_USER_BASE && g_fh[dst].used) fh_close(dst);
     long pos = ftell(g_fh[src].fp);
-    FILE *nf = fopen(g_fh[src].path, g_fh[src].mode);
+    const char *rm = fh_reopen_mode(g_fh[src].mode);
+    FILE *nf = fopen(g_fh[src].path, rm);
     if (!nf) { CPU_AX = 4; CPU_FLAG |= C_FLAG; return; }
     if (pos >= 0) fseek(nf, pos, SEEK_SET);
     if (dst >= DOS_HANDLE_USER_BASE) {
@@ -1147,7 +1156,7 @@ static void int21_46_dup2(void) {
         g_fh[dst].fp   = nf;
         strncpy(g_fh[dst].path, g_fh[src].path, sizeof(g_fh[dst].path) - 1);
         g_fh[dst].path[sizeof(g_fh[dst].path) - 1] = '\0';
-        strncpy(g_fh[dst].mode, g_fh[src].mode, sizeof(g_fh[dst].mode) - 1);
+        strncpy(g_fh[dst].mode, rm, sizeof(g_fh[dst].mode) - 1);
         g_fh[dst].mode[sizeof(g_fh[dst].mode) - 1] = '\0';
     } else {
         fclose(nf);   /* 標準ハンドルへの redirect は未対応 */
@@ -1733,6 +1742,16 @@ void qb_dos_dbg_ah_reset(void) {
 int g_int21_trace = 0;
 void qb_dos_set_int21_trace(int on) { g_int21_trace = on ? 1 : 0; }
 
+/* INT 29h (DOS 高速文字出力 / "fast putchar")。AL の 1 文字を CON へ出力する。
+ * 我々は CON = テキスト VRAM tty なので tty_putc に流す (ANSI/ESC パーサ込み)。
+ * master.lib の text_clear() は "ESC [ 2 J" を INT 29h 4 回で送って画面消去するため、
+ * これが無いと text_clear が無効化されテキストが残留する (SSP/KANI 等 master.lib 系全般)。
+ * トランポリン F000:EE80 (NOP+IRET) から biosfunc 経由で呼ばれる。レジスタ・フラグ不変。 */
+int qb_dos_int29_hook(void) {
+    tty_putc((uint8_t)CPU_AL);
+    return 1;
+}
+
 void qb_dos_int21_dispatch(void) {
     uint8_t ah = CPU_AH;
     g_int21_repoll = 0;
@@ -1796,7 +1815,7 @@ void qb_dos_int21_dispatch(void) {
     default:
         fprintf(stderr, "[int21h] UNIMPL AH=%02X (AX=%04X CS:IP=%04X:%04X)\n",
                 ah, (unsigned)CPU_AX, (unsigned)CPU_CS, (unsigned)CPU_IP);
-        CPU_AL = 0x01;
+        CPU_AX = 0x0001;   /* DOS error 1 = invalid function (AX 全体に設定。AL のみだと AH が残る) */
         CPU_FLAG |= C_FLAG;
         break;
     }

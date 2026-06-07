@@ -104,6 +104,10 @@
     公算が高く、EMS HLE の現 corpus への効果は薄い。**結論: EMS は据え置き**。再評価のトリガ = ①`qbDebug.memprobe()`
     で `ems`/`emmOpen` が実プレイ中に >0（XMS で足りず EMS を試したタイトル出現）、または ②EMS 専用（XMS 非対応）
     タイトルの発見。それまでは需要プローブを常設したまま様子を見る。
+- **INT 29h（DOS 高速文字出力 / "fast putchar"）= 実装済み（2026-06-07）**。AL の 1 文字を CON（= テキスト
+  VRAM tty、ANSI/ESC パーサ込み）へ流す。**master.lib `text_clear()` は実体が「`INT 29h` で `ESC[2J` を送るだけ」**
+  なので、未実装（IRET スタブ）だと master.lib 系の画面消去が無音で効かず、書いた文字が残留していた（SSP の
+  タイトル banner ゴースト等）。トランポリン `0xFEE80`。INT 29h は DOS 標準なので他プログラムの画面出力一般にも効く。
 - **INT 25h/26h（絶対セクタ R/W）= IRET スタブ** → 直接セクタアクセス・一部コピープロテクト不可。
 - **INT 33h マウスドライバ = スタブ**。ただし**ハード（バスマウス）経由は NP2kai 側で動く**。
 - **COMMAND.COM は起動 .bat 専用のミニ実装のみ**（2026-06-03、`tools/dos_loader/shell.asm` +

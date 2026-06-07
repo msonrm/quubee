@@ -1,5 +1,31 @@
 # CHANGELOG
 
+## [INT 29h (DOS 高速文字出力) を実装 — master.lib の text_clear() を根治しテキスト残留を解消] — 2026-06-07
+
+**Super Spartan (SSP101) 等で「ゲーム画面にタイトル文字が重なって残り続ける」症状を根治した。**
+真因 = **`INT 29h` 未実装**。SSP のメニュー/ハイスコア画面の左上に「Super Spartan version 1.0 / Copyright(C)1995 …」
+がゴーストする現象を headless で追い込んだ。
+
+**追跡 (まず徹底的に切り分け):** ① テキスト消去/非表示の全経路 (INT 18h AH=0Dh / GDC `OUT 0x62,0x0C` STOP /
+直書き `rep stosw` / ESC・CSI) が**正しく動作**することを単独テストで実証 (ユーザー提供の **GBOX.COM `/TF` で
+画面が完全に消える**のが決め手)。② にもかかわらず SSP は banner を書いた後、char/属性/GDC SAD/textdisp ENABLE/
+INT 18h/GDC コマンドの**どれにもテキスト消去の痕跡がゼロ**。③ ユーザー提供の **master.lib (mtlib22j) を逆アセンブル**
+して核心判明 — **`text_clear()` (TXCLEAR.ASM) の実体は `INT 29h` で "ESC[2J" を 4 バイト送るだけ** (`mov al,1Bh/5Bh/32h/4Ah; int 29h ×4`)。
+我々のローダは INT 20h/21h/2Fh/67h しかフックせず、**INT 29h は未使用ベクタ → IRET スタブ (no-op)** に落ちていたため、
+master.lib の `text_clear()` が**完全に無効化**され、書いた文字が永久に残っていた。master.lib 製ゲーム全般に効く systemic バグ。
+
+**修正:** INT 29h を「AL の 1 文字を CON (= 我々のテキスト VRAM tty) へ流す」フックとして実装。トランポリン
+`QB_TRAMP_INT29 = 0xFEE80` (NOP+IRET) を追加 (`dos_loader.{c,h}`)、IVT[0x29] をそこへ向け、`bios.c:biosfunc` に
+`case 0xFEE80 → qb_dos_int29_hook()` (`dos_int21.c`、`tty_putc(AL)`) を結線。"ESC[2J" は既存の CSI J (p=2) →
+`vram_clear_all` 経路に乗る。INT 29h は DOS 標準の高速文字出力なので、これを使う他プログラムの画面出力一般にも効く。
+
+**検証:** SSP のメニュー/ハイスコアの banner ゴーストが**完全消滅** (headless で row0/row1 が空白化、PNG 目視でも
+クリーン)。回帰 = `exec_env`/`batscript 33-0`/`xms` PASS、bio100 triage は ALIVE16/RENDER4/…/CRASH0 で**従来同一**。
+patch 01 (`01_dos_loader_hooks.patch`) を INT 29h ケース込みで再生成 (冪等チェック OK)。
+
+**注 (KANI123):** 蟹味噌のハイスコア画面左上「KANI.SCR を作成」は別系統で、**KANI は INT 29h を一切使わない** (直書き)。
+これは KANI.SCR が無い**初回起動限定**の作成メッセージ (本来の残留=セーブ拒否は 2026-06-06 の RTC Y2K 修正で解決済)。
+
 ## [INT 21h AH=52h (Get List of Lists) で master.lib 系を救済 + bio 100% triage 精緻化] — 2026-06-07
 
 **Super Spartan (SSP101) が起動するようになった。** ブラウザで「banner 表示後にゲーム開始前で終了」する

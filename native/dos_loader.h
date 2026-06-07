@@ -44,6 +44,10 @@
 /* XMS (HIMEM 相当) ドライバ entry。INT 2Fh AX=4310h が ES:BX=F000:EE70 として返す far アドレス。
  * INT で踏まれず far CALL されるので NOP + RETF (0xCB)。NOP が biosfunc→qb_dos_xms_entry_hook を踏む。 */
 #define QB_TRAMP_XMS_ENTRY      0xFEE70u  /* F000:EE70 */
+/* INT 29h (DOS 高速文字出力)。AL を CON へ。master.lib text_clear() が "ESC[2J" を
+ * INT 29h で送って画面消去するため、未実装(IRET スタブ)だと text_clear が無効化され
+ * テキストが残留する。NOP+IRET で C フック (AL→tty_putc) を踏む。 */
+#define QB_TRAMP_INT29          0xFEE80u  /* F000:EE80 */
 
 /* PSP/COM のロードセグメント (PSP 自体もここに置く)。
  * EXE は PSP の直後 (256 byte = 16 paragraphs 先) に image を配置する慣例。 */
