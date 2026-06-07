@@ -1,5 +1,37 @@
 # CHANGELOG
 
+## [QoL — CTRL キー修正 + readme ビューア (NEC罫線→Unicode) + .MAG 画像ビューア] — 2026-06-08
+
+互換性の長尾 (bio 100%) とは別軸の「快適に使う」フロント強化。**すべて JS/HTML のみ・Wasm 不変**、ブラウザ実機で確認済。
+
+**① CTRL キーがゲームに届かない死にコードを修正 (`web/player/bridge.js`)**
+keydown ハンドラ冒頭の `if (e.ctrlKey || e.metaKey || e.altKey) return;` が **CTRL 単体押下**でも発火し (押した瞬間
+`e.ctrlKey=true`)、`PC98_KEYMAP` の `ControlLeft/Right → 0x74` に到達できず CTRL が永久に無効だった。**押下キー自身が
+Control のときだけ素通し**させて 0x74 を送る分岐に変更 (`Ctrl+R` 等のブラウザショートカットは従来どおりブラウザへ委譲)。
+keyup 側は元から修飾ガード無しなので対称に解放・スタックキー無し。
+
+**② readme/テキストビューアの罫線崩れを根治 + 別窓ポップアップ**
+- **真因 = 2バイト NEC 罫線 (SJIS 0x86xx = JIS 区9-12 の PC-98 固有 gaiji) を `TextDecoder('shift_jis')` も
+  Microsoft CP932 も知らず U+FFFD に潰すこと** (両者 node/iconv で実測)。同形状が JIS83 罫線 (区8) にあり、区8 は WHATWG が
+  U+2500 ブロックに正しく復号できる → **NEC 0x86xx → 同形の Unicode 罫線 (U+2500–U+254B) へ写像**する `decodeSjisText` を
+  追加し `openText` に結線 (0x86xx だけ表で差し替え、それ以外は標準デコーダに委譲)。**写像表 (罫線ちょうど 32 字)** は
+  NEC罫線→JIS83 変換ツール `trkei98.exe` の変換 LUT を正典に抽出 (オフセット 0x2c64↔trail 0xa2、A系=太線/B系=細線)、
+  同梱サンプル `test98` の箱の幾何で全数検証 (細線/太線/混在分岐 ┯┠┝ まで一致)。1バイト罫線は SJIS 衝突で対象外。
+- **別窓ビューア**: ファイル名行 (`#text-head`) 右端に `⛶ 拡大` ボタン → 大きめモーダル (`Esc`/外側クリック/✕ で閉じ、
+  表示中はゲーム入力を抑止)。content-agnostic に作り画像も相乗りさせる設計。
+
+**③ PC-98 標準画像 .MAG (MAKI02) ビューア (`web/player/magimage.js` 新規)**
+自前デコーダ `QBMag.decode`。Magd v1.25 のソース (`magd25s.lzh`) を**仕様リファレンスに参照 (逐語移植せず・フォーマット
+事実のみ。DOSBox-X 参照と同方針)**。アルゴリズム = コピー表 `pixeloffset[16]` (0=リテラル / 上位ニブル→左 word・下位→右 word、
+コピー元 = 現在位置 − (dy·byteWidth + dx·2))、Flag A=MSB 先頭の連続ビット列、Flag B=列ごと行跨ぎ XOR 累積、
+`units=(x1>>shift)−(x0>>shift)+1` (shift: 16色=3 / 256色=2)、パレット G,R,B 順 (R=p1,G=p0,B=p2)。16/256 色対応・堅牢化
+(範囲外読みは 0 / 寸法上限 2048 / デコード失敗はテキストへフォールバック)。**`.MKI` は別系統デコードで未対応**。
+- **検証**: 実サンプル `savefont.mag` (272×8、pixel 消費 230 がヘッダ値と一致) + `gbox.mag` (640×400・16色の実写
+  「ESEQUISSE」) をクリーンに展開し、ブラウザ実機でも罫線・画像とも正常表示を確認。
+- **UI**: `.mag` を `🖼` 表示、クリックで `#text-image` canvas にプレビュー (テキスト面と排他)、`⛶ 拡大` で同モーダルに
+  大きく (アスペクト保持 `object-fit:contain`・ピクセル等倍・200 ラインは縦 2 倍)。副産物の独立 MAG デコーダは画面出力
+  ground-truth テストにも転用可。
+
 ## [テキスト面の連続根治 — Ray IV の罫線 2倍幅 (PC-98 半角グラフィック 区9-11) + tty の TAB 未処理 + AH=58h] — 2026-06-07
 
 **Ray IV** はデータファイル指定 (例 `RAY SILK_FLD.RAY`) でオープニングが表示されると判明 (従来 CLAUDE.md の

@@ -59,6 +59,20 @@ GETS/SEENA2 のみ (描画後)。**目標 20 は達成圏、真の射程 24〜28
 
 ---
 
+## 「快適に使う」QoL パス — 完了 (2026-06-08、JS のみ・Wasm 不変・ブラウザ実機確認済)
+
+bio 100% (互換性の長尾) とは別軸のフロント強化。詳細は CHANGELOG。
+- [x] **CTRL キー死にコード修正** — keydown が CTRL 単体押下も捨てていた → 押下キー自身が Control の時だけ素通しし 0x74 を送る
+- [x] **readme/テキストビューアの罫線崩れ根治** — NEC 罫線 (SJIS 0x86xx) は WHATWG/CP932 とも U+FFFD に潰す → 同形の
+      Unicode 罫線 (U+2500–254B) に写像 (`decodeSjisText`、表は trkei98.exe LUT を正典に 32 字抽出・test98 で検証)
+- [x] **別窓ビューア** — ファイル名行右端 `⛶ 拡大` → モーダル (content-agnostic、画像も相乗り)
+- [x] **.MAG (MAKI02) 画像ビューア** — `web/player/magimage.js` 自前デコーダ (Magd ソース magd25s.lzh を仕様参照・
+      逐語移植せず。savefont.mag/gbox.mag で検証)。`🖼` プレビュー + `⛶ 拡大`
+- 残バックログ (難易度×価値の見立て): COMSPEC/PATH (小・要求が出てから) / ゲームパッド (パッド→キー再マップなら小) /
+  full .bat (set/cd/if/goto — if/goto が「大変な 20%」・ROI 低) / **.MKI 画像 (別系統デコード・未対応)**
+
+---
+
 ## Phase 1 完了 ✓ — Wasmビルドとブラウザ動作確認
 
 - [x] NP2kai core を Emscripten (apt版 3.1.69) でWasmビルド

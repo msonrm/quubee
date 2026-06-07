@@ -35,9 +35,11 @@ qb/
 ├── web/                     # ブラウザフロントエンド
 │   ├── index.html           # ドライブ/Run スロット UI、D&D、cmdline 入力
 │   ├── player/
-│   │   ├── bridge.js        # Wasm ラッパ、入力ハンドラ、表示パイプライン、Run 経路
+│   │   ├── bridge.js        # Wasm ラッパ、入力ハンドラ、表示パイプライン、Run 経路、readme/画像ビューア
 │   │   ├── archive.js       # LZH (LH1/4/5/6/7 + header L0/1/2) デコーダ + ZIP (deflate) 展開
-│   │   └── audio-worklet.js # AudioWorklet プロセッサ (postMessage で Int16 転送)
+│   │   ├── diskimage.js     # ディスクイメージ→FAT12/16 取り出し (ブートせず)
+│   │   ├── batscript.js     # 起動 .bat を「作者の起動レシピ」として解釈
+│   │   └── magimage.js      # PC-98 .MAG (MAKI02) 画像デコーダ (NEC罫線→Unicode は bridge.js)
 │   ├── db -> ../db          # symlink (emrun が web/ を serve するため)
 │   ├── assets/
 │   │   ├── font.bmp         # ANK 8x16 / 漢字フォント (2048×2048 1bpp)

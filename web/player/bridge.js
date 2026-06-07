@@ -330,7 +330,9 @@ NP2KaiModule({
     const arcNameEl   = document.getElementById('arc-name');
     const fileListEl  = document.getElementById('file-list');
     const textBodyEl  = document.getElementById('text-body');
-    const textHeadEl  = document.getElementById('text-head');
+    const textHeadEl  = document.getElementById('text-head-name');   // head 内のファイル名 span
+    const textPopoutBtn = document.getElementById('text-popout');    // 別窓ビューア起動ボタン
+    const textImageEl = document.getElementById('text-image');       // .MAG 画像プレビュー canvas (text 面と排他)
 
     let loadedEntries  = [];   // { name(=/run 相対), data, mtime }  path は last-wins
     let selectedEntry  = null; // 実行対象に選んだ行 (EXE/COM もしくは 起動 .bat)
@@ -348,12 +350,44 @@ NP2KaiModule({
         for (let i = 0; i < n.length; i++) b[i] = n.charCodeAt(i) & 0xff;
         return sjis.decode(b);
     };
+
+    // PC-98 NEC 罫線 (2バイト, SJIS 0x86xx) は JIS X 0208 の区9-12 に NEC が置いた PC-98 固有
+    // gaiji で、ブラウザの TextDecoder('shift_jis') も Microsoft CP932 も知らず U+FFFD に潰す
+    // (= readme の罫線が崩れる真因)。NEC 罫線は JIS83 罫線 (区8) と同形状なので、同じ形の
+    // Unicode 罫線 (U+2500–U+254B) へ写像すれば等幅 Web フォントでそのまま描ける。
+    // 写像は NEC罫線→JIS83 変換ツール trkei98 の変換テーブルを正典に抽出 (全32字、test98 で全数検証)。
+    // A系(0x86a3 等)=太線、B系(0x86a2 等)=細線、混在分岐も対応。1バイト罫線は SJIS リードバイトと
+    // 衝突し文中で曖昧なので対象外 (raw VRAM 経路は既存 tty が font ROM で処理済)。
+    const NEC_RULED_TO_UNICODE = {
+        0x86a2: 0x2500, 0x86a3: 0x2501, 0x86a4: 0x2502, 0x86a5: 0x2503, 0x86ae: 0x250c, 0x86b1: 0x250f, 0x86b2: 0x2510, 0x86b5: 0x2513,
+        0x86b6: 0x2514, 0x86b9: 0x2517, 0x86ba: 0x2518, 0x86bd: 0x251b, 0x86be: 0x251c, 0x86bf: 0x251d, 0x86c2: 0x2520, 0x86c5: 0x2523,
+        0x86c6: 0x2524, 0x86c7: 0x2525, 0x86ca: 0x2528, 0x86cd: 0x252b, 0x86ce: 0x252c, 0x86d1: 0x252f, 0x86d2: 0x2530, 0x86d5: 0x2533,
+        0x86d6: 0x2534, 0x86d9: 0x2537, 0x86da: 0x2538, 0x86dd: 0x253b, 0x86de: 0x253c, 0x86e1: 0x253f, 0x86e4: 0x2542, 0x86ed: 0x254b,
+    };
+    // SJIS バイト列をテキスト復号する。NEC 罫線 (0x86xx) だけ上表で Unicode 罫線へ差し替え、
+    // それ以外の連続バイトは標準の TextDecoder にまとめて委ねる (漢字/かな/区8罫線はそのまま正しく出る)。
+    function decodeSjisText(bytes) {
+        let out = '';
+        let run = [];
+        const flush = () => { if (run.length) { out += sjis.decode(Uint8Array.from(run)); run = []; } };
+        for (let i = 0; i < bytes.length; i++) {
+            if (bytes[i] === 0x86 && i + 1 < bytes.length) {
+                const u = NEC_RULED_TO_UNICODE[(0x86 << 8) | bytes[i + 1]];
+                if (u !== undefined) { flush(); out += String.fromCodePoint(u); i++; continue; }
+            }
+            run.push(bytes[i]);
+        }
+        flush();
+        return out;
+    }
+
     const isExecName = (n) => /\.(exe|com)$/i.test(n);
     const isBatName  = (n) => /\.bat$/i.test(n);   // 起動レシピ (qbBatScript で解釈)
     const isTextName = (n) =>
         /\.(txt|doc|me|1st|asc|ini|cfg|nfo|faq|hlp|dic|wri)$/i.test(n) ||
         /readme|read\.me|どきゅめんと|説明|よみ/i.test(n);
     const isReadme   = (n) => /readme|read\.me|よみ|説明|どきゅめんと/i.test(n);
+    const isImageName = (n) => /\.mag$/i.test(n);   // PC-98 標準画像 (MAKI02)。.MKI は別系統で未対応
     const baseName   = (n) => n.slice(n.lastIndexOf('/') + 1);   // /run 相対 → ファイル名
     const fmtSize = (n) => n >= 1024 ? `${(n / 1024) | 0}K` : `${n}`;
     const fmtTime = (d) => {
@@ -434,8 +468,8 @@ NP2KaiModule({
             fileListEl.appendChild(row);
         }
 
-        // ファイル行 (readme→起動.bat→text→exec→other、各内アルファベット順)
-        const rank = (n) => isReadme(n) ? 0 : isBatName(n) ? 1 : isTextName(n) ? 2 : isExecName(n) ? 3 : 4;
+        // ファイル行 (readme→起動.bat→text→画像→exec→other、各内アルファベット順)
+        const rank = (n) => isReadme(n) ? 0 : isBatName(n) ? 1 : isTextName(n) ? 2 : isImageName(n) ? 3 : isExecName(n) ? 4 : 5;
         files.sort((a, b) => rank(a.name) - rank(b.name) ||
             baseName(a.name).toLowerCase().localeCompare(baseName(b.name).toLowerCase()));
         for (const ent of files) {
@@ -445,20 +479,27 @@ NP2KaiModule({
             const row = document.createElement('div');
             row.className = 'frow' + (isBat ? ' bat' : isExecName(nm) ? ' exec' : isTextName(nm) ? ' text' : '') +
                             (ent === selectedEntry ? ' sel' : '');
-            const tag = isBat ? '▷ ' : isExecName(nm) ? '▶ ' : isTextName(nm) ? '・' : '  ';
+            const tag = isBat ? '▷ ' : isExecName(nm) ? '▶ ' : isImageName(nm) ? '🖼 ' : isTextName(nm) ? '・' : '  ';
             row.innerHTML =
                 `<span class="fn">${tag}${escapeHtml(sjisName(nm))}</span>` +
                 `<span class="fsz">${fmtSize(ent.data.length)}</span>` +
                 `<span class="fdt">${fmtTime(ent.mtime)}</span>`;
             row.addEventListener('click', () =>
-                runnable ? selectEntry(ent) : openText(ent));
+                runnable ? selectEntry(ent) : isImageName(nm) ? openImage(ent) : openText(ent));
             fileListEl.appendChild(row);
         }
     }
 
+    // 直近に表示した .MAG (別窓ポップアップ用に保持)。null = テキスト表示中。
+    let currentImage = null;
+
+    // 表示エリアを「テキスト」モードに切替 (画像 canvas を隠し pre を出す)。
+    function showTextMode() { currentImage = null; textImageEl.hidden = true; textBodyEl.hidden = false; }
+
     // テキスト (readme / .bat 等) を表示。annotation を渡すと本文の先頭に注記行を足す
     // (起動 .bat の「解釈した起動順」を見せる用)。
     function openText(ent, annotation) {
+        showTextMode();
         textHeadEl.textContent = sjisName(ent.name);
         // DOS EOF (Ctrl-Z=0x1A) 以降は本文ではない。生バイトで切る
         // (0x1A は SJIS の trail バイト範囲外なので常に単独制御＝安全。
@@ -466,9 +507,44 @@ NP2KaiModule({
         let bytes = ent.data;
         const eof = bytes.indexOf(0x1a);
         if (eof >= 0) bytes = bytes.subarray(0, eof);
-        const body = sjis.decode(bytes).replace(/\r\n?/g, "\n");
+        const body = decodeSjisText(bytes).replace(/\r\n?/g, "\n");
         textBodyEl.textContent = annotation ? `${annotation}\n\n${body}` : body;
         textBodyEl.scrollTop = 0;
+        textPopoutBtn.hidden = false;   // 本文があるので別窓ボタンを出す
+    }
+
+    // デコード済 MAG を canvas へ描く (アスペクト/200ライン縦2倍は intrinsic で持たせ、
+    // CSS object-fit:contain で枠に合わせる)。元画像は 1 度だけ offscreen 化してキャッシュ。
+    function renderImageTo(canvasEl, img) {
+        if (!img._src) {
+            const off = document.createElement('canvas');
+            off.width = img.width; off.height = img.height;
+            off.getContext('2d').putImageData(new ImageData(img.rgba, img.width, img.height), 0, 0);
+            img._src = off;
+        }
+        canvasEl.width = img.width;
+        canvasEl.height = img.height * img.scaleY;
+        const ctx = canvasEl.getContext('2d');
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(img._src, 0, 0, canvasEl.width, canvasEl.height);
+    }
+
+    // .MAG 画像をプレビュー表示 (テキスト面と排他)。デコード失敗時はテキストにフォールバック。
+    function openImage(ent) {
+        let img;
+        try { img = QBMag.decode(ent.data); }
+        catch (e) {
+            showTextMode();
+            textHeadEl.textContent = sjisName(ent.name);
+            textBodyEl.textContent = `画像をデコードできませんでした:\n${e.message}`;
+            textBodyEl.scrollTop = 0; textPopoutBtn.hidden = false;
+            return;
+        }
+        currentImage = img;
+        textHeadEl.textContent = `${sjisName(ent.name)} — ${img.width}×${img.height * img.scaleY} / ${img.colors}色`;
+        renderImageTo(textImageEl, img);
+        textBodyEl.hidden = true; textImageEl.hidden = false;
+        textPopoutBtn.hidden = false;
     }
 
     // 起動 .bat を解釈し、実際に走らせる主プログラム entry + 引数テンプレを解決する。
@@ -961,7 +1037,9 @@ NP2KaiModule({
         clearRunDir();
         loadedEntries = []; loadedArchives = []; selectedEntry = null; selectedRecipe = null; currentDir = '';
         runEntryEl.textContent = '—'; runButton.disabled = true;
+        showTextMode();
         textHeadEl.textContent = 'readme / テキスト'; textBodyEl.textContent = '';
+        textPopoutBtn.hidden = true;
         renderFileList();
         runStatusEl.textContent = 'クリアしました';
     });
@@ -1009,6 +1087,29 @@ NP2KaiModule({
         fitCanvas(offscreen.width || 640, offscreen.height || 400);
     });
 
+    // ---- 別窓ビューア (readme/テキストを大きく読む。将来 .MAG 画像も同じモーダルに相乗り) ----
+    const viewerModalEl  = document.getElementById('viewer-modal');
+    const viewerTitleEl  = document.getElementById('viewer-title');
+    const viewerBodyEl   = document.getElementById('viewer-body');
+    const viewerCanvasEl = document.getElementById('viewer-canvas');
+    // いま表示している内容 (ファイル名 + テキスト or 画像) をそのまま大きくポップアップに写す。
+    const openViewer = () => {
+        viewerTitleEl.textContent = textHeadEl.textContent;
+        if (currentImage) {                       // 画像: canvas を大きく
+            renderImageTo(viewerCanvasEl, currentImage);
+            viewerBodyEl.hidden = true; viewerCanvasEl.hidden = false;
+        } else {                                  // テキスト: pre を大きく
+            viewerBodyEl.textContent = textBodyEl.textContent;
+            viewerBodyEl.scrollTop = 0;
+            viewerCanvasEl.hidden = true; viewerBodyEl.hidden = false;
+        }
+        viewerModalEl.hidden = false;
+    };
+    const closeViewer = () => { viewerModalEl.hidden = true; };
+    textPopoutBtn.addEventListener('click', openViewer);
+    document.getElementById('viewer-close').addEventListener('click', closeViewer);
+    viewerModalEl.addEventListener('click', (e) => { if (e.target === viewerModalEl) closeViewer(); });
+
     renderFileList();   // 初期表示 (空一覧)
 
     // スロット外へのドロップは無視 (ブラウザのデフォルト動作 = ファイルを開く を抑止)
@@ -1027,8 +1128,15 @@ NP2KaiModule({
     window.addEventListener('keydown', (e) => {
         // 入力欄 (Args 等) にフォーカス中はゲームへキーを送らない
         if (inField(e)) return;
-        // Ctrl 系のブラウザショートカット (Ctrl+R / Ctrl+W / Ctrl+Shift+I 等) は通す
-        if (e.ctrlKey || e.metaKey || e.altKey) return;
+        // 別窓ビューアを開いている間はゲームへキーを送らない (Esc で閉じる)
+        if (!viewerModalEl.hidden) { if (e.key === 'Escape') { e.preventDefault(); closeViewer(); } return; }
+        // Ctrl/Meta/Alt + 他キーのブラウザショートカット (Ctrl+R / Ctrl+W / Ctrl+Shift+I 等)
+        // は横取りしない。ただし CTRL キー単体は PC-98 の CTRL(0x74) としてゲームに送る
+        // (発射/ダッシュに CTRL を使うゲーム向け)。これを通さないと PC98_KEYMAP の
+        // ControlLeft/Right→0x74 が永久に死にコードになる。Ctrl 押下中の他キーは従来どおり
+        // ブラウザへ委ねるため、押下キー自身が Control のときだけ素通しさせる。
+        const isCtrlKey = (e.code === 'ControlLeft' || e.code === 'ControlRight');
+        if (!isCtrlKey && (e.ctrlKey || e.metaKey || e.altKey)) return;
         const code = PC98_KEYMAP[e.code];
         if (code === undefined) return;
         if (KEY_PREVENT_DEFAULT.has(e.code)) e.preventDefault();
@@ -1039,6 +1147,7 @@ NP2KaiModule({
 
     window.addEventListener('keyup', (e) => {
         if (inField(e)) return;
+        if (!viewerModalEl.hidden) return;   // ビューア表示中はゲームへ送らない
         const code = PC98_KEYMAP[e.code];
         if (code === undefined) return;
         if (KEY_PREVENT_DEFAULT.has(e.code)) e.preventDefault();

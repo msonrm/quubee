@@ -122,16 +122,64 @@ body.panel-hidden #panel, body.panel-hidden #divider { display: none; }
     flex: 1 1 55%; min-height: 60px; display: flex; flex-direction: column;
 }
 #text-head {
-    flex: 0 0 auto; padding: 3px 10px; background: #1c1c1c; color: #9cf;
+    flex: 0 0 auto; padding: 3px 6px 3px 10px; background: #1c1c1c; color: #9cf;
     font-size: 11px; border-bottom: 1px solid #2a2a2a;
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    display: flex; align-items: center; gap: 6px;
 }
+#text-head-name { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* テキスト/画像を大きめポップアップ (別窓) で開くボタン。content-agnostic に作り、
+   将来 .MAG 画像ビューアもこのモーダルに相乗りさせる */
+#text-popout {
+    flex: 0 0 auto; background: #222; color: #9bd; border: 1px solid #456;
+    border-radius: 3px; padding: 1px 7px; font: inherit; font-size: 11px;
+    cursor: pointer; opacity: .7;
+}
+#text-popout:hover { opacity: 1; }
 #text-body {
     flex: 1 1 auto; overflow: auto; padding: 8px 10px;
     /* 等幅 + CJK 対応 (AA・かな・標準罫線を崩さない) */
     font-family: "Noto Sans Mono CJK JP", "Noto Sans CJK JP", "Migu 1M",
                  "MS Gothic", "Osaka-Mono", ui-monospace, "DejaVu Sans Mono", monospace;
     white-space: pre; tab-size: 8; color: #cdc8c0; line-height: 1.35;
+}
+/* .MAG 等の画像プレビュー (テキスト面と排他表示)。アスペクト保持・ピクセル等倍。 */
+#text-image {
+    flex: 1 1 auto; min-height: 0; width: 100%;
+    object-fit: contain; image-rendering: pixelated; background: #000;
+}
+#text-image[hidden], #viewer-canvas[hidden] { display: none; }
+
+/* 別窓ビューア — readme/テキストを大きく読む (.MAG 画像も同じモーダルで大きく見る) */
+#viewer-modal {
+    position: fixed; inset: 0; z-index: 100; background: rgba(0,0,0,.66);
+    display: flex; align-items: center; justify-content: center;
+}
+#viewer-modal[hidden] { display: none; }
+#viewer-box {
+    display: flex; flex-direction: column; width: min(900px, 92vw); height: min(80vh, 100%);
+    background: #161616; border: 1px solid #456; border-radius: 5px;
+    box-shadow: 0 8px 40px rgba(0,0,0,.6); overflow: hidden;
+}
+#viewer-head {
+    flex: 0 0 auto; display: flex; align-items: center; gap: 8px;
+    padding: 5px 6px 5px 12px; background: #1c1c1c; color: #9cf;
+    font-size: 12px; border-bottom: 1px solid #2a2a2a;
+}
+#viewer-title { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#viewer-close {
+    flex: 0 0 auto; background: #222; color: #9bd; border: 1px solid #456;
+    border-radius: 3px; padding: 1px 8px; font: inherit; cursor: pointer;
+}
+#viewer-close:hover { background: #344; }
+#viewer-body {
+    flex: 1 1 auto; overflow: auto; margin: 0; padding: 12px 14px;
+    font-family: "Noto Sans Mono CJK JP", "Noto Sans CJK JP", "Migu 1M",
+                 "MS Gothic", "Osaka-Mono", ui-monospace, "DejaVu Sans Mono", monospace;
+    white-space: pre; tab-size: 8; color: #cdc8c0; line-height: 1.4; font-size: 14px;
+}
+#viewer-canvas {
+    flex: 1 1 auto; min-height: 0; width: 100%;
+    object-fit: contain; image-rendering: pixelated; background: #000;
 }
 </style>
 </head>
@@ -163,7 +211,10 @@ body.panel-hidden #panel, body.panel-hidden #divider { display: none; }
             <div id="run-status"></div>
         </div>
         <div id="text-view">
-            <div id="text-head">readme / テキスト</div>
+            <div id="text-head">
+                <span id="text-head-name">readme / テキスト</span>
+                <button id="text-popout" title="別窓で大きく表示" hidden>⛶ 拡大</button>
+            </div>
             <pre id="text-body">QuuBee — PC-98 フリーソフトのブラウザプレイヤー
 
 フリーソフトの書庫 (.lzh / .zip) や ディスクイメージ (.d88 / .fdi / .hdm 等) を、
@@ -179,15 +230,28 @@ body.panel-hidden #panel, body.panel-hidden #divider { display: none; }
 
 ゲームは同梱していません。お手元のフリーソフトをどうぞ。
 画面クリックでマウスキャプチャ（ESC で解除）。</pre>
+            <canvas id="text-image" hidden></canvas>
         </div>
     </div>
 </div>
 <input id="file-input" type="file" accept=".lzh,.zip,.com,.exe,.d88,.d77,.d98,.88d,.98d,.fdi,.hdm,.xdf,.2hd,.dup,.flp,.dcp,.dcu">
 
+<div id="viewer-modal" hidden>
+    <div id="viewer-box">
+        <div id="viewer-head">
+            <span id="viewer-title"></span>
+            <button id="viewer-close" title="閉じる (Esc)">✕ 閉じる</button>
+        </div>
+        <pre id="viewer-body"></pre>
+        <canvas id="viewer-canvas" hidden></canvas>
+    </div>
+</div>
+
 <script src="np2kai_core.js"></script>
 <script src="player/archive.js"></script>
 <script src="player/diskimage.js"></script>
 <script src="player/batscript.js"></script>
+<script src="player/magimage.js"></script>
 <script src="player/bridge.js"></script>
 </body>
 </html>
