@@ -23,6 +23,7 @@
 
 #include "dos_loader.h"   /* QB_GUEST_MEM_MASK, QB_TRAMP_XMS_ENTRY */
 #include "dos_xms.h"
+#include "qb_guestmem.h"  /* qb_mem_write: VRAM 宛 Move を memp_write8 経由に (共有) */
 
 /* XMS 3.0 エラーコード */
 #define XMS_E_NOTIMPL   0x80
@@ -203,7 +204,22 @@ int qb_xms_dispatch(void) {
         if (!src) { CPU_AX = 0; CPU_BL = (uint8_t)err; break; }
         uint8_t *dst = xms_resolve(dh, dofs, length, 0, &err);
         if (!dst) { CPU_AX = 0; CPU_BL = (uint8_t)err; break; }
-        memmove(dst, src, length);                     /* 重なりも正しくコピー */
+        /* conventional (handle=0=実モード seg:off) のエンドポイントは PC-98 VRAM 窓に掛かり得る。
+         * 生 memmove だと VRAM 宛は表示 dirty が立たず & どちらの側も GRCG 経路と不整合になる
+         * (Ray の DOS read→VRAM 直ロードと同クラス。XMS に画像を貯めて VRAM へ block-copy する型が踏む)。
+         * conventional の linear = ptr - mem。VRAM に掛かる側だけ共有 helper (memp_read8/write8) 経由に。 */
+        uint32_t slin = (sh == 0) ? (uint32_t)(src - mem) : 0;
+        uint32_t dlin = (dh == 0) ? (uint32_t)(dst - mem) : 0;
+        int src_vram = (sh == 0) && qb_range_hits_vram(slin, length);
+        int dst_vram = (dh == 0) && qb_range_hits_vram(dlin, length);
+        if (!src_vram && !dst_vram) {
+            memmove(dst, src, length);                 /* VRAM 非関与: 重なりも正しく高速コピー */
+        } else {
+            for (uint32_t i = 0; i < length; i++) {    /* どちらかが VRAM: バイト単位で正規経路 */
+                uint8_t b = src_vram ? qb_mem_get8(slin + i) : src[i];
+                if (dst_vram) qb_mem_put8(dlin + i, b); else dst[i] = b;
+            }
+        }
         CPU_AX = 1;
         break; }
 

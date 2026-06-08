@@ -28,6 +28,7 @@
 #include "dos_loader.h"
 #include "dos_int21.h"
 #include "dos_xms.h"          /* XMS (HIMEM 相当) HLE */
+#include "qb_guestmem.h"      /* poke8/poke16 等の共有メモリヘルパ (dos_int21.c と一本化) */
 #include "dos_shell_blob.h"   /* tools/dos_loader/shell.asm の assemble 済 blob (build.sh 生成) */
 
 /* 直接アクセスする NP2kai のゲスト RAM (linear address indexed) */
@@ -565,13 +566,8 @@ int qb_dos_signal_tsr(uint16_t keep_paras, int code) {
 
 int qb_dos_is_running(void) { return g_run.running; }
 
-/* ---------------- メモリ書き込みヘルパ ---------------- */
-
-static inline void poke8(uint32_t addr, uint8_t v)   { mem[addr & QB_GUEST_MEM_MASK] = v; }
-static inline void poke16(uint32_t addr, uint16_t v) {
-    poke8(addr,     (uint8_t)(v & 0xFF));
-    poke8(addr + 1, (uint8_t)((v >> 8) & 0xFF));
-}
+/* ---------------- メモリ書き込みヘルパ ----------------
+ * poke8/poke16 (生アクセス) は共有ヘッダ qb_guestmem.h で定義 (dos_int21.c と一本化)。 */
 
 /* IVT[vec] = seg:off に設定 */
 static void set_ivt(uint8_t vec, uint16_t seg, uint16_t off) {

@@ -66,6 +66,7 @@
 
 #include "dos_int21.h"
 #include "dos_loader.h"
+#include "qb_guestmem.h"    /* qb_mem_write: VRAM 宛バルク転送を memp_write8 経由に (共有) */
 
 extern UINT8 mem[];
 
@@ -433,21 +434,12 @@ static void tty_putc(uint8_t ch) {
     }
 }
 
-/* ---------------- メモリヘルパ ---------------- */
+/* ---------------- メモリヘルパ ----------------
+ * poke8/poke16/poke32/peek8/peek16 (生アクセス) と qb_mem_read/qb_mem_write (VRAM 対応バルク) は
+ * 共有ヘッダ qb_guestmem.h で定義。lin() だけここに置く。 */
 
 static inline uint32_t lin(uint16_t seg, uint16_t off) {
     return ((uint32_t)seg << 4) + off;
-}
-static inline void poke8(uint32_t a, uint8_t v)  { mem[a & QB_GUEST_MEM_MASK] = v; }
-static inline void poke16(uint32_t a, uint16_t v){
-    poke8(a, (uint8_t)v); poke8(a+1, (uint8_t)(v >> 8));
-}
-static inline void poke32(uint32_t a, uint32_t v){
-    poke16(a, (uint16_t)v); poke16(a+2, (uint16_t)(v >> 16));
-}
-static inline uint8_t peek8(uint32_t a)  { return mem[a & QB_GUEST_MEM_MASK]; }
-static inline uint16_t peek16(uint32_t a){
-    return (uint16_t)peek8(a) | ((uint16_t)peek8(a + 1) << 8);
 }
 
 /* ---------------- PC-98 BIOS キーボードバッファ ----------------
@@ -1219,7 +1211,8 @@ static void int21_3f_read(void) {
         size_t chunk = (want - total) > sizeof(buf) ? sizeof(buf) : (want - total);
         size_t got = fread(buf, 1, chunk, fp);
         if (got == 0) break;
-        for (size_t i = 0; i < got; i++) poke8(dst + total + i, buf[i]);
+        /* VRAM 宛 (Ray オープニング等の画像直 read) は memp_write8 経由 / 他は生書き。共有 helper。 */
+        qb_mem_write(dst + total, buf, (uint32_t)got);
         total += (uint16_t)got;
         if (got < chunk) break;
     }
@@ -1247,7 +1240,8 @@ static void int21_40_write(void) {
     uint16_t total = 0;
     while (total < want) {
         size_t chunk = (want - total) > sizeof(buf) ? sizeof(buf) : (want - total);
-        for (size_t i = 0; i < chunk; i++) buf[i] = peek8(src + total + i);
+        /* VRAM 元 (画面を file に保存する系) は memp_read8 経由で GRCG read モードを反映。共有 helper。 */
+        qb_mem_read(src + total, buf, (uint32_t)chunk);
         size_t put = fwrite(buf, 1, chunk, fp);
         total += (uint16_t)put;
         if (put < chunk) break;

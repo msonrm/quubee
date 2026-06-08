@@ -30,21 +30,23 @@ T3 確認は入力が要るのでブラウザで人が行う (headless は T0〜
   master.lib 系全般に効く。SSP の banner ゴースト消滅・回帰ゼロ (CHANGELOG 詳細)。**KANI の「KANI.SCR を作成します」は
   別系統** — INT 29h 不使用、初回起動 (kani.scr 不在) でのみ出る忠実な通知。スコア登録時にファイル作成・以後消える。
 
-### ベースライン (改修版 triage)
-**描画到達 (ALIVE+RENDER) = 20/31、動作確認 (+WAIT 入力待ち生存) = 22/31、真の BIOS クラッシュ = 0。**
-既知動作の DEPTH/KANI/TW212/NX93/SSP が全 ALIVE = 判定の信頼性 OK。
+### ベースライン (改修版 triage、2026-06-08 更新)
+**描画到達 (ALIVE+RENDER) = 21/31、動作確認 (+WAIT 入力待ち生存) = 23/31、真の BIOS クラッシュ = 0。**
+既知動作の DEPTH/KANI/TW212/NX93/SSP が全 ALIVE = 判定の信頼性 OK。**2026-06-08 の Ray オープニング修正
+(DOS read→VRAM を `memp_write8` 経由化) が VRAM 直ロード型に波及し、SEENA2 (RENDER 57色→ALIVE 232色)・
+POLA100 (BOOT→ALIVE) を昇格 (回帰ゼロ・降格なし)。ALIVE 16→18・描画到達 20→21。**
 
 | 状態 | 数 | ゲーム |
 |---|---|---|
-| ● ALIVE (多色+アニメ) | 16 | CRAY CX92 **DEPTH✓** FINAL(SD2) FLIXX **KANI✓** METYS MKD MOG **NX93✓** PECKER POY ROLL SC **SSP✓** **TW212✓** |
-| ◐ RENDER (多色静止) | 4 | BIOHJA C2GP SEENA2(色57) TWINS(入力待ち) |
-| ▫ BOOT (graphics乏) | 5 | DYNAMO(.bat稼働) F1GP GETS POLA STB |
+| ● ALIVE (多色+アニメ) | 18 | CRAY CX92 **DEPTH✓** FINAL(SD2) FLIXX **KANI✓** METYS MKD MOG **NX93✓** PECKER **POLA↑** POY ROLL SC **SEENA2↑(232色)** **SSP✓** **TW212✓** |
+| ◐ RENDER (多色静止) | 3 | BIOHJA C2GP TWINS(入力待ち) |
+| ▫ BOOT (graphics乏) | 4 | DYNAMO(.bat稼働) F1GP GETS STB |
 | ⌨ WAIT (DOS入力待ち=生存) | 2 | DADA YY (テキストアドベンチャー) |
 | ⏏ EXIT (早期終了・回復余地) | 4 | CZ GGL2 GS OZ |
 | ✗ CRASH (BIOS 暴走) | 0 | — |
 
 → **真の BIOS クラッシュは皆無 = HLE/BIOS は健全。** 残る EXIT 4 本が母数底上げの主候補、BIOS 領域到達は
-GETS/SEENA2 のみ (描画後)。**目標 20 は達成圏、真の射程 24〜28。**
+GETS/SEENA2 のみ (SEENA2 は描画後)。**目標 20 は達成 (描画到達 21)、真の射程 24〜28。**
 
 ### 次の作業
 - [x] ~~DEAD クラスタを .bat (stage_script) 経路で再トリアージ~~ → 改修 triage に統合済 (MKD→ALIVE/TWINS→RENDER/Dynamo→稼働)

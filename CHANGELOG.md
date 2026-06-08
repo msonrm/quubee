@@ -1,5 +1,52 @@
 # CHANGELOG
 
+## [Ray IV オープニング (RAY_IV.RAY) の黒画面を根治 — DOS read→VRAM 直ロードを正規 CPU 書き込みに] — 2026-06-08
+
+**Ray を単体起動 (`RAY` / `RAY RAY_IV.RAY`) すると「音は鳴るが画面が真っ黒」**だった症状を根治。従来 CLAUDE.md/
+CHANGELOG は「データ未指定が原因」としていたが、これは**誤り**で本質バグだった (ユーザー指摘)。
+
+**切り分け (headless A/B、`tools/ray_png.js` / 調査用 `qb_ray_ab.js`):**
+- **曲データ** (`SILK_FLD.RAY` 3KB) → Ray ロゴ・ピアノ鍵盤の展開グラフィック込みで**フル表示** (非ゼロ 234k/256k・9色)。
+- **オープニング** (`RAY_IV.RAY` 49KB) → **完全な黒** (非ゼロ 0)。データを明示指定しても黒なので「引数忘れ」ではない。
+- bare `RAY` は `RAY_IV.RAY` を自動ロードして同じ展開スピンループ (`0x110:0xb0xx`、2026-06-01 に局所化した箇所) で固着。
+
+**INT 21h トレースで真因確定:** Ray のオープニングは画像ファイルを **INT 21h AH=3Fh read で PC-98 グラフィック VRAM
+プレーンへ直接ロード**する (青 0xA8000 / 緑 0xB8000 / 輝度 0xE0000、トレースで dst=0xAF3B1/0xBEDCD/0xE79BA を確認)。
+曲データは通常メモリ (seg 0x2B75〜) へ読んで CPU で描くため健全だった。**我々の read は VRAM 宛でも生 `poke8`
+(`mem[]` 直書き) を使い、NP2kai の VRAM アクセス関数テーブル (`memvga0_wr8` / PEGC `vacc->wr8`、`address>>15` で
+ディスパッチ) をバイパス**していた。結果:
+- **(a) 表示 dirty が立たず**グラフィック面が再描画されない (テキスト面 dirty 問題のグラフィック版)。
+- **(b) GRCG read 経路と不整合** — Ray 自前の「VRAM 上で展開」ルーチンが CPU read で**ゼロを読み無限スピン**
+  (2026-06-01 の「展開ソース全ゼロ」の正体)。
+
+**修正 (`native/dos_int21.c`):** バルク転送用ヘルパー `mem_put8` を追加し、**VRAM 窓 (テキスト/属性/CG 窓 0xA0000-
+0xA7FFF・グラフィック 0xA8000-0xBFFFF・輝度 0xE0000-0xE7FFF) 宛だけ `memp_write8` (正規 CPU 書き込み) 経由**に、
+それ以外は従来どおり高速な生 `poke8`。`int21_3f_read` をこのヘルパー経由に変更。実 DOS では VRAM バッファへの read は
+VRAM ハードウェア (GRCG 等) を通るので、これが faithful な挙動 (生 mem[] 直書きが近道で壊れていた)。VRAM へ画像を
+直 read してそこで展開する**全タイトルに効く汎用修正**。
+
+**結果:** `RAY_IV.RAY` が**オープニング画像 (女性+「Ray」ロゴ+夕景の東京タワー) を 16 色で表示**、最終 PC が展開スピン
+(`0xb0xx`) → 通常待ちループ (`0x8a76`、曲データと同領域) へ移行 (= 展開が完走)。**曲データは回帰ゼロ** (`SILK_FLD`
+234k/9色で不変)。headless 回帰 = xms PASS / batscript 33-0 / diskimage 30-0。スクショ突合 `tools/ray_png.js`。
+
+**副次効果 — bio 100% triage が改善 (回帰ゼロ・昇格のみ):** 同じ VRAM 直ロードを使う他タイトルにも効き、
+`tools/bio100_triage.js` が **ALIVE 16→18・描画到達 20→21・動作確認 22→23** (CRASH 0 維持・降格ゼロ)。具体的には
+**SEENA2** が RENDER(57色)→**ALIVE(232色)**、**POLA100** が BOOT(4色)→**ALIVE(9色)** に昇格。汎用修正の裏付け。
+
+**共有ヘルパー化 + XMS Move への横展開 + 読み側対称化 (同日):** 同クラスの兄弟バグ (生 mem[] 直アクセスが
+VRAM 経路をバイパス) を構造的に防ぐため、ゲストメモリアクセスを**共有ヘッダ `native/qb_guestmem.h`** に集約:
+- **(A) 生アクセス `poke8/poke16/poke32/peek8/peek16` を一本化** — `dos_int21.c` と `dos_loader.c` が**各自に同一
+  定義を持っていた重複を解消** (両 .c から削除しヘッダ参照に。PSP/IVT/env 等の構造化書き込み用、VRAM は通らない前提)。
+- **(B) VRAM 窓判定** `qb_addr_is_vram` / `qb_range_hits_vram`。
+- **(C) VRAM 対応バルク転送** — 書き `qb_mem_put8`/`qb_mem_write` (VRAM 宛は `memp_write8`)、**読み `qb_mem_get8`/
+  `qb_mem_read` (VRAM 元は `memp_read8` で GRCG read モードを反映)**。
+- 適用: `int21_3f_read` (DOS read) → `qb_mem_write`、**`int21_40_write` (DOS write、画面を file 保存する系) →
+  `qb_mem_read`**、**XMS Move (`dos_xms.c` AH=0Bh) → src/dst のどちらが conventional VRAM でも正しく**
+  (VRAM 非関与は高速 memmove のまま、掛かる時だけバイト単位で正規経路)。conventional 宛を生 memmove で書いていた
+  XMS Move の潜在バグ (XMS に画像を貯めて VRAM へ block-copy する型) を予防。
+- 回帰: Ray 220k/16色で不変・xms_test PASS・exec_env_test PASS (`dos_loader.c` の poke8 共有後も loader/EXEC 健全)・
+  batscript 33-0。XMS↔VRAM 経路は corpus に実例が無く、Ray と同一 helper の再利用で by-construction 検証。
+
 ## [QoL — CTRL キー修正 + readme ビューア (NEC罫線→Unicode) + .MAG 画像ビューア] — 2026-06-08
 
 互換性の長尾 (bio 100%) とは別軸の「快適に使う」フロント強化。**すべて JS/HTML のみ・Wasm 不変**、ブラウザ実機で確認済。
