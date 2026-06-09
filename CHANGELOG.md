@@ -1,5 +1,40 @@
 # CHANGELOG
 
+## [東方封魔録(TH02)がステージ1プレイ描画まで到達 — SJIS 名 open の UTF-8↔latin1 不整合を根治 + AH=4Bh AL=03(Load Overlay)実装] — 2026-06-09
+
+同日先行の「op.exe 脱線根治」の先で、**実オープニング描画と本編 main.exe の起動**を阻んでいた本質バグ 2 件を根治。
+**東方封魔録が headless でステージ1フィールド (石畳+霊夢自機+HUD「霊撃○○○/残機/霊力/NORMAL」)・スコア 0→1580
+加算・敵スプライト/弾幕/アイテム (P/S/B) 落下まで実走**することを PNG 目視で確認 (`animated=true`, exited=0)。
+回帰ゼロ (コア回帰 exec_env/xms/batscript 33-0/diskimage 30-0 PASS、bio100 triage 完全同一
+ALIVE20/RENDER4/BOOT5/WAIT2/EXIT0/CRASH0・描画到達 24/動作確認 26/31)。
+
+**① SJIS ファイル名が永遠に open できなかった真因を根治 (`native/dos_int21.c ci_lookup`)** — Emscripten の
+パス層と生 SJIS バイトの不整合が真因。MEMFS のノード名は frontend (`archive.js decodeName`) が **latin1 文字列**
+(各 SJIS バイト→コードポイント) で書くが、C 側 `readdir` の `d_name` はそれを **UTF-8 エンコード**したもので、
+0x80-0xFF のバイトは 2 バイト (C2/C3 xx) に膨らむ (例: "東方封魔.録" 先頭 0x93 → C2 93)。一方 DOS 側 (op.exe) が
+INT 21h に渡すパスは生 SJIS バイト列なので、`ci_equal` の素朴 byte 比較が不一致 → op.exe がデータアーカイブ
+「東方封魔.録」(457KB) を **19 回開けず画像ゼロ=色 6 止まり** (オープニング黒画面の真因)。
+**修正 = 比較時に d_name (UTF-8) を 1 コードポイントずつデコードし下位 8bit (= 元の SJIS バイト) に畳んでから
+DOS 名と突き合わせる** (`ci_equal_fsname` / `utf8_next_lowbyte`)。一致時に `found` へ書く実在名は d_name (UTF-8) の
+ままなので、後段の fopen は Emscripten の `UTF8ToString` で元ノード名に戻り正しく開ける (round-trip)。**結果: 色 6→17、
+INT 21h AH=3F read 26→311、オープニング 16 色描画。** SJIS 名データを直 open する PC-98 ソフト全般に効く汎用修正。
+ASCII 名は従来の素朴比較と等価 (回帰なし、bio100 全 ASCII corpus が同一)。残: CREATE での新規 SJIS 名はまだ lossy
+round-trip (読み経路=本ブロッカーは解決)、`read_dos_rel` の '\'→'/' は SJIS ダメ文字を誤分割し得る (latent、現 corpus 不該当)。
+
+**② AH=4Bh AL=03 (Load Overlay) を実装 (`native/dos_loader.c qb_dos_overlay_load` + `dos_int21.c int21_4b_overlay`)** —
+op.exe はオープニング後 **main.exe を overlay 読み込み**して本編へ遷移する (game.bat は `op` だけ呼び、op→main は
+op.exe 内の AH=4Bh AL=03 で繋ぐ。従来 UNIMPL で AL=03 を弾いていたため op.exe が exit code 2 で諦めていた)。
+AL=00 (EXEC) と違い PSP も MCB も作らず CPU も切り替えない: パラメータブロック ES:BX の +0=load_seg / +2=reloc_factor
+を読み、子イメージを load_seg:0000 へロード、EXE の各 relocation セグメントに reloc_factor を加算、CF=0 で呼び出し元へ
+戻る (呼び出し元が overlay 入口へ自分で far call)。境界・reloc 検証は exec_load と同流儀。**結果: main.exe (101KB,
+reloc 920) が 095B:0000 にロードされ本編稼働 (exited=0, animated=true)。** overlay は汎用 DOS 機能で他ゲームにも効く。
+
+**③ コードレビュー追随: `int21_3f_read` のコメント修正** — 「mem は 1MB 連続」→「2MB 連続」(`QB_GUEST_MEM_MASK`=
+0x1FFFFF)。動作は `qb_mem_write` が正しくマスクするため不変、文言のみ。
+
+**東方の現状: 封魔録 (TH02) は headless でステージ1プレイ描画まで到達。** 残: ブラウザ実機での T3 確認、
+TH03/04/05 (自己展開 EXE) の SFX 取り込み (埋め込み LZH 展開)。
+
 ## [東方旧作(封魔録)の op.exe 脱線を根治 — EXEC で FCB1/FCB2 を構築 + INT 21h AH=63h(DBCS) 実装。あわせて DUP2 正直化・GS100 偽陰性解消] — 2026-06-09
 
 コードレビュー由来の小修正 2 件 + 東方旧作を射程に入れる HLE 拡張 2 件。回帰ゼロ

@@ -121,6 +121,14 @@ int qb_dos_exec_load(const uint8_t *image, size_t size,
                      const char *child_name,
                      uint32_t fcb1_lin, uint32_t fcb2_lin);
 
+/* AH=4Bh AL=03h Load Overlay。子イメージを呼び出し元が指定した load_seg:0000 にロードし、
+ * EXE の relocation は reloc_factor を各セグメントワードに加算して適用する。AL=00 と違い PSP は
+ * 作らず CPU も切り替えず、呼び出し元へそのまま返る (呼び出し元が overlay へ far call する)。
+ * 東方封魔録の op.exe がオープニング後に main.exe を overlay 読み込みして本編へ遷移する経路で必要。
+ * 戻り値 0=成功、<0=失敗 (呼び出し側で DOS error にマップ)。 */
+int qb_dos_overlay_load(const uint8_t *image, size_t size,
+                        uint16_t load_seg, uint16_t reloc_factor);
+
 /* AH=31h Keep Process (TSR): 子を keep_paras パラグラフに縮めて常駐させ、親へ復帰。
  * code = 子の終了コード (AL)。Ray の RIN.COM 等の常駐ドライバ用。
  * 戻り値 1=親復帰 (CPU リダイレクト済)、0=最上位プログラム (halt 扱い)。 */

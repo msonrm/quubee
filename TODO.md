@@ -62,18 +62,25 @@ T3 確認は入力が要るのでブラウザで人が行う (headless は T0〜
 - [ ] EMS+XMS の 25 本が XMS フォールバックで健全に動くか実プレイで確認 (`qbDebug.memprobe()` の ems 監視)
 - [ ] GETS の BIOS 領域到達 (neccheck) 調査 (残る唯一の本物 BIOS リード)
 
-### 東方旧作 (TH02 封魔録ほか) — 次セッション継続 (2026-06-09 夜 着手)
+### 東方旧作 (TH02 封魔録ほか) — 封魔録が headless でステージ1プレイ描画まで到達 (2026-06-09)
 games/touhou に東方旧作 4 作 (TH02 封魔録=通常 LZH / TH03 夢時空・TH04 幻想郷・TH05 怪綺談=自己展開 EXE)。
-headless smoke (game.bat ong1 経路を忠実線形化) で **2 つの壁を突破済**:
+headless smoke (game.bat ong1 経路を忠実線形化) + PNG 出力 (`/tmp/th02_smoke.js` / `/tmp/th02_png.js`) で
+**4 つの壁を突破し、封魔録 (TH02) がステージ1フィールド・スコア加算・敵/弾幕/アイテムまで実走**:
 - [x] **壁1: AH=63h (DBCS リードバイト表) 未実装** → 実装 (DS:SI で SJIS 範囲表を返す)
 - [x] **壁2: zun.com が常駐失敗 (FCB1 から引数を読むのに我々の EXEC が FCB を組んでいなかった)** → EXEC で
-      cmdtail→FCB1/FCB2 を parse する修正。**op.exe が脱線せず正常終了するようになった (pc=0xfee30)**
-- [ ] **op.exe の実オープニング描画をブラウザ実機で目視** (headless は表示タイミング/キー無しで 6 色止まり)
-- [ ] **本編 (game.bat の "GAME" / main.exe) を起動して T3 確認** (op の先の壁は未知)
-- [ ] **`.bat` の if/errorlevel/goto 対応** (game.bat は分岐つき → 現 resolveSequence は null を返す。
-      ブラウザで game.bat を忠実起動するのに必要。難易度中〜大)
+      cmdtail→FCB1/FCB2 を parse する修正。op.exe が脱線せず正常終了 (pc=0xfee30)
+- [x] **壁3: SJIS 名ファイルが永遠に open 不能** (MEMFS ノード名=latin1、C 側 readdir d_name=UTF-8 で
+      0x80-FF が膨張 → 生 SJIS 要求と byte 不一致でデータアーカイブ「東方封魔.録」を開けず色 6 止まり) →
+      `ci_lookup` の比較で d_name を UTF-8 デコードし下位 8bit に畳む (`ci_equal_fsname`)。**色 6→17、
+      オープニング 16 色描画。SJIS 名直 open する PC-98 ソフト全般に効く**
+- [x] **壁4: AH=4Bh AL=03 (Load Overlay) 未実装** → op.exe が main.exe を overlay 読み込みして本編へ遷移する
+      経路を実装 (`qb_dos_overlay_load`/`int21_4b_overlay`)。**main.exe (reloc 920) がロードされ本編稼働
+      (exited=0, animated=true)。** 汎用 DOS 機能
+- [ ] **封魔録のブラウザ実機 T3 確認** (headless で描画到達済 → ブラウザでプレイ確認が次)
 - [ ] **自己展開 EXE (TH03/04/05) の SFX 取り込み** = .exe 内の埋め込み LZH (offset ~1702 の `-lh5-`) を
       archive.js で検出・展開 (PC-98 同人で頻出の配布形態・汎用性高)
+- 注: 封魔録は op→main が op.exe 内 overlay なので **game.bat の if/goto 対応は不要** (game.bat は ong 音源分岐のみ。
+      手動線形化/batscript で代替可)。`.bat` 完全分岐は他タイトルで必要になれば別途
 - 詳細・調査ログは [[project_touhou_probe]] / CHANGELOG 2026-06-09 参照
 
 ---

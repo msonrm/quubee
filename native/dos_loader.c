@@ -1219,3 +1219,64 @@ int qb_dos_exec_load(const uint8_t *image, size_t size,
             is_exe ? "EXE" : "COM", (unsigned)parent_psp, (unsigned)free_sz);
     return 0;
 }
+
+/* ---------------- AH=4Bh AL=03h Load Overlay ----------------
+ * AL=00 (EXEC) と違い、呼び出し元が確保済みのメモリ (load_seg:0000) に子イメージを置くだけ。
+ * PSP は作らず・MCB も触らず・CPU も切り替えない (呼び出し元へ CF=0 で戻り、呼び出し元が overlay
+ * の入口へ自分で far call する)。EXE の relocation は reloc_factor を各セグメントワードに加算する
+ * (実 DOS の overlay と同契約: 多くの呼び出し元は load_seg と同値を渡す)。COM は relocation 無しで
+ * load_seg:0000 から丸ごと展開する。境界・reloc 検証は exec_load と同流儀で行う。 */
+int qb_dos_overlay_load(const uint8_t *image, size_t size,
+                        uint16_t load_seg, uint16_t reloc_factor) {
+    if (!image || size < 2) return -1;
+    uint16_t magic = read_le16(image);
+    int is_exe = (magic == 0x5A4D || magic == 0x4D5A);
+
+    size_t   header_bytes = 0, body_bytes = 0;
+    uint16_t e_crlc = 0, e_lfarlc = 0;
+    if (is_exe) {
+        if (size < 0x1C) return -1;
+        uint16_t e_cblp    = read_le16(image + 0x02);
+        uint16_t e_cp      = read_le16(image + 0x04);
+        e_crlc             = read_le16(image + 0x06);
+        uint16_t e_cparhdr = read_le16(image + 0x08);
+        e_lfarlc           = read_le16(image + 0x18);
+        size_t image_size_file = (size_t)e_cp * 512;
+        if (e_cblp != 0) { if (e_cp == 0) return -4; image_size_file -= (512 - e_cblp); }
+        if (image_size_file > size) return -5;
+        header_bytes = (size_t)e_cparhdr * 16;
+        if (header_bytes < 0x1C || header_bytes > image_size_file) return -6;
+        body_bytes = image_size_file - header_bytes;
+        /* reloc テーブルがファイル外 / body 外を指さないか確保前に検証 (exec_load と同じ前段)。 */
+        if (e_crlc > 0 && (uint32_t)e_lfarlc + (uint32_t)e_crlc * 4 > size) return -8;
+        for (uint16_t i = 0; i < e_crlc; i++) {
+            uint32_t rec = (uint32_t)e_lfarlc + (uint32_t)i * 4;
+            uint32_t tgt = (uint32_t)read_le16(image + rec + 2) * 16 + read_le16(image + rec);
+            if (tgt + 1 >= body_bytes) return -9;
+        }
+    } else {
+        if (size > 0xFF00) return -2;   /* COM 上限 */
+        body_bytes = size;
+    }
+
+    /* load_seg:0000 へ body をコピー。ゲスト RAM 配列外への書き込みは弾く。 */
+    uint32_t load_lin = (uint32_t)load_seg << 4;
+    if ((uint64_t)load_lin + body_bytes > (uint64_t)QB_GUEST_MEM_MASK + 1) return -10;
+    memcpy(&mem[load_lin], image + header_bytes, body_bytes);
+
+    /* relocation (EXE のみ): 各ターゲットの 16-bit segment に reloc_factor を加算。 */
+    for (uint16_t i = 0; i < e_crlc; i++) {
+        uint32_t rec = (uint32_t)e_lfarlc + (uint32_t)i * 4;
+        uint16_t r_off = read_le16(image + rec);
+        uint16_t r_seg = read_le16(image + rec + 2);
+        uint32_t a = load_lin + ((uint32_t)r_seg * 16 + r_off);
+        uint16_t cur = (uint16_t)mem[a & QB_GUEST_MEM_MASK]
+                     | ((uint16_t)mem[(a + 1) & QB_GUEST_MEM_MASK] << 8);
+        poke16(a, (uint16_t)(cur + reloc_factor));
+    }
+
+    fprintf(stderr,
+            "[dos_exec] overlay loaded at %04X:0000 (%s, body=%zu, relocs=%u, factor=%04X)\n",
+            load_seg, is_exe ? "EXE" : "COM", body_bytes, (unsigned)e_crlc, (unsigned)reloc_factor);
+    return 0;
+}

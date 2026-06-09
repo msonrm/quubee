@@ -491,11 +491,42 @@ static uint8_t  g_la_len;
  * 実在名へ解決する」リゾルバ方式を採る (旧実装の「両側で強制小文字化」ハックは廃止)。
  * サブディレクトリも保持する。 */
 
-/* ASCII 大小無視の文字列一致 */
-static int ci_equal(const char *a, const char *b) {
+/* MEMFS (Emscripten) のノード名は JS 文字列で、フロントエンド (archive.js decodeName) は
+ * SJIS ファイル名を latin1 文字列 = 各バイトをそのままコードポイントにして書き込む。C 側の
+ * readdir はそのノード名を UTF-8 で受け取るため、0x80-0xFF のバイトは 2 バイト (C2/C3 xx) に
+ * 膨らむ (例: "東方封魔.録" の先頭 0x93 → C2 93)。一方 DOS 側 (op.exe 等) が INT 21h に渡す
+ * パスは生 SJIS バイト列。両者を素朴に byte 比較すると不一致になり SJIS 名のファイルが永遠に
+ * 開けない (東方封魔録 の op.exe が画像アーカイブを開けず黒画面、の真因)。
+ * → 比較時に d_name (UTF-8) を 1 コードポイントずつデコードし下位 8bit (= 元の SJIS バイト) に
+ *   畳んでから DOS 名と突き合わせる。一致時に found へ書く実在名は d_name (UTF-8) のままなので、
+ *   後段の fopen は Emscripten の UTF8ToString で元ノード名に戻り正しく開ける (round-trip)。 */
+static uint8_t utf8_next_lowbyte(const unsigned char **pp) {
+    const unsigned char *p = *pp;
+    unsigned char c = p[0];
+    uint32_t cp;
+    if (c < 0x80) {                                                  /* ASCII (1 byte) */
+        cp = c; p += 1;
+    } else if ((c & 0xE0) == 0xC0 && (p[1] & 0xC0) == 0x80) {        /* 2 byte (U+0080..07FF) */
+        cp = ((uint32_t)(c & 0x1F) << 6) | (p[1] & 0x3F); p += 2;
+    } else if ((c & 0xF0) == 0xE0 && (p[1] & 0xC0) == 0x80          /* 3 byte (念のため) */
+                                  && (p[2] & 0xC0) == 0x80) {
+        cp = ((uint32_t)(c & 0x0F) << 12) | ((uint32_t)(p[1] & 0x3F) << 6) | (p[2] & 0x3F); p += 3;
+    } else {
+        cp = c; p += 1;                                             /* 不正シーケンス: 生バイト扱い */
+    }
+    *pp = p;
+    return (uint8_t)cp;                                             /* 下位 8bit = 元の latin1/SJIS バイト */
+}
+
+/* DOS 名 (生 SJIS バイト) と MEMFS d_name (UTF-8 of latin1(SJIS)) を ASCII 大小無視で一致比較。
+ * d_name 側だけ UTF-8 を畳んで元バイトへ戻す (上のコメント参照)。ASCII のみなら従来の素朴比較と等価。 */
+static int ci_equal_fsname(const char *dname_utf8, const char *dosname) {
+    const unsigned char *a = (const unsigned char *)dname_utf8;
+    const unsigned char *b = (const unsigned char *)dosname;
     while (*a && *b) {
-        if (tolower((unsigned char)*a) != tolower((unsigned char)*b)) return 0;
-        a++; b++;
+        uint8_t ca = utf8_next_lowbyte(&a);
+        uint8_t cb = *b++;
+        if (tolower(ca) != tolower(cb)) return 0;
     }
     return *a == '\0' && *b == '\0';
 }
@@ -508,7 +539,7 @@ static int ci_lookup(const char *dir, const char *name, char *found, size_t cap)
     struct dirent *de;
     int hit = 0;
     while ((de = readdir(d)) != NULL) {
-        if (ci_equal(de->d_name, name)) {
+        if (ci_equal_fsname(de->d_name, name)) {
             strncpy(found, de->d_name, cap - 1);
             found[cap - 1] = '\0';
             hit = 1;
@@ -1207,7 +1238,7 @@ static void int21_3f_read(void) {
     if (!fp) { CPU_AX = 6; CPU_FLAG |= C_FLAG; return; }
     uint16_t want = CPU_CX;
     uint32_t dst = lin(CPU_DS, CPU_DX);
-    /* チャンク化 (mem は 1MB 連続なので直接書ける) */
+    /* チャンク化 (mem は 2MB 連続なので直接書ける) */
     uint8_t buf[4096];
     uint16_t total = 0;
     while (total < want) {
@@ -1403,8 +1434,55 @@ static void int21_49_free(void) {
  * 【段階1.5】AL=00 のみ。親 (ランチャ zar.exe) を常駐させたまま、子 (siz エンジン) を
  *   親確保領域の上にロードして CPU を子へ切替える。親の IVT フック/コードが生き残るので
  *   段階1 の「置換」で起きた暴走を解消。子終了時の親復帰 (メニュー往復) は段階2 で実装。 */
+/* AH=4Bh AL=03h Load Overlay。子イメージを呼び出し元指定の load_seg:0000 へロード&リロケート
+ * して呼び出し元へ戻る (PSP も CPU 切替も無し)。op.exe → main.exe の本編遷移で踏む。
+ * パラメータブロック ES:BX: +0 = load segment、+2 = relocation factor。 */
+static void int21_4b_overlay(void) {
+    char host[256];
+    int st = dos_path_to_host(CPU_DS, CPU_DX, host, sizeof(host));
+    if (st != 0) {
+        fprintf(stderr, "[int21h/4B/03] overlay not found (status %d): %s\n", st, host);
+        CPU_AX = 2; CPU_FLAG |= C_FLAG;   /* file not found */
+        return;
+    }
+    uint32_t pb        = lin(CPU_ES, CPU_BX);
+    uint16_t load_seg  = peek16(pb + 0);
+    uint16_t reloc_fac = peek16(pb + 2);
+
+    static uint8_t ovbuf[256 * 1024];
+    {
+        struct stat cst;
+        if (stat(host, &cst) == 0 && (size_t)cst.st_size > sizeof(ovbuf)) {
+            fprintf(stderr, "[int21h/4B/03] overlay too large: %ld > %zu\n",
+                    (long)cst.st_size, sizeof(ovbuf));
+            CPU_AX = 8; CPU_FLAG |= C_FLAG;
+            return;
+        }
+    }
+    FILE *fp = fopen(host, "rb");
+    if (!fp) { CPU_AX = 2; CPU_FLAG |= C_FLAG; return; }
+    size_t sz = fread(ovbuf, 1, sizeof(ovbuf), fp);
+    fclose(fp);
+
+    const char *base = host;
+    for (const char *q = host; *q; q++) if (*q == '/' || *q == '\\') base = q + 1;
+    fprintf(stderr, "[int21h/4B/03] LOAD OVERLAY %s → %04X:0000 (reloc factor %04X)\n",
+            base, (unsigned)load_seg, (unsigned)reloc_fac);
+
+    int r = qb_dos_overlay_load(ovbuf, sz, load_seg, reloc_fac);
+    if (r != 0) {
+        fprintf(stderr, "[int21h/4B/03] overlay_load failed r=%d\n", r);
+        CPU_AX = (r == -10) ? 8 : 0x0B;
+        CPU_FLAG |= C_FLAG;
+        return;
+    }
+    /* 成功: CPU は切り替えず呼び出し元へ CF=0 で戻る (呼び出し元が overlay へ far call する)。 */
+    CPU_FLAG &= ~C_FLAG;
+}
+
 static void int21_4b_exec(void) {
-    if (CPU_AL != 0x00) {                 /* AL=03 overlay 等は未対応 */
+    if (CPU_AL == 0x03) { int21_4b_overlay(); return; }   /* Load Overlay */
+    if (CPU_AL != 0x00) {                 /* AL=01 (load & no exec) 等は未対応 */
         fprintf(stderr, "[int21h/4B] unsupported AL=%02X\n", (unsigned)CPU_AL);
         CPU_AX = 1; CPU_FLAG |= C_FLAG;
         return;
