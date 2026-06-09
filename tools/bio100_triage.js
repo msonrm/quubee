@@ -47,14 +47,18 @@ if (!fs.existsSync(FONT))   skip('font.bmp 不在');
 if (!fs.existsSync(BIO))    skip('games/bio_100 不在 (local-only corpus)');
 if (cp.spawnSync('sh', ['-c', 'command -v lha']).status) skip('lha 不在');
 
-// 純ゲーム 31 本の {書庫, 主実行ファイル(.bat が無い/解決不能な時のフォールバック)}。
+// 純ゲーム 31 本の {書庫, 主実行ファイル(.bat が無い/解決不能な時のフォールバック), 必須引数?}。
 // 非ゲーム(C2ED/C2RANK/CATLET/EFORTH)と重複(FINAT=FINAL)は除外。
+// 第3要素 = .bat が無く本体が「ドキュメント記載の必須コマンドライン引数」を要求する場合の cmdline。
+// これを渡さないと裸起動で usage を出して即終了し EXIT に見える (偽陰性)。.bat レシピ解決と同じ
+// 「作者が文書化した起動方法どおりに起動する」原則。GS100=gsnake は `gsnake <1P> <2P> <wait>`
+// (gsnake.doc) で 1P/2P=プレイヤー種別(0=人/キーボード 等)、wait=0~10。"0 0 0"=両者キーボード・wait 0。
 const GAMES = [
     ['BIOHJA.LZH','biohja.exe'], ['C2GP100.LZH','c2gp.exe'], ['CRAY083.LZH','cray.exe'],
     ['CX92_100.LZH','cx92.exe'], ['CZ102.LZH','camelzoo.exe'], ['DADA.LZH','dada.exe'],
     ['DEPTH100.LZH','depth.exe'], ['DYNAMO16.LZH','dynamo.exe'], ['F1GP083.LZH','f1gp.exe'],
     ['FINAL100.LZH','finmain.exe'], ['FLIXX100.LZH','flixx.exe'], ['GETS.LZH','gets.exe'],
-    ['GGL2_100.LZH','goggle2.exe'], ['GS100.LZH','gsnake.exe'], ['KANI123.LZH','kani.exe'],
+    ['GGL2_100.LZH','goggle2.exe'], ['GS100.LZH','gsnake.exe','0 0 0'], ['KANI123.LZH','kani.exe'],
     ['METYS100.LZH','metys.exe'], ['MKD106.LZH','markadia.exe'], ['MOG003.LZH','mogler.exe'],
     ['NX93_110.LZH','nx93.exe'], ['OZ100.LZH','oz8.exe'], ['PECKER05.LZH','pecker.exe'],
     ['POLA100.LZH','pola.exe'], ['POY100.LZH','poy.exe'], ['ROLL100.LZH','rolling.exe'],
@@ -93,7 +97,7 @@ function fbColors(M, getFB, handle, wP, hP, bP) {
 
 // 起動方法を決める: .bat があり resolveSequence が通れば {kind:'script', seq, main}、
 // 無ければ {kind:'single', exe} (GAMES のフォールバック exe)。
-function planLaunch(dir, fallbackExe) {
+function planLaunch(dir, fallbackExe, fallbackArgs) {
     const names = fs.readdirSync(dir).filter((f) => fs.statSync(path.join(dir, f)).isFile());
     const bats = names.filter((n) => /\.bat$/i.test(n)).sort();
     for (const bat of bats) {
@@ -113,13 +117,13 @@ function planLaunch(dir, fallbackExe) {
         const found = names.find((f) => f.toLowerCase() === exe.toLowerCase());
         if (found) exe = found;
     }
-    return { kind: 'single', exe, names };
+    return { kind: 'single', exe, args: fallbackArgs || '', names };
 }
 
-async function runGame([archive, fallbackExe]) {
+async function runGame([archive, fallbackExe, fallbackArgs]) {
     const dir = extract(archive);
     const name = archive.replace(/\.LZH$/i, '');
-    const plan = planLaunch(dir, fallbackExe);
+    const plan = planLaunch(dir, fallbackExe, fallbackArgs);
     if (plan.kind === 'single' && !plan.names.some((f) => f.toLowerCase() === plan.exe.toLowerCase()))
         return { archive, name, skip: plan.exe + ' 不在' };
 
@@ -147,9 +151,9 @@ async function runGame([archive, fallbackExe]) {
         const ptr = M._malloc(img.length); M.HEAPU8.set(img, ptr);
         const stageFn = /\.com$/i.test(plan.exe) ? 'np2kai_dos_stage_com' : 'np2kai_dos_stage_exe';
         sr = M.ccall(stageFn, 'number', ['number','number','string','string'],
-                     [ptr, img.length, '', plan.exe.toUpperCase()]);
+                     [ptr, img.length, plan.args || '', plan.exe.toUpperCase()]);
         M._free(ptr);
-        launchLabel = `exe:${plan.exe}`;
+        launchLabel = `exe:${plan.exe}${plan.args ? ' ' + plan.args : ''}`;
     }
     if (sr !== 0) return { archive, name, launchLabel, stageErr: sr };
 

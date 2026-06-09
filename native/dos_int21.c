@@ -1169,7 +1169,11 @@ static void int21_45_dup(void) {
 }
 
 /* AH=46h Force Duplicate (DUP2) — CX のハンドルを BX のコピーにする (開いていれば閉じてから)。
- * stdout 等の標準ハンドル (0..4) への付け替えは未対応 (開いたものは捨てて成功扱い)。 */
+ * 標準ハンドル (0..4) への付け替え (= リダイレクト) は未対応。我々の stdout/stderr は tty 直結・
+ * stdin はキーボード直結で、ハンドル番号で入出力先を差し替える層が無い。そこを「成功」と偽ると
+ * プログラムは「handle 1 をファイルへ向けた」と信じて書くが実際は tty へ流れ、狙ったファイルは
+ * 空のまま → 後で自分の出力を読み戻して破綻する (嘘の成功による遠隔破壊)。偽装でなく正直に
+ * 失敗 (CF=1, AX=6=DUP2 の文書化済エラー) を返す。 */
 static void int21_46_dup2(void) {
     int src = (int)CPU_BX;
     int dst = (int)CPU_CX;
@@ -1178,22 +1182,21 @@ static void int21_46_dup2(void) {
         CPU_AX = 6; CPU_FLAG |= C_FLAG; return;
     }
     if (src == dst) { CPU_AX = (uint16_t)dst; CPU_FLAG &= ~C_FLAG; return; }  /* 同一ハンドルは no-op (実 DOS 準拠。fh_close(dst) で src の FILE* を閉じてしまう UAF 回避) */
-    if (dst >= DOS_HANDLE_USER_BASE && g_fh[dst].used) fh_close(dst);
+    if (dst < DOS_HANDLE_USER_BASE) {   /* 標準ハンドルへの redirect は未対応: 正直に失敗 */
+        CPU_AX = 6; CPU_FLAG |= C_FLAG; return;
+    }
+    if (g_fh[dst].used) fh_close(dst);
     long pos = ftell(g_fh[src].fp);
     const char *rm = fh_reopen_mode(g_fh[src].mode);
     FILE *nf = fopen(g_fh[src].path, rm);
     if (!nf) { CPU_AX = 4; CPU_FLAG |= C_FLAG; return; }
     if (pos >= 0) fseek(nf, pos, SEEK_SET);
-    if (dst >= DOS_HANDLE_USER_BASE) {
-        g_fh[dst].used = 1;
-        g_fh[dst].fp   = nf;
-        strncpy(g_fh[dst].path, g_fh[src].path, sizeof(g_fh[dst].path) - 1);
-        g_fh[dst].path[sizeof(g_fh[dst].path) - 1] = '\0';
-        strncpy(g_fh[dst].mode, rm, sizeof(g_fh[dst].mode) - 1);
-        g_fh[dst].mode[sizeof(g_fh[dst].mode) - 1] = '\0';
-    } else {
-        fclose(nf);   /* 標準ハンドルへの redirect は未対応 */
-    }
+    g_fh[dst].used = 1;
+    g_fh[dst].fp   = nf;
+    strncpy(g_fh[dst].path, g_fh[src].path, sizeof(g_fh[dst].path) - 1);
+    g_fh[dst].path[sizeof(g_fh[dst].path) - 1] = '\0';
+    strncpy(g_fh[dst].mode, rm, sizeof(g_fh[dst].mode) - 1);
+    g_fh[dst].mode[sizeof(g_fh[dst].mode) - 1] = '\0';
     CPU_AX = (uint16_t)dst;
     CPU_FLAG &= ~C_FLAG;
 }
@@ -1787,6 +1790,37 @@ static void int21_58_alloc_strategy(void) {
     }
 }
 
+/* AH=63h: DBCS (2 バイト文字) サポート。日本語 DOS ソフトが初期化で「現在の DBCS リードバイト
+ * 範囲表」を問い合わせる (東方旧作 op.exe/main.exe が AX=6300h を叩く)。未実装 (UNIMPL) だと
+ * 有効ポインタが返らず、呼び出し側は「日本語環境でない/異常」と判断して exit code 1 で諦める。
+ * PC-98 は Shift-JIS 固定なので、SJIS のリードバイト範囲表を低位スクラッチ RAM に構築し DS:SI で返す。
+ * 表形式 = (lo,hi) バイト対の並び + 00 00 終端 (RBIL INT 21/AX=6300h)。範囲は bridge.js
+ * decodeSjisText と同一 (0x81-0x9F, 0xE0-0xFC)。
+ *   AL=00h: get lead byte table → DS:SI → 表、CF=0
+ *   AL=01h: get interim console flag → DL=0 (通常状態=変換中でない)、CF=0
+ *   AL=02h: set interim console flag → no-op (IME を持たない)、CF=0
+ * scratch は LoL と同じ segment 0x00A0 だが、LoL 使用域 (~+0x5A) より上の +0x60 に置き衝突回避。
+ * 呼び出し毎に書き直す (reset/clobber 耐性、init 順依存なし。int21_52 と同方針)。 */
+#define QB_DBCS_SEG  0x00A0u
+#define QB_DBCS_OFF  0x0060u
+static void int21_63_dbcs(void) {
+    switch (CPU_AL) {
+    case 0x00: {   /* get DBCS lead byte table → DS:SI */
+        uint32_t p = ((uint32_t)QB_DBCS_SEG << 4) + QB_DBCS_OFF;
+        poke8(p + 0, 0x81); poke8(p + 1, 0x9F);   /* SJIS リードバイト範囲 1 */
+        poke8(p + 2, 0xE0); poke8(p + 3, 0xFC);   /* SJIS リードバイト範囲 2 */
+        poke8(p + 4, 0x00); poke8(p + 5, 0x00);   /* 終端 */
+        CPU_DS = QB_DBCS_SEG;
+        CPU_SI = QB_DBCS_OFF;
+        CPU_FLAG &= ~C_FLAG;
+        break;
+    }
+    case 0x01: CPU_DX = (uint16_t)(CPU_DX & 0xFF00); CPU_FLAG &= ~C_FLAG; break;  /* interim flag = 0 */
+    case 0x02: CPU_FLAG &= ~C_FLAG; break;                                        /* set interim: no-op */
+    default:   CPU_AX = 0x0001; CPU_FLAG |= C_FLAG; break;                         /* 未知 sub-fn: 正直に失敗 */
+    }
+}
+
 /* ---------------- ディスパッチ ---------------- */
 
 /* AH 別カウンタ + qbDebug.int21Stats() で読めるよう export */
@@ -1875,6 +1909,7 @@ void qb_dos_int21_dispatch(void) {
     case 0x4F: int21_4f_findnext();  break;
     case 0x52: int21_52_list_of_lists(); break;
     case 0x58: int21_58_alloc_strategy(); break;
+    case 0x63: int21_63_dbcs(); break;
     default:
         fprintf(stderr, "[int21h] UNIMPL AH=%02X (AX=%04X CS:IP=%04X:%04X)\n",
                 ah, (unsigned)CPU_AX, (unsigned)CPU_CS, (unsigned)CPU_IP);

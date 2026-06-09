@@ -985,6 +985,39 @@ int qb_dos_loader_start_hook(void) {
  * 戻り値 0=成功、<0=失敗 (DOS error にマップするのは呼び出し側)。
  * 注: 既存ローダ (qb_dos_stage_exe/loader_start) は固定 segment 0x0110 前提でリロケート
  *     済みのため、子を別 base に置くこのパスは MZ パースを別途行う (意図的な重複)。 */
+/* コマンドテイルの 1 トークンを子 PSP の FCB (drive + name[8] + ext[3]) へ parse する。
+ * 実機 DOS の EXEC / COMMAND.COM は第1・第2引数をこの FCB 形式で子 PSP:5C/6C に置く。
+ * 多くの PC-98 ツールは起動サブコマンド/引数をコマンドテイル (PSP:80) でなく FCB1 の
+ * ファイル名フィールド (PSP:5D) から読む (例: 東方 zun.com は "zun_res" 等を FCB1 と内部表で
+ * CMPSB 比較し、空だと "No COM-Soft !!!" で終了 → 常駐せず op.exe の前提環境が崩れる)。
+ * fcb_base = FCB 先頭 linear (byte0=drive, +1..+8=name, +9..+11=ext)。トークン末尾の次を返す。 */
+static const char *build_one_fcb(uint32_t fcb_base, const char *p) {
+    poke8(fcb_base, 0);                                   /* drive = 既定 */
+    for (int i = 1; i <= 11; i++) poke8(fcb_base + (uint32_t)i, ' ');  /* name[8]+ext[3]=空白 */
+    while (*p == ' ' || *p == '\t') p++;
+    if (*p == '\0' || *p == '\r') return p;
+    if (p[0] && p[1] == ':') {                            /* "X:" ドライブ指定 */
+        char d = p[0]; if (d >= 'a' && d <= 'z') d -= 0x20;
+        if (d >= 'A' && d <= 'Z') poke8(fcb_base, (uint8_t)(d - 'A' + 1));
+        p += 2;
+    }
+    int n = 0;
+    while (*p && *p != ' ' && *p != '\t' && *p != '\r' && *p != '.') {
+        char c = *p++; if (c >= 'a' && c <= 'z') c -= 0x20;
+        if (n < 8) poke8(fcb_base + 1 + (uint32_t)n, (uint8_t)c);
+        n++;
+    }
+    if (*p == '.') {
+        p++; int e = 0;
+        while (*p && *p != ' ' && *p != '\t' && *p != '\r') {
+            char c = *p++; if (c >= 'a' && c <= 'z') c -= 0x20;
+            if (e < 3) poke8(fcb_base + 9 + (uint32_t)e, (uint8_t)c);
+            e++;
+        }
+    }
+    return p;
+}
+
 int qb_dos_exec_load(const uint8_t *image, size_t size,
                      const char *cmdtail, uint16_t env_seg,
                      const char *child_name,
@@ -1106,13 +1139,22 @@ int qb_dos_exec_load(const uint8_t *image, size_t size,
         for (size_t i = 0; i < cl; i++) poke8(pbase + 0x81 + i, (uint8_t)cmdtail[i]);
         poke8(pbase + 0x81 + cl, 0x0D);
     }
-    /* EXEC パラメータブロックの FCB1/FCB2 を子 PSP:005C/006C へ複写 (実機 DOS faithful)。
-     * 親が AH=29h で組んだ FCB から子が出力ファイル名を得る (kanipic.exe の KANI.SCR 生成経路)。
-     * null ポインタの caller (.bat shell 等、FCB 不使用) は fcb*_lin=0 で複写せず従来どおり 0 のまま。 */
-    if (fcb1_lin) for (int i = 0; i < 16; i++)
-        poke8(pbase + 0x5C + i, mem[(fcb1_lin + i) & QB_GUEST_MEM_MASK]);
-    if (fcb2_lin) for (int i = 0; i < 16; i++)
-        poke8(pbase + 0x6C + i, mem[(fcb2_lin + i) & QB_GUEST_MEM_MASK]);
+    /* 子 PSP:005C/006C の FCB1/FCB2 を用意 (実機 DOS faithful)。
+     * ① caller が明示 (fcb*_lin!=0): 親が AH=29h で組んだ FCB をそのまま複写
+     *    (kanipic.exe の KANI.SCR 生成経路)。
+     * ② caller 未指定 (.bat shell 経由など、fcb1_lin==0): 実機 COMMAND.COM 同様、コマンドテイルの
+     *    第1/第2トークンを FCB1/FCB2 へ parse して置く。FCB1 のファイル名から起動引数を読むツール
+     *    (東方 zun.com 等) はこれが無いと「未知コマンド」と判断して常駐に失敗する。 */
+    if (fcb1_lin) {
+        for (int i = 0; i < 16; i++)
+            poke8(pbase + 0x5C + i, mem[(fcb1_lin + i) & QB_GUEST_MEM_MASK]);
+        if (fcb2_lin) for (int i = 0; i < 16; i++)
+            poke8(pbase + 0x6C + i, mem[(fcb2_lin + i) & QB_GUEST_MEM_MASK]);
+    } else {
+        const char *p = cmdtail ? cmdtail : "";
+        p = build_one_fcb(pbase + 0x5C, p);   /* 第1トークン → FCB1 */
+        build_one_fcb(pbase + 0x6C, p);       /* 第2トークン → FCB2 */
+    }
 
     /* ---- 段階2: 親コンテキストを退避 (子終了でここへ戻る) ----
      * この時点で CPU_SS:SP はまだ親スタックを指し、その先頭に親の INT 21h AH=4Bh が

@@ -1,5 +1,43 @@
 # CHANGELOG
 
+## [東方旧作(封魔録)の op.exe 脱線を根治 — EXEC で FCB1/FCB2 を構築 + INT 21h AH=63h(DBCS) 実装。あわせて DUP2 正直化・GS100 偽陰性解消] — 2026-06-09
+
+コードレビュー由来の小修正 2 件 + 東方旧作を射程に入れる HLE 拡張 2 件。回帰ゼロ
+(exec_env/batscript 33-0/xms PASS、bio100 triage 完全同一 ALIVE20/RENDER4/BOOT5/WAIT2/EXIT0/CRASH0)。
+
+**① AH=46h DUP2 の標準ハンドル redirect を正直な失敗へ (`native/dos_int21.c`)** — dst が標準ハンドル
+(0..4) への redirect 時、開いた FILE を捨てて成功 (CF=0) を偽装していた。我々は stdout/stderr=tty・
+stdin=キーボード直結でハンドル番号による入出力先差し替え層が無いため、成功偽装するとゲストは「handle 1 を
+ファイルへ向けた」と信じて書くが実際は tty へ流れ、狙ったファイルは空のまま → 遠隔破壊。CF=1/AX=6 (DUP2 の
+文書化済エラー) で正直に失敗するよう修正。
+
+**② GS100 (GINGER SNAKE) の triage 偽陰性を解消 (`tools/bio100_triage.js`)** — 残 EXIT 1 本の GS100 は
+非互換でなく **triage が裸起動 (空 cmdline) していた偽陰性**だった。gsnake は `gsnake <1P> <2P> <wait>`
+(gsnake.doc) の引数が必須で、無いと usage 表示して即終了する。`.bat` レシピ解決と同じ「作者文書化の起動方法で
+起動する」原則で、GAMES エントリにオプションの第3要素 (必須 cmdline) を追加し単一 exe ステージで配線。
+GS100=`'0 0 0'` で **EXIT→ALIVE (色13 anim)**。**新ベースライン EXIT=0・CRASH=0 (早期終了も BIOS 暴走も皆無)、
+描画到達 24・動作確認 26/31、stretch 目標 20 ALIVE 到達**。
+
+**③ 東方旧作(封魔録 体験版2)を射程に — op.exe の初期化脱線を根治。** ユーザーが games/touhou に東方旧作 4 作
+(TH02 封魔録=通常 LZH、TH03/04/05=自己展開 EXE) を追加。headless smoke (game.bat の ong1 経路を忠実に線形化)
+で調査した結果、2 つの壁を順に突破:
+- **壁1: INT 21h AH=63h (DBCS リードバイトテーブル) が UNIMPL** で op.exe が「日本語環境でない」と判断し
+  code=1 終了 → **実装** (`native/dos_int21.c int21_63_dbcs`)。PC-98=Shift-JIS 固定なので SJIS リードバイト
+  範囲表 (0x81-0x9F, 0xE0-0xFC, 00 00 終端) を低位スクラッチに構築し AL=00 で DS:SI へ返す (RBIL の DS:SI 規約。
+  op.exe の逆アセンブルで規約一致を確認)。日本語 DOS ソフト全般に効く汎用追加。
+- **壁2 (真因): 起動ドライバ `zun.com` が常駐に失敗していた。** zun はサブコマンド名 (zuninit/zun_res/ongchk)
+  を**コマンドテイルでなく FCB1 のファイル名フィールド (PSP:5D)** から読み内部表と CMPSB 比較するが、我々の
+  ミニ COMMAND.COM 経由 EXEC は **FCB1/FCB2 を組んでいなかった** (PSP:5D が空) → zun が「未知コマンド」と判断し
+  "No COM-Soft !!!" を出して終了 → op.exe が前提とする ZUN 常駐環境が立たず脱線 (CALL FAR で BIOS 領域へ)。
+  **修正 (実機 COMMAND.COM faithful):** EXEC が caller 未指定時にコマンドテイルの第1/第2トークンを FCB1/FCB2 へ
+  parse して子 PSP:5C/6C に置く (`native/dos_loader.c build_one_fcb`)。**結果: zun zuninit→TSR 常駐・zun_res→
+  code=0・op.exe が脱線せず正常終了 (pc=0xfee30)。** FCB1 から引数を読む PC-98 ツール全般に効く汎用修正。
+  ユーザーの「常駐ドライバがメモリ上にあることが前提条件では?」という読みが正鵠だった。
+
+**東方の現状: 「reachable」から「op.exe が脱線せず走る」へ前進。** ただし headless では描画 6 色止まり (表示
+タイミング/キー入力を伴わないため) で、**実際のオープニング描画・本編 (GAME) は次セッションの課題** (ブラウザ
+実機での目視 + 残る壁の調査)。3 つの自己展開 EXE は SFX 取り込み (埋め込み LZH の展開) が別途必要。
+
 ## [MCB チェーンを実 DOS 同様に env→プログラム本体→空きの単一鎖へ — env ブロックを実 MCB 化、嘘の成功を排除] — 2026-06-09
 
 「嘘の成功」の棚卸し (ユーザー指摘) で見つかった残存を、実 DOS に忠実な方向で根治。
