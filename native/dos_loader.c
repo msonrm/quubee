@@ -98,6 +98,13 @@ uint16_t qb_dos_exec_last_code(void) {
 
 static uint16_t g_arena_base = QB_DOS_MEM_TOP_SEG;   /* アリーナ起点 (空きチェーンの先頭 MCB) */
 
+/* AH=58h メモリ確保ストラテジ (下位 2 ビットのみ使用): 0=first-fit / 1=best-fit / 2=last-fit。
+ * 多くの PC-98 ゲームは「last-fit に切替→大バッファを上端確保→first-fit に戻す」慣用で、
+ * 本体直上の低位メモリを空けたまま PSP ブロックをそこへ拡大する。loader-start で 0 に戻す。 */
+static uint16_t g_alloc_strategy = 0;
+void     qb_dos_set_alloc_strategy(uint16_t strat) { g_alloc_strategy = strat; }
+uint16_t qb_dos_get_alloc_strategy(void)           { return g_alloc_strategy; }
+
 /* 最上位プログラムが PSP ブロック (0x0100) の self-shrink を済ませたか。
  * 初回の self-shrink だけアリーナを (再) 初期化し、2 回目以降は保守的に成功扱いに
  * して既存 48h 確保ブロックを巻き込んで消さないようにする。loader-start で 0 に戻す。 */
@@ -156,7 +163,13 @@ uint16_t qb_dos_first_mcb_seg(void) {
  * 戻り 0 = OK (out_seg)、-1 = 不足 (out_largest_free に最大空きサイズ)。 */
 int qb_dos_alloc_request(uint16_t paragraphs, uint16_t *out_seg, uint16_t *out_largest_free) {
     mcb_coalesce();
+    /* ストラテジ (下位 2 ビット) に従い候補ブロックを選ぶ。
+     *   0 first-fit: 最初に収まる空き / 1 best-fit: 収まる最小空き / 2 last-fit: 収まる最上位空き。
+     * 上位ビット (UMB) は無視。 */
+    uint16_t fit = (uint16_t)(g_alloc_strategy & 0x03);
     uint16_t largest = 0;
+    uint16_t pick = 0;            /* 選んだブロックの MCB seg (0 = 未発見) */
+    uint16_t picksz = 0;
     uint16_t s = g_arena_base;
     while (s < QB_DOS_MEM_TOP_SEG && mcb_valid(s)) {
         uint8_t  sig = mcb_sig(s);
@@ -164,23 +177,39 @@ int qb_dos_alloc_request(uint16_t paragraphs, uint16_t *out_seg, uint16_t *out_l
         if (mcb_owner(s) == 0) {
             if (sz > largest) largest = sz;
             if (sz >= paragraphs) {
-                if (sz > paragraphs) {
-                    /* 分割: このブロック = paragraphs (確保)、残りを空きブロックに */
-                    uint16_t tail = (uint16_t)(s + 1 + paragraphs);
-                    mcb_set(tail, sig, 0x0000, (uint16_t)(sz - paragraphs - 1));
-                    mcb_set(s, QB_MCB_M, g_cur_psp, paragraphs);
-                } else {
-                    mcb_set(s, sig, g_cur_psp, sz);   /* ぴったり: 丸ごと確保 */
-                }
-                if (out_seg) *out_seg = (uint16_t)(s + 1);
-                return 0;
+                int take;
+                if (!pick)               take = 1;                 /* 最初の候補 */
+                else if (fit == 1)       take = (sz < picksz);      /* best: より小さい */
+                else if (fit == 2)       take = 1;                  /* last: 後勝ち (より上位) */
+                else                     take = 0;                  /* first: 先勝ちで確定 */
+                if (take) { pick = s; picksz = sz; }
+                if (fit == 0) break;     /* first-fit は最初の収まるブロックで打ち切り */
             }
         }
         if (sig == QB_MCB_Z) break;
         s = (uint16_t)(s + 1 + sz);
     }
-    if (out_largest_free) *out_largest_free = largest;
-    return -1;
+    if (!pick) { if (out_largest_free) *out_largest_free = largest; return -1; }
+
+    uint8_t  sig = mcb_sig(pick);
+    if (picksz == paragraphs) {
+        mcb_set(pick, sig, g_cur_psp, picksz);                  /* ぴったり: 丸ごと確保 */
+        if (out_seg) *out_seg = (uint16_t)(pick + 1);
+    } else if (fit == 2) {
+        /* last-fit: ブロックの「上端」を確保し、下側を空きとして残す (低位を空けておく)。 */
+        uint16_t lower = (uint16_t)(picksz - paragraphs - 1);   /* 下側空きの size */
+        uint16_t au    = (uint16_t)(pick + 1 + lower);          /* 確保ブロックの MCB seg */
+        mcb_set(pick, QB_MCB_M, 0x0000, lower);                 /* 下側: 空き (後続あり → M) */
+        mcb_set(au,   sig,      g_cur_psp, paragraphs);         /* 上側: 確保 (sig は元を継承) */
+        if (out_seg) *out_seg = (uint16_t)(au + 1);
+    } else {
+        /* first/best-fit: ブロックの「下端」を確保し、残りを上側の空きに分割。 */
+        uint16_t tail = (uint16_t)(pick + 1 + paragraphs);
+        mcb_set(tail, sig, 0x0000, (uint16_t)(picksz - paragraphs - 1));
+        mcb_set(pick, QB_MCB_M, g_cur_psp, paragraphs);
+        if (out_seg) *out_seg = (uint16_t)(pick + 1);
+    }
+    return 0;
 }
 
 /* AH=49h: ES-1 の MCB を空きにする。 */
@@ -204,8 +233,29 @@ int qb_dos_alloc_resize(uint16_t seg, uint16_t newparas, uint16_t *out_largest) 
         if (!g_prog_shrunk) {
             qb_dos_alloc_reset((uint16_t)(seg + newparas));
             g_prog_shrunk = 1;
+            return 0;
         }
-        return 0;
+        /* 2 回目以降の PSP ブロック resize。不変条件: プログラム top == g_arena_base
+         * (block = [seg .. g_arena_base)、その上にアリーナが続く)。
+         *  - 縮小/同値: 解放分はアリーナへ戻さず保守的に成功 (確保済みブロック保護。従来挙動)。
+         *  - 拡大: 実 DOS と同じく「直上のアリーナ先頭ブロックが空きで足りる時だけ」吸収して成功。
+         *    先頭ブロックが既に確保済み (= 起動後に 48h した後の grow) なら拡大不能で失敗を返す。
+         *    ここで嘘の成功を返すと、プログラムが重なり領域へ書き込み MCB チェーン先頭を破壊する
+         *    (GOGGLE2 の exit3 = 「44KB しか確保していないのに largest=0」の真因)。 */
+        uint16_t cur = (uint16_t)(g_arena_base - seg);     /* 現在のプログラムサイズ (paras) */
+        if (newparas <= cur) return 0;
+        uint16_t need = (uint16_t)(newparas - cur);        /* アリーナから食う paras */
+        if (mcb_valid(g_arena_base) && mcb_owner(g_arena_base) == 0
+            && need <= mcb_size(g_arena_base)) {
+            uint8_t  bsig = mcb_sig(g_arena_base);
+            uint16_t bsz  = mcb_size(g_arena_base);
+            uint16_t nb   = (uint16_t)(g_arena_base + need);   /* 先頭空きブロックを need 段上へ縮める */
+            mcb_set(nb, bsig, 0x0000, (uint16_t)(bsz - need));
+            g_arena_base = nb;
+            return 0;
+        }
+        if (out_largest) *out_largest = cur;   /* 拡大不能: 現状サイズが最大 */
+        return -1;
     }
     uint16_t mcb = (uint16_t)(seg - 1);
     if (!mcb_valid(mcb)) return 0;   /* 管理外ブロック: 無害に成功 */
@@ -862,6 +912,7 @@ int qb_dos_loader_start_hook(void) {
     g_cur_psp = QB_DOS_LOAD_SEG;   /* 最上位プログラム = PSP 0x0100 */
     g_exec_sp = 0;                 /* EXEC ネストをクリア (前回の残骸を持ち越さない) */
     g_prog_shrunk = 0;             /* この image の初回 self-shrink を再び有効化 */
+    g_alloc_strategy = 0;          /* メモリ確保ストラテジを first-fit 既定へ (Run 毎) */
 
     /* 連続実行で前回の cursor 位置が残らないように tty を (0,0) に戻す */
     qb_dos_tty_reset();

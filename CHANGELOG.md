@@ -1,5 +1,41 @@
 # CHANGELOG
 
+## [DOS メモリ確保ストラテジ (last-fit) を実装し GOGGLE-II を救済 + readme の SJIS 復号バグ修正] — 2026-06-09
+
+bio 100% の残 EXIT のうち **GGL2 (GOGGLE-II)** を根治。あわせて 2026-06-08 の readme ビューアに入った
+SJIS 復号の退行を修正。
+
+**① GOGGLE-II が「.bg0〜9 を生成して exit code 3」だった真因 = DOS のメモリ確保ストラテジ (AH=58h) を無視していたこと。**
+- 切り分け (headless INT 21h トレース + MCB チェーン walk、足場は `tools/` の使い捨て harness):
+  - `.bg0〜9` (回転キャラ事前計算キャッシュ、計 570KB) の生成・読み戻しは健全。落ちるのは最後の `AH=48h` 確保 →
+    例外ベクタ設定 → `AH=4Ch AL=3` の error-abort。
+  - `AH=48h` の確保成功は **46 件で計 44KB しかないのに次の確保が `largest=0`** で失敗。exit 時に MCB チェーン
+    先頭 (arena_base=0x1B33) を walk すると **sig=0x16 で破断** = チェーンが破壊されていた。
+  - 真因: GOGGLE は各 `AH=48h` の前に **`AH=58h AL=01 BX=0002` (last-fit)** を設定し、確保をメモリ**上端**から
+    取らせて本体直上 (0x1B33) を空けたまま **PSP ブロックを `AH=4Ah` でそこへ拡大**する慣用を使う。ところが我々の
+    アロケータは **strategy を無視して常に first-fit (下端) 確保**するため、本体直上を埋めてしまい:
+    - PSP ブロックの拡大要求 (本来 DOS なら隣が確保済みで失敗) に旧コードが**嘘の「成功」を返す** →
+      プログラムが重なり領域へ書き込み **MCB ヘッダを破壊** → `largest=0` → exit 3。
+- 修正 (`native/dos_loader.c` / `dos_int21.c` / `dos_loader.h`):
+  - **`AH=58h` を実際に効かせる**: strategy を `g_alloc_strategy` に保持し (`qb_dos_set/get_alloc_strategy`、Run 毎に
+    first-fit へリセット)、`qb_dos_alloc_request` が 0=first / 1=best / 2=last-fit を honor。**last-fit はブロック
+    上端を確保し下側を空きに残す** (低位メモリを空けておく実 DOS 同等挙動)。
+  - **PSP ブロック (seg 0x100) の 2 回目以降の `AH=4Ah` を正直化**: 直上のアリーナ先頭ブロックが空きで足りる時だけ
+    吸収して拡大成功、確保済みなら実 DOS 同様に失敗 (AX=8/CF=1) を返す。嘘の成功で MCB を壊さない。
+- 結果: **GOGGLE-II がタイトル画面 (「GOGGLE-Ⅱ / THE PTOLEMAIC GAME / PUSH TRIGGER TO START」) まで到達**
+  (exit 3 クラッシュ → プレイ可能)。**副次効果で同じ last-fit を使う OZ100 (EXIT→ALIVE)・CZ102 (EXIT→RENDER)
+  も救済** = systemic な修正。bio100 triage は **ALIVE19/RENDER4/BOOT5/WAIT2/EXIT1/CRASH0、描画到達 23・
+  動作確認 25/31** (前回 ALIVE18/EXIT4・到達21/確認23 から EXIT 4→1)。回帰ゼロ (exec_env / batscript 33-0 /
+  xms / xms_clients PASS、CRASH=0 で従来 ALIVE 群不変)。残 EXIT は GS100 の 1 本のみ。
+
+**② readme/テキストビューア `decodeSjisText` (`web/player/bridge.js`) の SJIS リード/トレイル状態消失を修正。**
+- 2026-06-08 の NEC 罫線→Unicode 変換でバイト単位走査に書き換えた際、`0x86` を常に「罫線リードバイト」と決め打って
+  いた。だが `0x86` は SJIS の**トレイルバイト**にもなり得る (トレイル範囲 0x40-0x7E / 0x80-0xFC) ため、トレイルが
+  `0x86` で終わる漢字の直後に罫線トレイル集合 (`a2 a3 a4 a5` = 半角カナ `｢｣､･` 等、readme 頻出) が来ると、前の漢字の
+  リードが孤立して化け、誤った罫線を出していた。
+- 修正: 通常の SJIS 2 バイト文字 (リード 0x81-0x9F / 0xE0-0xFC) はトレイルごと一緒に消費し、トレイル `0x86` を
+  リードとして再走査させない。Node で衝突ケース (`82 86 a2` = "ｆ｢") が素の WHATWG デコードと一致することを確認。
+
 ## [Ray IV オープニング (RAY_IV.RAY) の黒画面を根治 — DOS read→VRAM 直ロードを正規 CPU 書き込みに] — 2026-06-08
 
 **Ray を単体起動 (`RAY` / `RAY RAY_IV.RAY`) すると「音は鳴るが画面が真っ黒」**だった症状を根治。従来 CLAUDE.md/

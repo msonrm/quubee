@@ -366,16 +366,25 @@ NP2KaiModule({
     };
     // SJIS バイト列をテキスト復号する。NEC 罫線 (0x86xx) だけ上表で Unicode 罫線へ差し替え、
     // それ以外の連続バイトは標準の TextDecoder にまとめて委ねる (漢字/かな/区8罫線はそのまま正しく出る)。
+    // 注: 0x86 は SJIS のトレイルバイトにもなり得る (トレイル範囲 0x40-0x7E / 0x80-0xFC)。バイト単位で
+    // 「0x86=罫線リード」と決め打つと、トレイルが 0x86 で終わる漢字の直後に罫線トレイル集合 (a2 a3 a4 a5
+    // = 半角カナ ｢｣､･ 等) が続いたとき、前の漢字のリードが孤立して化ける。そこで通常の SJIS 2 バイト
+    // 文字はリード+トレイルを必ず一緒に消費し、トレイル 0x86 をリードとして再走査させない。
     function decodeSjisText(bytes) {
         let out = '';
         let run = [];
         const flush = () => { if (run.length) { out += sjis.decode(Uint8Array.from(run)); run = []; } };
         for (let i = 0; i < bytes.length; i++) {
-            if (bytes[i] === 0x86 && i + 1 < bytes.length) {
+            const b = bytes[i];
+            // ここは必ず文字境界。0x86xx が罫線表にあれば Unicode 罫線へ差し替える。
+            if (b === 0x86 && i + 1 < bytes.length) {
                 const u = NEC_RULED_TO_UNICODE[(0x86 << 8) | bytes[i + 1]];
                 if (u !== undefined) { flush(); out += String.fromCodePoint(u); i++; continue; }
             }
-            run.push(bytes[i]);
+            // 通常の SJIS 2 バイト文字 (0x86 が通常リードの場合も含む) はトレイルごと消費する。
+            const isLead = (b >= 0x81 && b <= 0x9f) || (b >= 0xe0 && b <= 0xfc);
+            if (isLead && i + 1 < bytes.length) { run.push(b, bytes[i + 1]); i++; continue; }
+            run.push(b);
         }
         flush();
         return out;

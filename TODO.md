@@ -30,32 +30,36 @@ T3 確認は入力が要るのでブラウザで人が行う (headless は T0〜
   master.lib 系全般に効く。SSP の banner ゴースト消滅・回帰ゼロ (CHANGELOG 詳細)。**KANI の「KANI.SCR を作成します」は
   別系統** — INT 29h 不使用、初回起動 (kani.scr 不在) でのみ出る忠実な通知。スコア登録時にファイル作成・以後消える。
 
-### ベースライン (改修版 triage、2026-06-08 更新)
-**描画到達 (ALIVE+RENDER) = 21/31、動作確認 (+WAIT 入力待ち生存) = 23/31、真の BIOS クラッシュ = 0。**
-既知動作の DEPTH/KANI/TW212/NX93/SSP が全 ALIVE = 判定の信頼性 OK。**2026-06-08 の Ray オープニング修正
-(DOS read→VRAM を `memp_write8` 経由化) が VRAM 直ロード型に波及し、SEENA2 (RENDER 57色→ALIVE 232色)・
-POLA100 (BOOT→ALIVE) を昇格 (回帰ゼロ・降格なし)。ALIVE 16→18・描画到達 20→21。**
+### ベースライン (改修版 triage、2026-06-09 更新)
+**描画到達 (ALIVE+RENDER) = 23/31、動作確認 (+WAIT 入力待ち生存) = 25/31、真の BIOS クラッシュ = 0。**
+既知動作の DEPTH/KANI/TW212/NX93/SSP が全 ALIVE = 判定の信頼性 OK。**2026-06-09 の DOS メモリ確保ストラテジ
+(last-fit, AH=58h) 実装が、last-fit を使う 3 本を一気に昇格: GGL2 (EXIT→タイトル到達)・OZ100 (EXIT→ALIVE)・
+CZ102 (EXIT→RENDER)。EXIT 4→1 (残 GS100 のみ)。** (前回 2026-06-08 の Ray VRAM 修正で SEENA2/POLA も昇格済)
 
 | 状態 | 数 | ゲーム |
 |---|---|---|
-| ● ALIVE (多色+アニメ) | 18 | CRAY CX92 **DEPTH✓** FINAL(SD2) FLIXX **KANI✓** METYS MKD MOG **NX93✓** PECKER **POLA↑** POY ROLL SC **SEENA2↑(232色)** **SSP✓** **TW212✓** |
-| ◐ RENDER (多色静止) | 3 | BIOHJA C2GP TWINS(入力待ち) |
-| ▫ BOOT (graphics乏) | 4 | DYNAMO(.bat稼働) F1GP GETS STB |
+| ● ALIVE (多色+アニメ) | 19 | CRAY CX92 **DEPTH✓** FINAL(SD2) FLIXX **KANI✓** METYS MKD MOG **NX93✓** **OZ↑** PECKER POLA POY ROLL SC SEENA2(232色) **SSP✓** **TW212✓** |
+| ◐ RENDER (多色静止) | 4 | BIOHJA C2GP **CZ↑** TWINS(入力待ち) |
+| ▫ BOOT (graphics乏) | 5 | DYNAMO(.bat稼働) F1GP GETS **GGL2↑(実はタイトル到達・色少で誤判定)** STB |
 | ⌨ WAIT (DOS入力待ち=生存) | 2 | DADA YY (テキストアドベンチャー) |
-| ⏏ EXIT (早期終了・回復余地) | 4 | CZ GGL2 GS OZ |
+| ⏏ EXIT (早期終了・回復余地) | 1 | GS |
 | ✗ CRASH (BIOS 暴走) | 0 | — |
 
-→ **真の BIOS クラッシュは皆無 = HLE/BIOS は健全。** 残る EXIT 4 本が母数底上げの主候補、BIOS 領域到達は
-GETS/SEENA2 のみ (SEENA2 は描画後)。**目標 20 は達成 (描画到達 21)、真の射程 24〜28。**
+→ **真の BIOS クラッシュは皆無 = HLE/BIOS は健全。** 残る EXIT は GS100 の 1 本のみ。BIOS 領域到達は
+GETS/SEENA2 のみ (SEENA2 は描画後)。**目標 20 は達成 (描画到達 23)、真の射程 24〜28。**
+
+注: GGL2 は headless 色数 6 で triage 上 BOOT だが、実体は「GOGGLE-Ⅱ / PUSH TRIGGER TO START」タイトル画面に
+到達済 (タイトルが黒地少色のため色メトリクスが過小評価)。実質プレイ可能 = ブラウザ T3 確認待ち。
 
 ### 次の作業
 - [x] ~~DEAD クラスタを .bat (stage_script) 経路で再トリアージ~~ → 改修 triage に統合済 (MKD→ALIVE/TWINS→RENDER/Dynamo→稼働)
 - [x] ~~テキストゲーム (DADA/YY) を再判定~~ → PC 状態分類で WAIT (入力待ち=生存) と確定
 - [x] ~~SSP101 の起動~~ → AH=52h 実装で ALIVE 化
 - [x] ~~SSP の banner テキスト残留~~ → INT 29h 実装で根治 (master.lib text_clear=ESC[2J)
-- [ ] SSP101 をブラウザで T3 確認 (再デプロイ済み・画面クリーン)
-- [ ] ALIVE 16 本をブラウザで T3 確認 (実プレイ・入力テスト)
-- [ ] 残 EXIT 4 本 (CZ/GGL2/GS/OZ) の個別ブロッカー調査
+- [x] ~~残 EXIT の GGL2/CZ/OZ~~ → **last-fit (AH=58h) 実装で GGL2 タイトル到達・OZ ALIVE・CZ RENDER に昇格 (2026-06-09)**
+- [ ] SSP101 / GGL2 / OZ100 / CZ102 をブラウザで T3 確認 (再デプロイ要)
+- [ ] ALIVE 群をブラウザで T3 確認 (実プレイ・入力テスト)
+- [ ] 残 EXIT 1 本 (GS100=gsnake.exe+htjl.com、.bat 無し単体終了) の個別ブロッカー調査 (要 RE)
 - [ ] EMS+XMS の 25 本が XMS フォールバックで健全に動くか実プレイで確認 (`qbDebug.memprobe()` の ems 監視)
 - [ ] GETS/SEENA2 の BIOS 領域到達 (neccheck) 調査
 

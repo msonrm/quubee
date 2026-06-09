@@ -178,6 +178,11 @@ int qb_dos_alloc_resize(uint16_t seg, uint16_t newparas, uint16_t *out_largest);
 /* プロセス終了時: その PSP が所有する全ブロックを解放する (DOS free-on-terminate)。 */
 void qb_dos_alloc_free_owner(uint16_t psp);
 
+/* AH=58h メモリ確保ストラテジ (0=first-fit / 1=best-fit / 2=last-fit、上位ビット=UMB は無視)。
+ * last-fit はメモリ上端から確保するゲームが多用する (PSP ブロックを直上へ拡大する余地を残す慣用)。 */
+void     qb_dos_set_alloc_strategy(uint16_t strat);
+uint16_t qb_dos_get_alloc_strategy(void);
+
 /* exit 状態をクリア (新しい image をロードする前に呼ぶ) */
 void qb_dos_reset_state(void);
 

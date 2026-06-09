@@ -1761,14 +1761,15 @@ static void int21_52_list_of_lists(void) {
 }
 
 /* AH=58h メモリ確保ストラテジ / UMB リンク状態の get/set。
- * 我々は UMB を持たず確保は first-fit 固定なので、get には良性の既定値、set は no-op 成功を返す。
- * (GBOX の United モードが AX=5803h=「set UMB link state」を呼ぶ。未実装=invalid function だと
- *  プログラムによっては誤判定するため、素直に「UMB 無し・成功」を返す。) */
+ * UMB は持たないが、確保ストラテジ (first/best/last-fit) は実際に効かせる:
+ * last-fit を要求するゲームに first-fit で応えると本体直上を埋めてしまい、PSP ブロックの
+ * 拡大を阻害して破綻する (GOGGLE2 の exit3/2)。strategy は dos_loader.c の MCB アロケータが honor する。
+ * (GBOX の United モードが AX=5803h=「set UMB link state」を呼ぶ。UMB 系は素直に「無し・成功」。) */
 static void int21_58_alloc_strategy(void) {
     switch (CPU_AL) {
-    case 0x00: CPU_AX = 0x0000; CPU_FLAG &= ~C_FLAG; break;  /* get strategy = 0 (low first fit) */
+    case 0x00: CPU_AX = qb_dos_get_alloc_strategy(); CPU_FLAG &= ~C_FLAG; break;  /* get strategy */
+    case 0x01: qb_dos_set_alloc_strategy(CPU_BX);    CPU_FLAG &= ~C_FLAG; break;  /* set strategy (BL/BX) */
     case 0x02: CPU_AX = 0x0000; CPU_FLAG &= ~C_FLAG; break;  /* get UMB link state = 0 (未リンク) */
-    case 0x01:                                               /* set strategy (BL) — no-op 成功 */
     case 0x03: CPU_FLAG &= ~C_FLAG; break;                   /* set UMB link state (BX) — no-op 成功 */
     default:   CPU_AX = 0x0001; CPU_FLAG |= C_FLAG; break;   /* invalid subfunction */
     }
