@@ -37,7 +37,7 @@
         if (!t) return null;
         const lc = t.toLowerCase();
         // ディレクティブ / 制御フロー (MVP ① では無視。制御フロー有無だけ記録する)
-        if (lc === 'echo on' || lc === 'echo off' || lc.startsWith('echo ') ||
+        if (lc === 'echo' || lc.startsWith('echo ') || lc.startsWith('echo.') ||  /* echo / echo X / echo. / echo.X */
             lc === 'rem' || lc.startsWith('rem ') ||
             lc === 'cls' || lc.startsWith('pause') || lc.startsWith('set ') ||
             t[0] === ':' || lc.startsWith('goto') || lc.startsWith('if ')) {
@@ -133,6 +133,104 @@
         return seq;
     }
 
+    // ③ レシピを「制御フロー込みの文ステートメント列」に解決する (errorlevel ラダー対応)。
+    // C 側インタプリタ (PC + 直近 exit code = g_last_exit_code で解釈) に渡す中間表現。各文:
+    //   { op:'cmd',   name, args }       実エントリ名 + buildCmdline 済 cmdline
+    //   { op:'echo',  text }             作者メッセージ (生バイト文字列、実行時に tty へ流す)
+    //   { op:'goto',  target }           無条件ジャンプ (target = 文 index、末尾超え = 終了)
+    //   { op:'iferr', n, neg, target }   if [not] errorlevel n goto target (実行時 (code>=n) を neg で反転)
+    // ラベルは文にせず「直後の文 index」へ解決する。`if "%N"=="..."` はユーザ引数が起動時に既知なので
+    // 静的に畳む (真→無条件 goto / 偽→捨てる)。未対応の if (then が goto 以外・if exist) や
+    // for/call/choice/shift が出たら null を返し、フロントは ① 単一起動へ退避する (honest fallback)。
+    const CONTROL_KEYWORDS = new Set(['for', 'call', 'choice', 'shift']);
+    function buildStatements(recipe, entryNames, userArgs) {
+        const find = entryFinder(entryNames);
+        const pos = (userArgs || '').trim().split(/\s+/).filter(Boolean);
+        const stmts = [];
+        const labelIndex = Object.create(null);   // label(小文字) -> 直後の文 index
+        const pend = [];                          // {i, name}: goto/iferr の target 解決待ち
+        let sawMain = false;
+
+        for (const l of recipe.lines) {
+            if (l.kind === 'command') {
+                const key = l.base.toLowerCase().replace(/\.(com|exe|bat)$/, '');
+                if (CONTROL_KEYWORDS.has(key)) return null;   // for/call 等は線形化不能 → ①
+                const hit = find(l.base);
+                if (!hit) continue;                           // 束に無い → skip (現挙動踏襲, best-effort)
+                if (!DRIVER_NAMES.has(key)) sawMain = true;
+                stmts.push({ op: 'cmd', name: hit, args: buildCmdline(l.args, userArgs) });
+                continue;
+            }
+            const t = l.text;
+            const lc = t.toLowerCase();
+            if (t[0] === ':') {                               // :label
+                const name = t.slice(1).trim().split(/\s+/)[0].toLowerCase();
+                if (name) labelIndex[name] = stmts.length;
+                continue;
+            }
+            if (lc.startsWith('goto')) {                      // goto label
+                const name = t.slice(4).trim().split(/\s+/)[0].toLowerCase();
+                if (!name) return null;
+                pend.push({ i: stmts.length, name });
+                stmts.push({ op: 'goto', target: -1 });
+                continue;
+            }
+            if (lc === 'if' || lc.startsWith('if ')) {        // 条件分岐
+                const cond = parseIf(t, pos);
+                if (!cond) return null;                       // 未対応 if → ① へ退避
+                if (cond.kind === 'err') {
+                    pend.push({ i: stmts.length, name: cond.label });
+                    stmts.push({ op: 'iferr', n: cond.n, neg: cond.neg, target: -1 });
+                } else if (cond.kind === 'str' && cond.taken) {   // 静的に畳む (偽は捨てる)
+                    pend.push({ i: stmts.length, name: cond.label });
+                    stmts.push({ op: 'goto', target: -1 });
+                }
+                continue;
+            }
+            if (lc.startsWith('echo')) {                      // 作者メッセージ
+                if (lc === 'echo on' || lc === 'echo off') continue;  // コマンドエコー指令 (我々は元から非表示)
+                let text = t.slice(4);
+                if (text[0] === '.') text = text.slice(1);    // "echo." = 空行 / "echo.X" = X
+                else if (text[0] === ' ') text = text.slice(1);  // "echo X" の先頭1空白を除去
+                stmts.push({ op: 'echo', text });
+                continue;
+            }
+            // rem / cls / pause / set / prompt / path → 無視 (errorlevel も変えない、実 DOS と一致)
+        }
+
+        if (!sawMain) return null;                            // 本体が無い → ①
+        for (const p of pend) {
+            if (!(p.name in labelIndex)) return null;         // 未知ラベルへの goto → ①
+            stmts[p.i].target = labelIndex[p.name];
+        }
+        return stmts;
+    }
+
+    // "if ..." 1 行を解析。{kind:'err', n, neg, label} | {kind:'str', taken, label} | null (未対応)。
+    // 対応: `if [not] errorlevel N goto LABEL` / `if [not] "A"=="B" goto LABEL`
+    //   (errorlevel の余分な `=`/`==`・前後空白を許容)。then 節が goto 以外 (例 `if errorlevel 1 mi2 err`)
+    //   や `if exist ...` は未対応 → null。文字列側の %N はユーザ引数で置換してから比較する。
+    function parseIf(t, pos) {
+        let s = t.replace(/^if\s+/i, '');
+        let neg = false;
+        const mNot = s.match(/^not\s+/i);
+        if (mNot) { neg = true; s = s.slice(mNot[0].length); }
+        let m = s.match(/^errorlevel\s*=*\s*(\d+)\s+goto\s+(\S+)/i);
+        if (m) return { kind: 'err', n: +m[1], neg, label: m[2].toLowerCase() };
+        m = s.match(/^"?([^"=]*)"?\s*==\s*"?([^"=]*)"?\s+goto\s+(\S+)/i);
+        if (m) {
+            const a = substArg(m[1], pos), b = substArg(m[2], pos);
+            const taken = neg ? (a !== b) : (a === b);
+            return { kind: 'str', taken, label: m[3].toLowerCase() };
+        }
+        return null;
+    }
+
+    // 文字列オペランド内の %N をユーザ引数 (位置パラメータ配列) で置換する。
+    function substArg(s, pos) {
+        return s.replace(/%([0-9])/g, (_, d) => (+d === 0 ? '' : (pos[+d - 1] || '')));
+    }
+
     // レシピの引数 (%1..%9 入り) + ユーザー入力 (Run の cmdline 欄、空白区切り) → 最終 cmdline。
     // リテラルなフラグ (-B1 等) は保持し、埋まらない %N は消える。%0 (プログラム名) は捨てる。
     function buildCmdline(args, userArgs) {
@@ -162,7 +260,7 @@
             MIDI_DRIVER_NAMES.has(l.base.toLowerCase().replace(/\.(com|exe|bat)$/, '')));
     }
 
-    const api = { parse, resolveMain, resolveSequence, buildCmdline, programBasename, usesMidi, DRIVER_NAMES };
+    const api = { parse, resolveMain, resolveSequence, buildStatements, buildCmdline, programBasename, usesMidi, DRIVER_NAMES };
     if (typeof module !== 'undefined' && module.exports) {
         module.exports = api;
     } else {

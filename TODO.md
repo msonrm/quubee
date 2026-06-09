@@ -79,9 +79,44 @@ headless smoke (game.bat ong1 経路を忠実線形化) + PNG 出力 (`/tmp/th02
 - [ ] **封魔録のブラウザ実機 T3 確認** (headless で描画到達済 → ブラウザでプレイ確認が次)
 - [ ] **自己展開 EXE (TH03/04/05) の SFX 取り込み** = .exe 内の埋め込み LZH (offset ~1702 の `-lh5-`) を
       archive.js で検出・展開 (PC-98 同人で頻出の配布形態・汎用性高)
-- 注: 封魔録は op→main が op.exe 内 overlay なので **game.bat の if/goto 対応は不要** (game.bat は ong 音源分岐のみ。
-      手動線形化/batscript で代替可)。`.bat` 完全分岐は他タイトルで必要になれば別途
+- 注: 封魔録の op→main は op.exe 内 overlay だが、**起動 game.bat 自体が `if errorlevel goto` の音源判別ラダー**を
+      持つため、ブラウザのドロップ→Run で自動起動するには下の「.bat errorlevel インタプリタ」が必要 (headless 成功は
+      手動線形化したもの)。← 旧記述「if/goto 対応は不要」は撤回
 - 詳細・調査ログは [[project_touhou_probe]] / CHANGELOG 2026-06-09 参照
+
+---
+
+## .bat errorlevel 分岐インタプリタ (2026-06-10 着手・設計確定) — 封魔録ほかをドロップ→Run で自動起動
+
+**動機**: PC-98 フリーソフトの起動 .bat 38本中 8本 (≒3-4タイトル: TH02 封魔録 / FINAL=Super Depth2 / life100) が
+`if errorlevel N goto / :label / goto` 入りで、現 `resolveSequence` は丸ごと諦め単発起動にフォールバック → ドライバ TSR が
+常駐せず脱線。コーパス全数調査で必要構文は **`:label`/`goto`/`if errorlevel→goto`/`if "%N"==→goto` の閉じた小集合**
+(`for`/`call`/`choice`/`shift`=0)。分岐の意味は全部「音源ボード自動判別」か「ユーザ引数選択」で、実行時状態で結果が
+本質的に変わる分岐は無い。
+
+**設計 (確定)**: static な「errorlevel は素通り」ヒューリスティックはラダー並び順依存で運頼み → 採らず、**実インタプリタ**
+(返り値を読み分岐評価し goto = 並び順非依存で correct by construction、多段/ループ分岐も成立)。所在は **C 側必須**
+(errorlevel は DOS セッション実行中のみ存在、JS は列投入後 戻らない)。asm シェルは EXEC 発行役のまま、各コマンド後に
+**C へ「次コマンド?」を問い合わせる**。**`g_last_exit_code` は全終了経路で既設・AH=4Dh も実装済**=捕捉コスト 0。
+ループ上限なし (脱出=Stop/リロード)。**echo も同梱** (作者メッセージを既存 `tty_putc` に流す、SJIS 対応済)。コンベンショナル
+メモリ圧迫なし (シェル 8KB 常駐は既存コスト・実 DOS の COMMAND.COM+カーネルより軽い)。見積 **~2 日**。
+
+**進捗**:
+- [x] **Step 1: JS 文モデル `buildStatements`** (`web/player/batscript.js`、純 JS・テスト済・**未配線でアプリ挙動不変**) —
+      レシピ→`cmd/echo/goto/iferr` の文列 (ラベル=直後の文 index に解決、`if "%N"==` は引数で静的畳み込み、`iferr` は
+      n/neg/target 保持)。未対応は null で ① へ honest fallback。`parseLine` の `echo.`/`echo` 落ち小バグも修正。
+      `tools/batscript_test.js` +5 ケース (**44/44**: 降順ラダーの index 解決が並び順非依存・後方 goto ループ・文字列畳み込み・
+      echo 保持・null フォールバック)。
+- [ ] **Step 2: C インタプリタ + ステージ拡張** (`native/dos_loader.c`) — 文テーブルを受け取り PC で解釈、`iferr` は
+      `(g_last_exit_code>=n) XOR neg` で分岐、CMD で次コマンドの (path_off,tail_off) を返す。~80-120行。
+- [ ] **Step 3: asm シェル改 + 新トランポリン + bios.c パッチ + blob 再生成** (`tools/dos_loader/shell.asm` /
+      `tools/np2kai_patches/01_*.patch` / build) — 静的 `loop .next` を「C フックで次コマンド取得→EXEC→繰り返し」に。delicate。
+- [ ] **Step 4: bridge.js 配線** — `buildStatements` 結果をステージ形式へ直列化し新 C エントリへ (現 resolveSequence 経路と択一)。
+- [ ] **Step 5: echo 出力** — C インタプリタが echo 文で `tty_putc` (画面モード未テキスト時は見えない点は許容/将来微修正)。
+- [ ] **Step 6: end-to-end headless テスト** — **逆順ラダー**を含む分岐スクリプトで「正しい経路実行 + echo 表示」を検証
+      (exec_env/xms_test と同型の loader 実ブート)。
+- [ ] その後: **封魔録ブラウザ実機 T3 確認** (上の Touhou 項と合流)。
+- 設計の根拠・コーパス調査・多段分岐の正当性は [[project_bat_launcher_corpus]] / CHANGELOG 2026-06-10 参照。
 
 ---
 
@@ -95,7 +130,8 @@ bio 100% (互換性の長尾) とは別軸のフロント強化。詳細は CHAN
 - [x] **.MAG (MAKI02) 画像ビューア** — `web/player/magimage.js` 自前デコーダ (Magd ソース magd25s.lzh を仕様参照・
       逐語移植せず。savefont.mag/gbox.mag で検証)。`🖼` プレビュー + `⛶ 拡大`
 - 残バックログ (難易度×価値の見立て): COMSPEC/PATH (小・要求が出てから) / ゲームパッド (パッド→キー再マップなら小) /
-  full .bat (set/cd/if/goto — if/goto が「大変な 20%」・ROI 低) / **.MKI 画像 (別系統デコード・未対応)**
+  **full .bat の if/goto = errorlevel インタプリタ (上の専用セクションで着手済・~2日見積。旧「大変な20%・ROI低」は撤回:
+  errorlevel 捕捉が既設のため軽く、封魔録の自動起動に直結)** / **.MKI 画像 (別系統デコード・未対応)**
 
 ---
 

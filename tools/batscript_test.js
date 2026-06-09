@@ -132,5 +132,100 @@ function mainOf(recipe, entries) {
         null, 'seq: 本体無し (ドライバのみ) は null');
 }
 
+// ---- 14. ③ buildStatements: errorlevel ラダー (降順) のラベル/分岐 index 解決 ----
+// 注意: target は「ラベル順序でなく実際の文 index」に解くので、ラダーの並び順に依存せず正しい。
+{
+    const summ = (s) => s === null ? null : s.map(x =>
+        x.op === 'cmd'   ? `cmd:${x.name}|${x.args}` :
+        x.op === 'echo'  ? `echo:${x.text}` :
+        x.op === 'goto'  ? `goto:${x.target}` :
+        x.op === 'iferr' ? `iferr:${x.neg ? '!' : ''}${x.n}->${x.target}` : '?');
+
+    const r = bat.parse(batBytes([
+        'detect',
+        'if errorlevel 2 goto two',
+        'if errorlevel 1 goto one',
+        'def', 'goto fin',
+        ':one',  'oneprog', 'goto fin',
+        ':two',  'twoprog', 'goto fin',
+        ':fin',  'cleanup']));
+    const st = bat.buildStatements(r, ['detect.exe','def.exe','oneprog.exe','twoprog.exe','cleanup.exe'], '');
+    eq(summ(st), [
+        'cmd:detect.exe|',
+        'iferr:2->7',          // :two の本体 (twoprog) = index 7
+        'iferr:1->5',          // :one の本体 (oneprog) = index 5
+        'cmd:def.exe|',
+        'goto:9',              // :fin = index 9
+        'cmd:oneprog.exe|',
+        'goto:9',
+        'cmd:twoprog.exe|',
+        'goto:9',
+        'cmd:cleanup.exe|',
+    ], 'buildStatements: ラダーの label→文 index 解決 (順序非依存)');
+}
+
+// ---- 15. ③ ループ (後方 goto) + iferr 前方分岐: FINAL 型 ----
+{
+    const summ = (s) => s.map(x =>
+        x.op === 'cmd' ? `cmd:${x.name}` : x.op === 'goto' ? `goto:${x.target}` :
+        x.op === 'iferr' ? `iferr:${x.n}->${x.target}` : '?');
+    const r = bat.parse(batBytes([
+        ':loop', 'findemo %1', 'finmain %1', 'if errorlevel 1 goto end',
+        'finend', 'goto loop', ':end', 'middrv -r']));
+    const st = bat.buildStatements(r, ['findemo.exe','finmain.exe','finend.exe','middrv.com'], '');
+    eq(summ(st), ['cmd:findemo.exe','cmd:finmain.exe','iferr:1->5','cmd:finend.exe','goto:0','cmd:middrv.com'],
+        'buildStatements: 後方 goto(loop=0) と前方 iferr(end=5)');
+}
+
+// ---- 16. ③ 文字列分岐の静的畳み込み (ユーザ引数で評価): life X.BAT 型 / 引数なし=既定枝 ----
+{
+    const summ = (s) => s.map(x =>
+        x.op === 'cmd' ? `cmd:${x.name}|${x.args}` : x.op === 'echo' ? `echo:${x.text}` :
+        x.op === 'goto' ? `goto:${x.target}` : '?');
+    const lines = [
+        'if not "%1"=="-?" goto skip1', 'echo usage : x [pattern]', 'goto exit',
+        ':skip1', 'if not "%1"=="" goto skip2', 'life -egc life.ref', 'goto exit',
+        ':skip2', 'life -egc %1', ':exit'];
+    // 引数なし: %1="" → 1つ目「not ""==-?」=真→goto skip1、2つ目「not ""==""」=偽→畳んで消える
+    //   → skip1 に飛び、life -egc life.ref (既定パターン) を実行
+    // 引数なし: %1="" → 1つ目「not ""==-?」=真→goto skip1、2つ目「not ""==""」=偽→畳んで消える。
+    //   無条件コマンド文 (life -egc %1 = skip2 本体) は到達不能でも常に emit される (PC 流で未踏になるだけ)。
+    //   実行: goto skip1(3) → life -egc life.ref(3) → goto exit(=6=末尾超え=終了)。life.ref のみ走る。
+    const st0 = bat.buildStatements(bat.parse(batBytes(lines)), ['life.exe'], '');
+    eq(summ(st0), ['goto:3','echo:usage : x [pattern]','goto:6','cmd:life.exe|-egc life.ref','goto:6','cmd:life.exe|-egc'],
+        'buildStatements: 引数なし→ skip1 経由で既定 life.ref (false枝 if は消滅・到達不能 cmd は残す)');
+    // 引数あり "my.lif": 両 if とも真→goto。実行: skip1(3)→skip2(6)→life -egc my.lif のみ走る。
+    const st1 = bat.buildStatements(bat.parse(batBytes(lines)), ['life.exe'], 'my.lif');
+    eq(summ(st1), ['goto:3','echo:usage : x [pattern]','goto:7','goto:6','cmd:life.exe|-egc life.ref','goto:7','cmd:life.exe|-egc my.lif'],
+        'buildStatements: 引数あり→ skip2 経由で life -egc my.lif (両 if が true枝 goto)');
+}
+
+// ---- 17. ③ echo を作者メッセージとして保持 (echo on/off は捨てる) ----
+{
+    // 注: batBytes は &0xff で latin1 化するので Japanese は壊れる (SJIS は C 側 tty の責務、
+    //     buildStatements は echo 文字列を素通しするだけ)。ここでは ASCII で機構を検証。
+    const r = bat.parse(batBytes(['echo off', 'echo  HELLO  PLAYER', 'echo.', 'game', 'echo on']));
+    const st = bat.buildStatements(r, ['game.exe'], '');
+    eq(st.map(x => x.op), ['echo','echo','cmd'], 'echo: on/off は捨て text 行と空行を保持');
+    eq(st[0].text, ' HELLO  PLAYER', 'echo: text 保持 (先頭1空白のみ除去・以降は維持)');
+    eq(st[1].text, '', 'echo.: 空行');
+}
+
+// ---- 18. ③ 未対応構文は null (① 単一起動へ honest fallback) ----
+{
+    // then が goto 以外 (if errorlevel N <command>) = life M.BAT (ビルド用) 型
+    eq(bat.buildStatements(bat.parse(batBytes(['tmake', 'if errorlevel 1 mi2 err', 'type err'])),
+        ['tmake.exe'], ''), null, 'buildStatements: if-then-command は null');
+    // for ループ
+    eq(bat.buildStatements(bat.parse(batBytes(['for %i in (*.dat) do copy %i z', 'game'])),
+        ['game.exe'], ''), null, 'buildStatements: for は null');
+    // 未知ラベルへの goto
+    eq(bat.buildStatements(bat.parse(batBytes(['game', 'goto nowhere'])),
+        ['game.exe'], ''), null, 'buildStatements: 未知ラベル goto は null');
+    // 本体なし (ドライバのみ)
+    eq(bat.buildStatements(bat.parse(batBytes(['mdrv98', 'mdrv98 -r'])),
+        ['mdrv98.com'], ''), null, 'buildStatements: 本体無しは null');
+}
+
 console.log(`\nbatscript_test: pass=${pass} fail=${fail}`);
 process.exit(fail ? 1 : 0);

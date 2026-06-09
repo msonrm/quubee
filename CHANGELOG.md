@@ -1,5 +1,32 @@
 # CHANGELOG
 
+## [起動 .bat の errorlevel 分岐インタプリタ — Step 1: JS 文モデル `buildStatements` (基盤・未配線)] — 2026-06-10
+
+封魔録など制御フロー入り .bat を**ドロップ→Run で自動起動**できるようにする作業の着手 (設計確定 + JS 側基盤)。
+背景: 封魔録の `game.bat` は `if errorlevel N goto ongM` の**音源ボード判別ラダー**を持ち、現 `resolveSequence` は
+制御フロー入りを丸ごと諦めて単発起動にフォールバックする → ドライバ TSR が常駐せず脱線する (headless 成功は
+`/tmp/th02_smoke.js` で手動線形化したもので、ブラウザの自動経路では再現しない)。
+
+**方針 (設計確定)**: static な「errorlevel 分岐は素通り」ヒューリスティックは**ラダーの並び順に依存して当たる運頼み**
+なので採らず、**実インタプリタ**(返り値を読んで分岐評価し goto = correct by construction、多段/ループ分岐も成立)を作る。
+所在は**C 側必須** (errorlevel は DOS セッション実行中にしか存在せず JS は列を投げたら最後まで戻らない)。
+シェル(asm)は EXEC 発行役のまま残し、各コマンド後に **C へ「次は?」と問い合わせる**形。**`g_last_exit_code` は全終了
+経路 (4Ch/INT20h/31h) で既にセット済み・AH=4Dh も実装済み**なので errorlevel 捕捉は追加コストゼロ。ループ上限は
+**入れない** (脱出は Stop/リロード)。echo も同梱 (作者メッセージを既存 `tty_putc` に流すだけ、SJIS 対応済み)。
+コンベンショナルメモリ圧迫なし (シェル常駐 8KB は既存コストで、実 DOS の COMMAND.COM+カーネルより軽い)。
+
+**Step 1 (本コミット、`web/player/batscript.js`、純 JS・テスト済・未配線でアプリ挙動不変)**: `buildStatements()` を実装 —
+レシピを `cmd/echo/goto/iferr` の**文ステートメント列**へ解決 (ラベルは「直後の文 index」に解決、`if "%N"==` はユーザ
+引数で静的畳み込み、`iferr` は実行時評価用に n/neg/target を保持)。未対応 (`if errorlevel N <command>`・`if exist`・
+`for`/`call`・未知ラベル goto・本体なし) は **null で ① 単一起動へ honest fallback**。共有パーサ `parseLine` の小バグ
+(`echo.`/`echo` 単体が echo と認識されずコマンド落ち) も修正。`tools/batscript_test.js` に 5 ケース追加 (**44/44 PASS**):
+降順ラダーの label→index 解決が**並び順非依存**・後方 goto ループ・文字列分岐の静的畳み込み・echo 保持・null フォールバック。
+
+**残 (Step 2-6、詳細は [TODO.md] / [[project_bat_launcher_corpus]])**: ②C インタプリタ+ステージ拡張 ③asm シェル改+
+新トランポリン+bios.c パッチ+blob 再生成 ④bridge.js 配線 ⑤echo 出力 (tty_putc) ⑥逆順ラダー含む end-to-end
+headless テスト → その後ブラウザ実機 T3 確認。見積もり ~2 日 (errorlevel 捕捉が既存のため軽い)。
+
+
 ## [コードレビュー追随: SJIS 名 find 経路を open 経路と対称化 + diskimage サイズ無検証アロケーション堅牢化 + stale コメント修正] — 2026-06-10
 
 ここまでのコードのレビューで見つかった 3 件を修正。回帰ゼロ (core 回帰 find_sjis/diskimage 30-0/exec_env/
