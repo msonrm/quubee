@@ -1,5 +1,37 @@
 # CHANGELOG
 
+## [コードレビュー追随: SJIS 名 find 経路を open 経路と対称化 + diskimage サイズ無検証アロケーション堅牢化 + stale コメント修正] — 2026-06-10
+
+ここまでのコードのレビューで見つかった 3 件を修正。回帰ゼロ (core 回帰 find_sjis/diskimage 30-0/exec_env/
+batscript 33-0/xms/xms_clients/midi_serial PASS、bio100 triage 影響なし)。
+
+**① SJIS ファイル名の find (AH=4Eh/4Fh) 経路を open 経路と対称化 (`native/dos_int21.c`)** — 2026-06-09 の
+SJIS 名 open 修正 (`ci_lookup`/`ci_equal_fsname` が MEMFS の `d_name` (UTF-8) を生 SJIS バイトに畳んで比較) は
+**open 経路だけ**で、**FindFirst/FindNext 経路が同じ修正を受けていなかった**。`dta_write_find` は `de->d_name`
+(UTF-8) をそのまま DTA の 13 byte (8.3+NUL) 枠へ書いていたため、SJIS 名は (a) C2/C3 膨張で UTF-8 のまま入り、
+(b) 8.3 枠でマルチバイト境界の途中で切れる。結果、ゲームが **FindFirst で得た名前を再 open すると open 側は生
+SJIS を期待して不一致** (4 漢字名 = SJIS 12 byte ぴったりの名前は UTF-8 で 20 byte に膨れ、12 byte で切れて
+**再 open が実際に失敗**)。`dos_wildcard_match` も非対称だった。**修正 = `fold_fsname_to_sjis` (既存
+`utf8_next_lowbyte` 流用) で d_name を生 SJIS に畳んでから wildcard 照合・DTA 書き込みを行う** (`find_scan`)。
+あわせて `dta_write_find` を **DBCS 対応** に (SJIS リードバイトの次 trail は 0x40-0x7E に `a-z` を含むので
+大文字化しない / 12 byte 境界で 2 バイト文字を割らない)。host の `stat` だけは実ノード名 (UTF-8 d_name) で行う。
+ASCII 名は恒等で従来と等価 (回帰なし)。**列挙→再 open する SJIS 名タイトル全般に効く** (現動作タイトルは固定
+SJIS 名直 open のため未踏だった潜在バグ)。回帰防止に **`tools/find_sjis_test.js` を新設** — SJIS 名
+`漢字漢字.DAT` を FindFirst→返却名で再 open する round-trip を検証 (修正前: result=0x01・DTA 名 UTF-8 切断で
+FAIL / 修正後: result=0xAA・DTA 名 生 SJIS 無切断で PASS = 判別力実証)。これは [docs/dos_hle_gaps.md] の
+「SJIS 名 open 修正」の find 版。
+
+**② diskimage の readChain サイズ無検証アロケーション堅牢化 (`web/player/diskimage.js`)** — `readChain` が
+ディレクトリエントリの**生 32bit サイズ**で `new Uint8Array(size)` を確保していた。ユーザがドロップした壊れた/
+細工された画像だと巨大値 (最大 4GiB) で `RangeError` (汎用エラー化) か、確保可能だが巨大な値で MEMFS が膨張する。
+**修正 = 確保前に `size` をデータ領域の物理上限 `clusters*spc*bps` (BPB 検証済で `vol.length` 以下) でクランプ**。
+正規ファイルはデータ領域を超えないので truncation は起きない。信頼できない入力を直接食う層の防御。
+
+**③ stale コメント修正 (`bios.c` = patch 01)** — INT 2Fh フックのコメント「XMS/EMS 需要プローブ (検出ログのみ、
+応答は未実装=無しを維持)」は XMS Tier1 実装後 (2026-06-05) は実態とズレ (INT 2Fh AX=4300/4310 は有効時に
+応答する)。XMS=Tier1 実装 (有効時は応答) / EMS=需要プローブのみ (不在を返す)、と正確に。submodule の live と
+patch (`tools/np2kai_patches/01_dos_loader_hooks.patch` を live diff から再生成) を同期。動作不変・文言のみ。
+
 ## [東方封魔録(TH02)がステージ1プレイ描画まで到達 — SJIS 名 open の UTF-8↔latin1 不整合を根治 + AH=4Bh AL=03(Load Overlay)実装] — 2026-06-09
 
 同日先行の「op.exe 脱線根治」の先で、**実オープニング描画と本編 main.exe の起動**を阻んでいた本質バグ 2 件を根治。

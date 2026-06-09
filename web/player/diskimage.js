@@ -215,7 +215,13 @@
             return vol.subarray(secOff(lba), secOff(lba + spc));
         }
         // クラスタチェーンを辿って size バイト集める (ループ防御つき)
+        // size はディレクトリエントリの生 32bit 値。ユーザがドロップした壊れた/細工された
+        // 画像だと巨大値 (最大 4GiB) になり得るので、データ領域に物理的に収まる上限
+        // (全データクラスタ分 = clusters*spc*bps、上の検証で vol.length 以下) でクランプして
+        // から確保する。正規ファイルはデータ領域より大きくなり得ないので truncation は起きない。
+        const maxFileBytes = clusters * spc * bps;
         function readChain(firstCl, size) {
+            if (size > maxFileBytes) size = maxFileBytes;
             const out = new Uint8Array(size);
             let p = 0, cl = firstCl, guard = clusters + 4;
             const seen = new Set();

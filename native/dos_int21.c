@@ -531,6 +531,19 @@ static int ci_equal_fsname(const char *dname_utf8, const char *dosname) {
     return *a == '\0' && *b == '\0';
 }
 
+/* MEMFS d_name (UTF-8 of latin1(SJIS)) を「元の生 SJIS バイト列」へ畳んで out に書く (NUL 終端、
+ * cap で打ち切り)。find (AH=4Eh/4Fh) の wildcard 照合と DTA への結果書き込みを、open 経路
+ * (ci_equal_fsname) と同じ「生 SJIS」基準に揃えるためのもの。これを通さず d_name (UTF-8) を直に
+ * DTA へ書くと、ゲームが FindFirst で得た名前を再 open する際 open 側が SJIS を期待して不一致になり、
+ * かつ 0x80-0xFF が 2-3 byte に膨れて 8.3 枠でマルチバイト境界の途中で切れる。ASCII 名は恒等。 */
+static void fold_fsname_to_sjis(const char *dname_utf8, char *out, size_t cap) {
+    if (cap == 0) return;
+    const unsigned char *p = (const unsigned char *)dname_utf8;
+    size_t i = 0;
+    while (*p && i + 1 < cap) out[i++] = (char)utf8_next_lowbyte(&p);
+    out[i] = '\0';
+}
+
 /* dir 内に name と大小無視で一致する実在エントリがあれば found に実在名を書いて 1。
  * 無ければ (dir が開けない場合含む) 0 を返し found は触らない。 */
 static int ci_lookup(const char *dir, const char *name, char *found, size_t cap) {
@@ -787,13 +800,26 @@ static void dta_write_find(const char *fname, long fsize, time_t mtime, int is_d
     poke16(g_dta_linear + 0x18, fat_date);
     poke32(g_dta_linear + 0x1A, (uint32_t)fsize);
 
-    /* filename: 大文字化して 13 byte 領域 (8.3 = 12 + NUL) に書く。
-     * 末端は明示的に 0 埋めしないと DTA に過去のゴミが残る。 */
+    /* filename: 生 SJIS バイト (fname は fold_fsname_to_sjis 済) を大文字化して 13 byte 領域
+     * (8.3 = 12 + NUL) に書く。末端は明示的に 0 埋めしないと DTA に過去のゴミが残る。
+     * DBCS (SJIS 2 バイト文字) を意識する: リードバイトの次 (trail) は 0x40-0x7E に 'a'-'z' を
+     * 含むので大文字化してはならず、また 12 byte 境界で 2 バイト文字を割らない。 */
     uint8_t up[13];
     memset(up, 0, sizeof(up));
     size_t i = 0;
-    for (const char *q = fname; *q && i + 1 < sizeof(up); q++, i++) {
-        up[i] = (*q >= 'a' && *q <= 'z') ? (uint8_t)(*q - 32) : (uint8_t)*q;
+    const unsigned char *q = (const unsigned char *)fname;
+    while (*q && i + 1 < sizeof(up)) {
+        unsigned char c = *q;
+        int is_lead = (c >= 0x81 && c <= 0x9F) || (c >= 0xE0 && c <= 0xFC);
+        if (is_lead && q[1]) {                  /* DBCS: 2 バイトを verbatim (trail は大文字化しない) */
+            if (i + 2 >= sizeof(up)) break;     /* trail が 12 byte 内に収まらない → ここで打ち切り */
+            up[i++] = c;
+            up[i++] = q[1];
+            q += 2;
+        } else {                                /* ASCII (or 単独バイト): a-z のみ大文字化 */
+            up[i++] = (c >= 'a' && c <= 'z') ? (uint8_t)(c - 32) : c;
+            q += 1;
+        }
     }
     for (size_t k = 0; k < sizeof(up); k++) {
         poke8(g_dta_linear + 0x1E + k, up[k]);
@@ -809,14 +835,19 @@ static int find_scan(void) {
     struct dirent *de;
     while ((de = readdir(g_find.dirp)) != NULL) {
         if (de->d_name[0] == '.') continue;
-        if (!dos_wildcard_match(g_find.pattern, de->d_name)) continue;
+        /* DOS 側に見せる名前は生 SJIS。pattern (生 SJIS) との照合も DTA 書き込みも
+         * 畳んだ名前で行い、open 経路 (ci_equal_fsname) と round-trip するようにする。
+         * host の stat だけは実ノード名 (UTF-8 d_name) で行う。 */
+        char sjisname[260];
+        fold_fsname_to_sjis(de->d_name, sjisname, sizeof(sjisname));
+        if (!dos_wildcard_match(g_find.pattern, sjisname)) continue;
         char full[512];
         snprintf(full, sizeof(full), "%s/%s", g_find.dir, de->d_name);
         struct stat st;
         int have   = (stat(full, &st) == 0);
         int is_dir = have && S_ISDIR(st.st_mode);
         if (is_dir && !(g_find.attr_mask & 0x10)) continue;
-        dta_write_find(de->d_name,
+        dta_write_find(sjisname,
                        have ? (long)st.st_size  : 0,
                        have ? st.st_mtime       : (time_t)0,
                        is_dir);

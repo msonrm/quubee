@@ -1,5 +1,5 @@
 diff --git a/bios/bios.c b/bios/bios.c
-index 59758ca..8053544 100755
+index 59758ca..c417de2 100755
 --- a/bios/bios.c
 +++ b/bios/bios.c
 @@ -410,6 +410,16 @@ static void setbiosseed(UINT8 *ptr, UINT size, UINT seedpos) {
@@ -10,8 +10,8 @@ index 59758ca..8053544 100755
 +extern int qb_dos_loader_start_hook(void);
 +extern int qb_dos_int21_hook(void);
 +extern int qb_dos_int20_hook(void);
-+extern int qb_dos_int2f_hook(void);   /* qb: XMS 需要プローブ (INT 2Fh AX=43xx) */
-+extern int qb_dos_int67_hook(void);   /* qb: EMS 需要プローブ (INT 67h) */
++extern int qb_dos_int2f_hook(void);   /* qb: XMS インストールチェック (INT 2Fh AX=43xx, Tier1 実装済・有効時は応答) */
++extern int qb_dos_int67_hook(void);   /* qb: EMS 需要プローブ (INT 67h, 未実装=不在を返す) */
 +extern int qb_dos_xms_entry_hook(void); /* qb: XMS (HIMEM 相当) ドライバ entry */
 +extern int qb_dos_int29_hook(void);   /* qb: INT 29h (DOS 高速文字出力, master.lib text_clear 用) */
 +extern void qb_dos_install_trampolines(void);
@@ -57,7 +57,7 @@ index 59758ca..8053544 100755
 +			CPU_REMCLOCK -= 50;
 +			return qb_dos_int20_hook();
 +
-+		/* ---- qb: XMS/EMS 需要プローブ (検出ログのみ、応答は未実装=無しを維持) ---- */
++		/* ---- qb: XMS は Tier1 実装 (有効時は INT 2Fh に応答)、EMS は需要プローブのみ (不在を返す) ---- */
 +		case 0xFEE50:  /* INT 2Fh (XMS インストールチェック AX=43xx) */
 +			CPU_REMCLOCK -= 50;
 +			return qb_dos_int2f_hook();
