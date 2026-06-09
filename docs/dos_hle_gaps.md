@@ -38,8 +38,8 @@
 
 4. **ファイル属性 43h** — Get は常に 0x20(archive)、Set は無視。read-only/hidden を区別しない。
 
-5. **MCB チェーンがアリーナ部分のみ**（`g_arena_base`〜0xA000）。プログラム本体ブロックはチェーン外なので、先頭から MCB を歩くメモリツール/一部プロテクトは整合しない。
-   - **AH=52h (Get List of Lists)** は最小の**合成 List of Lists** を返す（segment 0x00A0）。`[BX-2]`=先頭 MCB は `g_arena_base`、DPB/SFT/CDS/デバイス系は `0xFFFF`「無し」、NUL デバイスヘッダ・LASTDRIVE=5・max 512B/block のみ実値。master.lib 系 (例: Super Spartan の本体 `sspartan.d98`) が「先頭 MCB を辿って利用可能メモリを算定する」用途には十分だが、DPB/CDS/SFT を実際に辿るツールとは整合しない（必要になったら実体を足す）。
+5. **MCB チェーンは実 DOS 同様の単一連続鎖**（2026-06-09 で忠実化）。先頭 MCB `g_first_mcb`=env ブロックの MCB（`ENV_SEG-1`）から、**env ブロック → プログラム本体ブロック → 空きアリーナ**を 0xA000 まで連続被覆する（いずれも owner=最上位 PSP）。env・プログラム本体も実 MCB なので、それらの `AH=4Ah` resize / `AH=49h` free / 先頭から歩くメモリツールが忠実に動く。**無効ブロックの resize/free は嘘の成功でなく `AX=9`（invalid memory block address）/ CF=1 で正直に失敗**。
+   - **AH=52h (Get List of Lists)** は最小の**合成 List of Lists** を返す（segment 0x00A0）。`[BX-2]`=先頭 MCB は `g_first_mcb`（=env の MCB、実 DOS 同等）、DPB/SFT/CDS/デバイス系は `0xFFFF`「無し」、NUL デバイスヘッダ・LASTDRIVE=5・max 512B/block のみ実値。master.lib 系 (例: Super Spartan の本体 `sspartan.d98`) の「先頭 MCB を辿って利用可能メモリを算定する」用途に十分。DPB/CDS/SFT を実際に辿るツールとは整合しない（必要になったら実体を足す）。
 
 6. **DOS 経由の拡張キー入力が落ちる** — BIOS キーバッファの**下位バイト(ANK)だけ**返す。矢印/ファンクションキー（DOS では 00h+スキャンコードの2バイト）の2バイト目が失われる。多くは BIOS INT 18h / 生 IRQ で読むので実害限定。
 
@@ -54,9 +54,10 @@
     GBOX ヘルプの行頭乱れ対策）。**SJIS 区9-11（NEC 半角グラフィック/罫線、SJIS 0x86xx）は半角=1セル幅**で描く
     （`vram_put_kanji_half`、同日。全角扱いで2セル書くと横2倍に化けた＝Ray IV の枠崩れの真因）。
 
-12. **AH=58h（メモリ確保ストラテジ/UMB リンク状態）は良性スタブ** — get は既定値（strategy=0 first-fit、UMB link=未リンク）、
-    set は no-op 成功（2026-06-07、GBOX United モードの AX=5803h 対策）。我々は UMB を持たず確保は first-fit 固定なので、
-    実際のストラテジ切替/UMB 管理は行わない。
+12. **AH=58h（メモリ確保ストラテジ）は実際に効く** — get/set strategy（下位 2 ビット: 0=first-fit / 1=best-fit /
+    2=last-fit）を MCB アロケータが honor する（2026-06-09。last-fit を要求するゲームに first-fit で応えると本体直上を
+    埋めて PSP ブロックの拡大を阻害し破綻した＝GOGGLE-II の真因）。**UMB リンク状態（AL=02/03）は持たないので「無し・成功」**
+    を返す（2026-06-07、GBOX United モードの AX=5803h 対策）。UMB（上位メモリブロック）の実体は無い。
 
 11. **パス解決が `.`/`..` を畳まない（CHDIR とは非対称）** — `read_dos_rel`/`resolve_dir`（open/create/
     delete/exec/findfirst が通る）は `\`→`/`・大小無視・カレント前置はするが `.`/`..` を正規化しない。一方

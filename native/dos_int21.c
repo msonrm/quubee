@@ -1355,7 +1355,13 @@ static void int21_4a_resize(void) {
      * MCB チェーンに委譲: 最上位 PSP の self-shrink はアリーナ起点確定、それ以外は
      * ブロックの拡大/縮小 (末尾分割・隣接空きと結合)。拡大不能なら最大可能を返す。 */
     uint16_t largest = 0;
-    if (qb_dos_alloc_resize(CPU_ES, CPU_BX, &largest) != 0) {
+    int r = qb_dos_alloc_resize(CPU_ES, CPU_BX, &largest);
+    if (r == -2) {            /* 無効ブロックアドレス (ES が MCB を指していない) */
+        CPU_AX = 9;           /* invalid memory block address */
+        CPU_FLAG |= C_FLAG;
+        return;
+    }
+    if (r != 0) {
         CPU_AX = 8;            /* insufficient memory */
         CPU_BX = largest;      /* largest available */
         CPU_FLAG |= C_FLAG;
@@ -1378,9 +1384,15 @@ static void int21_48_alloc(void) {
     CPU_FLAG &= ~C_FLAG;
 }
 
-/* AH=49h: Free Memory。ES = 解放するセグメント。ES-1 の MCB を空きにして coalesce。 */
+/* AH=49h: Free Memory。ES = 解放するセグメント。ES-1 の MCB を空きにして coalesce。
+ * ES が有効な MCB を指さないときは実 DOS 同様 AX=9 (invalid block) で失敗を返す
+ * (嘘の成功を返すとゲストが解放できたと誤認する)。 */
 static void int21_49_free(void) {
-    qb_dos_alloc_free(CPU_ES);
+    if (qb_dos_alloc_free(CPU_ES) != 0) {
+        CPU_AX = 9;            /* invalid memory block address */
+        CPU_FLAG |= C_FLAG;
+        return;
+    }
     CPU_FLAG &= ~C_FLAG;
 }
 

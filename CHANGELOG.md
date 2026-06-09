@@ -1,5 +1,33 @@
 # CHANGELOG
 
+## [MCB チェーンを実 DOS 同様に env→プログラム本体→空きの単一鎖へ — env ブロックを実 MCB 化、嘘の成功を排除] — 2026-06-09
+
+「嘘の成功」の棚卸し (ユーザー指摘) で見つかった残存を、実 DOS に忠実な方向で根治。
+
+**真因 (同セッションの GGL2 修正と同クラス):** `qb_dos_alloc_resize` は管理外ブロック (env ブロック等、
+我々が MCB を持たない領域) のリサイズに `return 0` で**嘘の成功**を返していた (`AH=49h` free も同様に常に成功)。
+env ブロックは PSP[0x2C] が指す実体で、TSR や通常プログラムが `AH=49h` で解放することが多い。嘘の成功は
+ゲストに「解放/拡大できた」と誤認させる。
+
+**修正 (実 DOS 忠実化):** これまで env・プログラム本体はチェーン外 (アリーナ起点より下) だったのを、
+**実 DOS と同じく env ブロック (MCB@ENV_SEG-1) → プログラム本体ブロック (MCB@LOAD_SEG-1) → 空きアリーナ
+の単一連続チェーン**に統合した (`native/dos_loader.c`)。
+- `qb_dos_alloc_reset` が 3 ブロック (env owner=PSP / program owner=PSP / 空き Z) を構築し、チェーン先頭
+  `g_first_mcb` = env の MCB (ENV_SEG-1) に。全 walk (coalesce / 確保 / free-owner / largest-free) と
+  `AH=52h` 先頭 MCB をここ起点に。
+- **GGL2 用に入れた PSP 拡大特例と `g_arena_base` を撤去** — プログラム本体が実 MCB になったので、self-shrink/
+  grow は通常の MCB resize 経路 (末尾分割・隣接空き吸収) で実 DOS 同様に動く (last-fit で空けた直上を grow が
+  吸収 = GGL2 が通る理屈は不変)。コードはむしろ簡潔化 (net 行数減)。
+- **無効ブロックの resize/free は嘘の成功でなく `AX=9` (invalid memory block address) / CF=1 で正直に失敗**
+  (`int21_4a_resize` は resize の戻り -2 を AX=9 に、`int21_49_free` は free 失敗を AX=9 に伝播)。
+
+**結果:** 実行時の MCB チェーンが `0xEF(env,M,owner=PSP) → 0xFF(program,M,owner=PSP) → 0x1100(free,Z)` と
+0xEF..0xA000 を連続被覆する faithful な形に (chain walk で確認)。env の解放/リサイズが正しく動き、先頭 MCB も
+実 DOS 同等。**回帰ゼロ** — bio100 triage は **ALIVE19/RENDER4/BOOT5/WAIT2/EXIT1/CRASH0、描画到達 23・動作
+確認 25/31 で前項と完全同一**、GGL2 タイトル到達・OZ/CZ 救済も維持、`AH=52h` を辿る SSP/SEENA2 も ALIVE 維持。
+unit (exec_env/batscript 33-0/xms/xms_clients) PASS。ユーザーが想定した一時的な完動減は発生せず (忠実化が
+純粋に上位互換だった)。教訓は [[feedback_hle_honest_failure]] に集約。
+
 ## [DOS メモリ確保ストラテジ (last-fit) を実装し GOGGLE-II を救済 + readme の SJIS 復号バグ修正] — 2026-06-09
 
 bio 100% の残 EXIT のうち **GGL2 (GOGGLE-II)** を根治。あわせて 2026-06-08 の readme ビューアに入った

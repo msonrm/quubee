@@ -88,15 +88,16 @@ uint16_t qb_dos_exec_last_code(void) {
  *   MCB +0: 'M'(0x4D)=後続あり / 'Z'(0x5A)=最終ブロック
  *       +1: 所有者 PSP (WORD, 0x0000 = 空き)
  *       +3: サイズ (段落数, WORD)
- * AH=48h は MCB+1 を返す。チェーンは「アリーナ起点 (g_arena_base) 〜 0xA000」を覆う。
- * アリーナ起点は最上位プログラムの 4Ah self-shrink で確定 (それより下のプログラム
- * 本体ブロックはチェーン外 = 簡略化)。EXEC の子・48h ヒープ・子終了時の一括解放を
- * すべてこのチェーンで管理する。 */
+ * AH=48h は MCB+1 を返す。チェーンは先頭 MCB (g_first_mcb = env ブロックの MCB、ENV_SEG-1)
+ * から 0xA000 までを連続して覆う: env ブロック (owner=最上位PSP) → プログラム本体ブロック
+ * (owner=PSP、PSP 0x0100〜アリーナ起点) → 空きアリーナ。実 DOS と同じく env・プログラム本体も
+ * 実 MCB として鎖に入れるので、AH=4Ah resize / AH=49h free / AH=52h 先頭 MCB が忠実に動く。
+ * EXEC の子・48h ヒープ・子終了時の一括解放もこのチェーンで管理する。 */
 #define QB_DOS_MEM_TOP_SEG 0xA000u
 #define QB_MCB_M 0x4Du
 #define QB_MCB_Z 0x5Au
 
-static uint16_t g_arena_base = QB_DOS_MEM_TOP_SEG;   /* アリーナ起点 (空きチェーンの先頭 MCB) */
+static uint16_t g_first_mcb = QB_DOS_MEM_TOP_SEG;   /* チェーン先頭 MCB (= env ブロックの MCB) */
 
 /* AH=58h メモリ確保ストラテジ (下位 2 ビットのみ使用): 0=first-fit / 1=best-fit / 2=last-fit。
  * 多くの PC-98 ゲームは「last-fit に切替→大バッファを上端確保→first-fit に戻す」慣用で、
@@ -129,7 +130,7 @@ static int mcb_valid(uint16_t s) { uint8_t g = mcb_sig(s); return (g == QB_MCB_M
 
 /* 隣接する空きブロックを結合する。 */
 static void mcb_coalesce(void) {
-    uint16_t s = g_arena_base;
+    uint16_t s = g_first_mcb;
     while (s < QB_DOS_MEM_TOP_SEG && mcb_valid(s)) {
         if (mcb_sig(s) == QB_MCB_Z) break;
         uint16_t nxt = (uint16_t)(s + 1 + mcb_size(s));
@@ -145,18 +146,31 @@ static void mcb_coalesce(void) {
     }
 }
 
-/* チェーンを「アリーナ起点に空き 1 個」で初期化する。最上位プログラムの
- * 4Ah self-shrink / loader-start から呼ぶ (まだ 48h 確保が無い段階で呼ぶ前提)。 */
+/* チェーンを「env → プログラム本体 → 空きアリーナ」の 3 ブロックで (再) 初期化する。
+ * 最上位プログラムの初回 4Ah self-shrink / loader-start から呼ぶ (まだ 48h 確保が無い段階で
+ * 呼ぶ前提)。env・プログラム本体も実 MCB として鎖に入れるので、以後はそれらの resize/free が
+ * 通常の MCB 経路で忠実に動く。
+ *   arena_base_para = 空きアリーナの起点 (= プログラム本体の末尾 = PSP + プログラムサイズ)。 */
 void qb_dos_alloc_reset(uint16_t arena_base_para) {
-    if (arena_base_para >= QB_DOS_MEM_TOP_SEG) arena_base_para = (uint16_t)(QB_DOS_MEM_TOP_SEG - 1);
-    g_arena_base = arena_base_para;
-    mcb_set(g_arena_base, QB_MCB_Z, 0x0000, (uint16_t)(QB_DOS_MEM_TOP_SEG - arena_base_para - 1));
+    if (arena_base_para >= QB_DOS_MEM_TOP_SEG)  arena_base_para = (uint16_t)(QB_DOS_MEM_TOP_SEG - 1);
+    if (arena_base_para <= QB_DOS_LOAD_SEG)     arena_base_para = (uint16_t)(QB_DOS_LOAD_SEG + 1);
+    g_first_mcb = (uint16_t)(QB_DOS_ENV_SEG - 1);   /* チェーン先頭 = env ブロックの MCB */
+
+    /* env ブロック: MCB@ENV_SEG-1, owner=最上位PSP, data=[ENV_SEG, LOAD_SEG-1)。
+     * size = (LOAD_SEG-1) - ENV_SEG なので次の MCB がちょうど LOAD_SEG-1 (プログラム MCB) に来る。 */
+    mcb_set((uint16_t)(QB_DOS_ENV_SEG - 1), QB_MCB_M, QB_DOS_LOAD_SEG,
+            (uint16_t)(QB_DOS_LOAD_SEG - 1 - QB_DOS_ENV_SEG));
+    /* プログラム本体ブロック: MCB@LOAD_SEG-1, owner=PSP, data=[LOAD_SEG, arena_base)。 */
+    mcb_set((uint16_t)(QB_DOS_LOAD_SEG - 1), QB_MCB_M, QB_DOS_LOAD_SEG,
+            (uint16_t)(arena_base_para - QB_DOS_LOAD_SEG));
+    /* 空きアリーナ: 最終 Z ブロック。 */
+    mcb_set(arena_base_para, QB_MCB_Z, 0x0000, (uint16_t)(QB_DOS_MEM_TOP_SEG - arena_base_para - 1));
 }
 
-/* INT 21h AH=52h (Get List of Lists) 用: 我々の MCB チェーンの先頭 (= 空きアリーナ起点) を返す。
- * 実 DOS の「先頭 MCB セグメント」相当。master.lib 系はこれを辿って利用可能メモリを算定する。 */
+/* INT 21h AH=52h (Get List of Lists) 用: MCB チェーンの先頭セグメント (= env ブロックの MCB) を返す。
+ * 実 DOS の「先頭 MCB」相当。master.lib 系はこれを辿って利用可能メモリを算定する。 */
 uint16_t qb_dos_first_mcb_seg(void) {
-    return g_arena_base;
+    return g_first_mcb;
 }
 
 /* AH=48h: first-fit で空きブロックを確保。大きければ分割。所有者 = g_cur_psp。
@@ -170,7 +184,7 @@ int qb_dos_alloc_request(uint16_t paragraphs, uint16_t *out_seg, uint16_t *out_l
     uint16_t largest = 0;
     uint16_t pick = 0;            /* 選んだブロックの MCB seg (0 = 未発見) */
     uint16_t picksz = 0;
-    uint16_t s = g_arena_base;
+    uint16_t s = g_first_mcb;
     while (s < QB_DOS_MEM_TOP_SEG && mcb_valid(s)) {
         uint8_t  sig = mcb_sig(s);
         uint16_t sz  = mcb_size(s);
@@ -224,41 +238,18 @@ int qb_dos_alloc_free(uint16_t seg) {
 /* AH=4Ah: ブロックの拡大/縮小。seg == 最上位 PSP の場合は「プログラム self-shrink =
  * アリーナ起点の確定」として扱う。戻り 0 = OK、-1 = 拡大不能 (out_largest に最大可能)。*/
 int qb_dos_alloc_resize(uint16_t seg, uint16_t newparas, uint16_t *out_largest) {
-    /* 最上位プログラムの self-shrink (アリーナの下) → 起点を確定してチェーン初期化。
-     * ただし「初回の self-shrink」のみ初期化する。プログラムが起動後にもう一度 PSP
-     * ブロックを 4Ah した場合に再初期化すると、その間に 48h で確保したブロックを
-     * 巻き込んで消してしまう (アリーナを 1 個の空きに戻すため)。2 回目以降は保守的に
-     * 成功扱い (チェーン不変) にして、確保済みブロックを保護する。 */
-    if (seg == QB_DOS_LOAD_SEG) {
-        if (!g_prog_shrunk) {
-            qb_dos_alloc_reset((uint16_t)(seg + newparas));
-            g_prog_shrunk = 1;
-            return 0;
-        }
-        /* 2 回目以降の PSP ブロック resize。不変条件: プログラム top == g_arena_base
-         * (block = [seg .. g_arena_base)、その上にアリーナが続く)。
-         *  - 縮小/同値: 解放分はアリーナへ戻さず保守的に成功 (確保済みブロック保護。従来挙動)。
-         *  - 拡大: 実 DOS と同じく「直上のアリーナ先頭ブロックが空きで足りる時だけ」吸収して成功。
-         *    先頭ブロックが既に確保済み (= 起動後に 48h した後の grow) なら拡大不能で失敗を返す。
-         *    ここで嘘の成功を返すと、プログラムが重なり領域へ書き込み MCB チェーン先頭を破壊する
-         *    (GOGGLE2 の exit3 = 「44KB しか確保していないのに largest=0」の真因)。 */
-        uint16_t cur = (uint16_t)(g_arena_base - seg);     /* 現在のプログラムサイズ (paras) */
-        if (newparas <= cur) return 0;
-        uint16_t need = (uint16_t)(newparas - cur);        /* アリーナから食う paras */
-        if (mcb_valid(g_arena_base) && mcb_owner(g_arena_base) == 0
-            && need <= mcb_size(g_arena_base)) {
-            uint8_t  bsig = mcb_sig(g_arena_base);
-            uint16_t bsz  = mcb_size(g_arena_base);
-            uint16_t nb   = (uint16_t)(g_arena_base + need);   /* 先頭空きブロックを need 段上へ縮める */
-            mcb_set(nb, bsig, 0x0000, (uint16_t)(bsz - need));
-            g_arena_base = nb;
-            return 0;
-        }
-        if (out_largest) *out_largest = cur;   /* 拡大不能: 現状サイズが最大 */
-        return -1;
+    /* 最上位プログラムの「初回」self-shrink: ローダの推定でなくプログラム自身が宣言した
+     * サイズでアリーナ起点を確定し、env→プログラム本体→空きの 3 ブロックチェーンを (再) 構築する
+     * (まだ 48h 確保が無い段階で呼ばれる前提)。2 回目以降の PSP ブロック resize は下の通常経路へ
+     * 落ちる: プログラム本体はここで実 MCB (LOAD_SEG-1) になったので、grow は隣接空きの吸収、
+     * shrink は末尾分割で実 DOS 同様に動く (last-fit で空けた直上を grow が吸収 = GOGGLE2 が通る)。 */
+    if (seg == QB_DOS_LOAD_SEG && !g_prog_shrunk) {
+        qb_dos_alloc_reset((uint16_t)(seg + newparas));
+        g_prog_shrunk = 1;
+        return 0;
     }
     uint16_t mcb = (uint16_t)(seg - 1);
-    if (!mcb_valid(mcb)) return 0;   /* 管理外ブロック: 無害に成功 */
+    if (!mcb_valid(mcb)) { if (out_largest) *out_largest = 0; return -2; }   /* 無効ブロック (実 DOS: AX=9) */
     uint8_t  sig = mcb_sig(mcb);
     uint16_t cur = mcb_size(mcb);
     uint16_t own = mcb_owner(mcb);
@@ -296,7 +287,7 @@ int qb_dos_alloc_resize(uint16_t seg, uint16_t newparas, uint16_t *out_largest) 
 
 /* プロセス終了時: その PSP が所有する全ブロックを解放する (DOS の free-on-terminate)。 */
 void qb_dos_alloc_free_owner(uint16_t psp) {
-    uint16_t s = g_arena_base;
+    uint16_t s = g_first_mcb;
     while (s < QB_DOS_MEM_TOP_SEG && mcb_valid(s)) {
         uint8_t sig = mcb_sig(s);
         if (mcb_owner(s) == psp) mcb_set(s, sig, 0x0000, mcb_size(s));
@@ -310,7 +301,7 @@ void qb_dos_alloc_free_owner(uint16_t psp) {
  * EXEC の子割り当て (DOS は子に最大空きブロックを渡す) に使う。0 = 空き無し。 */
 static uint16_t mcb_largest_free(uint16_t *out_size) {
     uint16_t best = 0, bestsz = 0;
-    uint16_t s = g_arena_base;
+    uint16_t s = g_first_mcb;
     mcb_coalesce();
     while (s < QB_DOS_MEM_TOP_SEG && mcb_valid(s)) {
         uint8_t sig = mcb_sig(s);
