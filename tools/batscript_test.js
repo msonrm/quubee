@@ -225,6 +225,32 @@ function mainOf(recipe, entries) {
     // 本体なし (ドライバのみ)
     eq(bat.buildStatements(bat.parse(batBytes(['mdrv98', 'mdrv98 -r'])),
         ['mdrv98.com'], ''), null, 'buildStatements: 本体無しは null');
+    // %VAR% (set 由来) 比較は静的に畳めない → null (literal 比較で誤分岐しない)
+    eq(bat.buildStatements(bat.parse(batBytes(
+        ['set SND=ON', 'if "%SND%"=="ON" goto fm', 'game', ':fm', 'fmgame'])),
+        ['game.exe', 'fmgame.exe'], ''), null, 'buildStatements: %VAR% 比較は null');
+    // ラベル無し goto
+    eq(bat.buildStatements(bat.parse(batBytes(['game', 'goto'])),
+        ['game.exe'], ''), null, 'buildStatements: ラベル無し goto は null');
+}
+
+// ---- 18b. ③ 文字列比較の trim / goto 語境界 (2026-06-10 コードレビュー修正分) ----
+{
+    const summ = (s) => s.map(x => x.op === 'cmd' ? `cmd:${x.name}` : `${x.op}:${x.target}`);
+    // クォート無しスペース入り比較: キャプチャが '==' 前の空白を含む → trim して評価
+    const lines = ['if %1 == FM goto fm', 'game', 'goto end', ':fm', 'fmgame', ':end'];
+    const stFM = bat.buildStatements(bat.parse(batBytes(lines)), ['game.exe', 'fmgame.exe'], 'FM');
+    eq(summ(stFM), ['goto:3', 'cmd:game.exe', 'goto:4', 'cmd:fmgame.exe'],
+        'parseIf: クォート無し空白入り比較は trim して評価 (引数 FM 一致→goto 枝)');
+    const st0 = bat.buildStatements(bat.parse(batBytes(lines)), ['game.exe', 'fmgame.exe'], '');
+    eq(summ(st0), ['cmd:game.exe', 'goto:3', 'cmd:fmgame.exe'],
+        'parseIf: 引数なし→不一致で if 消滅 (既定枝)');
+    // goto 語境界: goto* 名のコマンド (gotoxy 等) は goto 文と誤分類しない
+    const r = bat.parse(batBytes(['gotoxy 0 0', 'game']));
+    eq(r.hasControlFlow, false, 'parseLine: gotoxy は制御フロー扱いしない');
+    const stG = bat.buildStatements(r, ['gotoxy.com', 'game.exe'], '');
+    eq(stG.map(x => x.name), ['gotoxy.com', 'game.exe'],
+        'buildStatements: gotoxy はコマンドとして emit');
 }
 
 // ---- 19. ③ serializeStatements (C qb_dos_stage_batch へ渡す直列化形式) ----

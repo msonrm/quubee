@@ -40,8 +40,8 @@
         if (lc === 'echo' || lc.startsWith('echo ') || lc.startsWith('echo.') ||  /* echo / echo X / echo. / echo.X */
             lc === 'rem' || lc.startsWith('rem ') ||
             lc === 'cls' || lc.startsWith('pause') || lc.startsWith('set ') ||
-            t[0] === ':' || lc.startsWith('goto') || lc.startsWith('if ')) {
-            const ctrl = (t[0] === ':' || lc.startsWith('goto') || lc.startsWith('if '));
+            t[0] === ':' || /^goto(\s|$)/.test(lc) || lc.startsWith('if ')) {
+            const ctrl = (t[0] === ':' || /^goto(\s|$)/.test(lc) || lc.startsWith('if '));
             return { kind: 'directive', ctrl, text: t };
         }
         const toks = t.split(/\s+/);
@@ -168,7 +168,7 @@
                 if (name) labelIndex[name] = stmts.length;
                 continue;
             }
-            if (lc.startsWith('goto')) {                      // goto label
+            if (/^goto(\s|$)/.test(lc)) {                     // goto label
                 const name = t.slice(4).trim().split(/\s+/)[0].toLowerCase();
                 if (!name) return null;
                 pend.push({ i: stmts.length, name });
@@ -219,7 +219,10 @@
         if (m) return { kind: 'err', n: +m[1], neg, label: m[2].toLowerCase() };
         m = s.match(/^"?([^"=]*)"?\s*==\s*"?([^"=]*)"?\s+goto\s+(\S+)/i);
         if (m) {
-            const a = substArg(m[1], pos), b = substArg(m[2], pos);
+            // trim: クォート無し形 (`if %1 == FM`) でキャプチャが '==' 前の空白を含む
+            const a = substArg(m[1].trim(), pos), b = substArg(m[2].trim(), pos);
+            // %VAR% 等の未置換参照が残る比較は静的に畳めない (set は未対応) → ① へ退避
+            if (a.includes('%') || b.includes('%')) return null;
             const taken = neg ? (a !== b) : (a === b);
             return { kind: 'str', taken, label: m[3].toLowerCase() };
         }

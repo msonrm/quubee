@@ -994,8 +994,14 @@ NP2KaiModule({
         M.HEAPU8.set(bytes, ptr);
         const r = dosStageBatch(ptr, bytes.length, label || '');
         M._free(ptr);
-        if (r !== 0) throw new Error(`stage_batch failed r=${r}`);
+        if (r !== 0) {
+            // C 側の容量上限 (文数 96 / cmd 48 / echo 2KB 等) 超過は JS で事前検査して
+            // いない → throw せず false を返し、呼び元が ① 単一起動へフォールバックする。
+            console.warn(`stage_batch failed r=${r} — ① 単一起動へフォールバック`);
+            return false;
+        }
         await runStaged(label);
+        return true;
     }
 
     stopButton.addEventListener('click', () => {
@@ -1029,8 +1035,8 @@ NP2KaiModule({
                         const label = `${sjisName(selectedEntry.name)} `
                             + `(if/goto 分岐を実行時評価, ${ncmd} cmd)`;
                         runStatusEl.textContent = `${label} を起動…`;
-                        await stageAndRunBatch(stmts, label);
-                        return;
+                        if (await stageAndRunBatch(stmts, label)) return;
+                        // stage 失敗 (C 側上限超過) → 下の ① 単一起動へフォールスルー
                     }
                 } else {
                     const seq = qbBatScript.resolveSequence(
