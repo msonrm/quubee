@@ -157,7 +157,10 @@ bio 100% (互換性の長尾) とは別軸のフロント強化。詳細は CHAN
 - [x] **別窓ビューア** — ファイル名行右端 `⛶ 拡大` → モーダル (content-agnostic、画像も相乗り)
 - [x] **.MAG (MAKI02) 画像ビューア** — `web/player/magimage.js` 自前デコーダ (Magd ソース magd25s.lzh を仕様参照・
       逐語移植せず。savefont.mag/gbox.mag で検証)。`🖼` プレビュー + `⛶ 拡大`
-- 残バックログ (難易度×価値の見立て): COMSPEC/PATH (小・要求が出てから) / ゲームパッド (パッド→キー再マップなら小) /
+- [x] **ゲームパッド対応 (2026-06-10)** — Gamepad API→キー変換 (`pollGamepads`、十字/左スティック→カーソル、
+      ボタン 0→Z/1→X/2→Space/3→Enter/Start→ESC)。ブラウザ実機で TH02・Super Depth 動作確認済。
+      ネイティブ PC-98 パッド (案 B: joymng_getstat 実装、bio100 21/36 書庫が対応明記) は将来課題 (CHANGELOG 参照)
+- 残バックログ (難易度×価値の見立て): COMSPEC/PATH (小・要求が出てから) / ネイティブ PC-98 パッド (案 B・小〜中) /
   **full .bat の if/goto = errorlevel インタプリタ (上の専用セクションで着手済・~2日見積。旧「大変な20%・ROI低」は撤回:
   errorlevel 捕捉が既設のため軽く、封魔録の自動起動に直結)** / **.MKI 画像 (別系統デコード・未対応)**
 

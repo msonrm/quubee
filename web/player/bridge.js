@@ -1212,6 +1212,51 @@ NP2KaiModule({
         keyUp(handle, code);
     });
 
+    // ---- ゲームパッド入力 (Gamepad API → キー変換) ----
+    // PC-98 ゲームの操作はキーボードが普遍 (カーソル/テンキー移動 + Z/X が典型) なので、
+    // パッドは「キーの別名」として NKEY を直接注入する。標準 mapping 前提:
+    //   十字キー (buttons 12-15) / 左スティック (axes 0,1) → カーソル
+    //   ボタン 0(下)→Z  1(右)→X  2(左)→Space  3(上)→Enter  9(Start)→ESC
+    // Gamepad API はイベントでなくポーリング型なので rAF ループ先頭で毎フレーム読む。
+    // Chrome はボタンを一度押すまでパッドを列挙しない (= 接続直後は無反応で正常)。
+    const PAD_DEADZONE = 0.5;
+    const NKEY_UP = 0x3a, NKEY_LEFT = 0x3b, NKEY_RIGHT = 0x3c, NKEY_DOWN = 0x3d;
+    const NKEY_Z = 0x29, NKEY_X = 0x2a, NKEY_SPACE = 0x34, NKEY_ENTER = 0x1c, NKEY_ESC = 0x00;
+    const padPressed = new Set();        // パッド由来で押下中の NKEY (キーボードとは独立管理)
+
+    function pollGamepads() {
+        const want = new Set();
+        // ビューア表示中はキーボード同様ゲームへ送らない (全キー解放扱い)
+        if (viewerModalEl.hidden && navigator.getGamepads) {
+            for (const gp of navigator.getGamepads()) {
+                if (!gp || !gp.connected) continue;
+                const btn = (i) => !!(gp.buttons[i] && gp.buttons[i].pressed);
+                const ax  = (i) => gp.axes[i] || 0;
+                if (btn(12) || ax(1) < -PAD_DEADZONE) want.add(NKEY_UP);
+                if (btn(13) || ax(1) >  PAD_DEADZONE) want.add(NKEY_DOWN);
+                if (btn(14) || ax(0) < -PAD_DEADZONE) want.add(NKEY_LEFT);
+                if (btn(15) || ax(0) >  PAD_DEADZONE) want.add(NKEY_RIGHT);
+                if (btn(0)) want.add(NKEY_Z);
+                if (btn(1)) want.add(NKEY_X);
+                if (btn(2)) want.add(NKEY_SPACE);
+                if (btn(3)) want.add(NKEY_ENTER);
+                if (btn(9)) want.add(NKEY_ESC);
+            }
+        }
+        // エッジ検出して keyDown/keyUp (同 NKEY をキーボードと同時押ししていた場合、
+        // 片方の解放で keyUp が先行するが、実害は「押し直せば済む」程度なので許容)
+        for (const k of want) {
+            if (!padPressed.has(k)) { padPressed.add(k); keyDown(handle, k); }
+        }
+        for (const k of [...padPressed]) {
+            if (!want.has(k)) { padPressed.delete(k); keyUp(handle, k); }
+        }
+    }
+
+    window.addEventListener('gamepadconnected', (e) => {
+        console.log(`[QuuBee] gamepad connected: ${e.gamepad.id} (mapping=${e.gamepad.mapping || 'none'})`);
+    });
+
     // ---- デバッグ補助 ----
     // ブラウザコンソールから window.qbDebug.pc() で CPU PC を読める。
     // 数 ms おきに連打して同じ位置で固まっていればハング/ループ確定。
@@ -1504,6 +1549,8 @@ NP2KaiModule({
     let nextDue = performance.now();
 
     function frame(now) {
+        // パッド入力をエミュレータ実行前にサンプリング (ポーリング型 API のため毎フレーム)
+        pollGamepads();
         // 経過時間分の emulator step を消化
         let steps = 0;
         while (now >= nextDue && steps < MAX_CATCHUP) {
