@@ -12,6 +12,7 @@
  *   0xFEE60 : INT 67h (EMS 検出)
  *   0xFEE70 : XMS (HIMEM 相当) ドライバ entry (far CALL なので NOP + RETF)
  *   0xFEE80 : INT 29h (DOS 高速文字出力、master.lib text_clear の ESC[2J 用)
+ *   0xFEE90 : .bat 文インタプリタ「次コマンド?」(シェルの far CALL、NOP + RETF)
  * (各番地の詳細は下の QB_TRAMP_* マクロ定義を参照。これが正本)
  *
  * IVT セットアップ後、ゲーム image は CS:IP = 0x0100:0x0100 (COM) か
@@ -53,6 +54,10 @@
  * INT 29h で送って画面消去するため、未実装(IRET スタブ)だと text_clear が無効化され
  * テキストが残留する。NOP+IRET で C フック (AL→tty_putc) を踏む。 */
 #define QB_TRAMP_INT29          0xFEE80u  /* F000:EE80 */
+/* .bat 文インタプリタの「次コマンド?」entry。ミニ COMMAND.COM (shell.asm) が各コマンド後に
+ * far CALL するので NOP + RETF。C フック (qb_dos_batch_next_hook) が文テーブルを解釈し
+ * AX=1 + DX=path_off + CX=tail_off (次の EXEC) か AX=0 (列が尽きた → 4Ch) を返す。 */
+#define QB_TRAMP_BATCH_NEXT     0xFEE90u  /* F000:EE90 */
 
 /* PSP/COM のロードセグメント (PSP 自体もここに置く)。
  * EXE は PSP の直後 (256 byte = 16 paragraphs 先) に image を配置する慣例。 */
@@ -102,6 +107,21 @@ int qb_dos_stage_exe(const uint8_t *image, size_t size, const char *cmdline,
  * 子イメージのバイトは渡さない (展開済 /run から AH=4Bh が読む)。
  * 戻り値 0=OK、<0=エラー (-1 引数不正 / -2 0 コマンド / -11 image がシェル保持領域に収まらない)。 */
 int qb_dos_stage_script(const char *script, size_t len, const char *name);
+
+/* ③ if errorlevel / goto 入り .bat: JS (batscript.js buildStatements → serializeStatements) の
+ * 直列化文列を stage する。文形式 (\n 区切り、フィールドは \t 区切り、TEXT/ARGS は生バイト):
+ *   C \t PATH \t ARGS      EXEC するコマンド (PATH は /run 相対)
+ *   E \t TEXT              echo (tty へ表示、SJIS 可)
+ *   G \t TARGET            無条件 goto (TARGET = 文 index、文数 = 終了)
+ *   I \t N \t NEG \t TARGET   if [not] errorlevel N goto TARGET
+ * シェル + 文字列プールを stage し、文テーブルはホスト側に保持。シェルが実行中に
+ * far CALL (QB_TRAMP_BATCH_NEXT) で問い合わせ、qb_dos_batch_next_hook が errorlevel
+ * (= 直近 EXEC 子の終了コード) を遅延評価して次コマンドを返す。
+ * 戻り値 0=OK / <0=エラー (dos_loader.c の定義参照)。エラー時は stage されない。 */
+int qb_dos_stage_batch(const char *prog, size_t len, const char *name);
+
+/* 「次コマンド?」フック (0xFEE90 で biosfunc から呼ばれる)。常に 1 を返す。 */
+int qb_dos_batch_next_hook(void);
 
 /* loader-start フック (0xFEE00 で biosfunc から呼ばれる)。
  * 戻り値: 1 = CPU 状態を書き換えたので caller は return(1) すること

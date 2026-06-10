@@ -86,7 +86,7 @@ headless smoke (game.bat ong1 経路を忠実線形化) + PNG 出力 (`/tmp/th02
 
 ---
 
-## .bat errorlevel 分岐インタプリタ (2026-06-10 着手・設計確定) — 封魔録ほかをドロップ→Run で自動起動
+## .bat errorlevel 分岐インタプリタ (2026-06-10 完了・ブラウザ T3 確認待ち) — 封魔録ほかをドロップ→Run で自動起動
 
 **動機**: PC-98 フリーソフトの起動 .bat 38本中 8本 (≒3-4タイトル: TH02 封魔録 / FINAL=Super Depth2 / life100) が
 `if errorlevel N goto / :label / goto` 入りで、現 `resolveSequence` は丸ごと諦め単発起動にフォールバック → ドライバ TSR が
@@ -107,15 +107,21 @@ headless smoke (game.bat ong1 経路を忠実線形化) + PNG 出力 (`/tmp/th02
       n/neg/target 保持)。未対応は null で ① へ honest fallback。`parseLine` の `echo.`/`echo` 落ち小バグも修正。
       `tools/batscript_test.js` +5 ケース (**44/44**: 降順ラダーの index 解決が並び順非依存・後方 goto ループ・文字列畳み込み・
       echo 保持・null フォールバック)。
-- [ ] **Step 2: C インタプリタ + ステージ拡張** (`native/dos_loader.c`) — 文テーブルを受け取り PC で解釈、`iferr` は
-      `(g_last_exit_code>=n) XOR neg` で分岐、CMD で次コマンドの (path_off,tail_off) を返す。~80-120行。
-- [ ] **Step 3: asm シェル改 + 新トランポリン + bios.c パッチ + blob 再生成** (`tools/dos_loader/shell.asm` /
-      `tools/np2kai_patches/01_*.patch` / build) — 静的 `loop .next` を「C フックで次コマンド取得→EXEC→繰り返し」に。delicate。
-- [ ] **Step 4: bridge.js 配線** — `buildStatements` 結果をステージ形式へ直列化し新 C エントリへ (現 resolveSequence 経路と択一)。
-- [ ] **Step 5: echo 出力** — C インタプリタが echo 文で `tty_putc` (画面モード未テキスト時は見えない点は許容/将来微修正)。
-- [ ] **Step 6: end-to-end headless テスト** — **逆順ラダー**を含む分岐スクリプトで「正しい経路実行 + echo 表示」を検証
-      (exec_env/xms_test と同型の loader 実ブート)。
-- [ ] その後: **封魔録ブラウザ実機 T3 確認** (上の Touhou 項と合流)。
+- [x] **Step 2: C インタプリタ + ステージ拡張** (`native/dos_loader.c`) — `g_batch_stmts` 文テーブル (96 文/48 cmd) +
+      `qb_dos_stage_batch` (直列化文列パース) + `qb_dos_batch_next_hook` (PC 解釈、`iferr`=`(g_last_exit_code>=n) XOR neg`
+      の遅延評価)。cmd 無し文循環は問い合わせ毎ステップ上限 (4×文数+16) で Wasm 凍結を防ぎ正直終了 (EXEC 入りループは
+      上限なしのまま)。線形 ② の `qb_dos_stage_script` も同じ文テーブル (cmd 文のみ) + `stage_shell_image` 共用に統合。
+- [x] **Step 3: asm シェル改 + 新トランポリン 0xFEE90 + bios.c パッチ + blob 再生成** — シェルは「far CALL F000:EE90 で
+      C へ『次コマンド?』→ AX=1: DX=path/CX=tail で EXEC / AX=0: 4Ch」。NOP+RETF (XMS entry 同パターン)。patch 01 再生成。
+- [x] **Step 4: bridge 配線** — `np2kai_dos_stage_batch` export、`batscript.js serializeStatements`、Run フローで
+      hasControlFlow → buildStatements → stageAndRunBatch (null は ① へ honest fallback)。batRecipeSummary も分岐対応。
+- [x] **Step 5: echo 出力** — インタプリタが echo 文を `qb_dos_tty_write` (tty_putc 一括、SJIS/ESC 対応) +CRLF で表示。
+- [x] **Step 6: end-to-end headless テスト** — `tools/batch_test.js` **8/8 PASS** (逆順ラダーで正解枝のみ実行 + 後方 goto
+      ループ 2 周脱出 (FLIP.COM の自己書換) + echo の text VRAM 表示、loader 実ブート 2 サイクル)。回帰: batscript 45/45・
+      exec_env・xms・find_sjis PASS、bio100 triage ベースライン完全一致 (ALIVE20/RENDER4/BOOT5/WAIT2/EXIT0/CRASH0)。
+- [x] **実 TH02 game.bat の headless e2e** — 無改変の game.bat で `zun ongchk` の errorlevel 3 をラダーが実行時評価し
+      実枝 :ong4 (pmd86) を選択 → op.exe 起動・描画到達 (colors=17)。`/tmp/th02_bat_e2e.js` (未コミット)。
+- [ ] その後: **封魔録ブラウザ実機 T3 確認** (上の Touhou 項と合流)。FINALTY (Super Depth2) / life100 X.BAT も同経路。
 - 設計の根拠・コーパス調査・多段分岐の正当性は [[project_bat_launcher_corpus]] / CHANGELOG 2026-06-10 参照。
 
 ---

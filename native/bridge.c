@@ -463,6 +463,13 @@ int np2kai_dos_stage_script(const char *script, int len, const char *name) {
 	return qb_dos_stage_script(script, (size_t)len, name);
 }
 
+/* ③ if errorlevel / goto 入り .bat: 直列化文列 (batscript.js serializeStatements) を stage。
+ * errorlevel 分岐は C 側文インタプリタが実行時に評価する (prog は SJIS 安全のため生バイト)。 */
+int np2kai_dos_stage_batch(const char *prog, int len, const char *name) {
+	if (!prog || len <= 0) return -1;
+	return qb_dos_stage_batch(prog, (size_t)len, name);
+}
+
 int np2kai_dos_get_exit(int *code_out) {
 	return qb_dos_get_exit(code_out);
 }

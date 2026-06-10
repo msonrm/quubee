@@ -1,5 +1,45 @@
 # CHANGELOG
 
+## [起動 .bat の errorlevel 分岐インタプリタ — Step 2-6 完了: 封魔録 GAME.BAT がそのまま自動起動 (headless)] — 2026-06-10
+
+Step 1 (JS 文モデル) に続き残り全段を実装・配線し、**if errorlevel/goto 入り .bat の実インタプリタが全経路で動作**。
+**実 TH02 封魔録 `game.bat` を一切手を入れずに parse→buildStatements→stage_batch で流すと、`zun ongchk` の返した
+errorlevel 3 をラダー (`if errorlevel 5/4/3...`) が実行時評価して実枝 :ong4 を選び、`pmd86` 常駐 → `zun zunsoft.com` →
+`op.exe` 起動・描画到達 (colors=17)** — 静的素通りでは原理的に不可能だった「検出結果で 6 分岐から 1 枝を選ぶ」が
+correct by construction で成立。残るはブラウザ実機 T3 確認のみ。
+
+**アーキテクチャ (設計どおり + 統合を 1 歩進めた)**:
+- **Step 2 (C インタプリタ、`native/dos_loader.c`)**: ホスト側に文テーブル `g_batch_stmts` (cmd/echo/goto/iferr、
+  最大 96 文・48 cmd) と PC を持ち、`qb_dos_batch_next_hook()` が解釈。`iferr` は **`(g_last_exit_code >= n) XOR neg`
+  の遅延評価** (= 実 DOS の errorlevel 意味論、全終了経路で既設のためコスト 0)。`qb_dos_stage_batch()` が JS の直列化
+  文列 (`C\tPATH\tARGS` / `E\tTEXT` / `G\tTARGET` / `I\tN\tNEG\tTARGET`、SJIS は生バイトで \t\n と衝突しない) をパース。
+  ゲスト (シェル image) に置くのは**パス ASCIZ + cmdtail の文字列プールだけ**で、文テーブル・echo テキストはホスト側。
+- **Step 3 (シェル改、`tools/dos_loader/shell.asm` + 新トランポリン 0xFEE90)**: 静的コマンド表ループを撤去し、
+  「**far CALL F000:EE90 (QB_TRAMP_BATCH_NEXT、NOP+RETF = XMS entry と同パターン) で C へ『次コマンド?』を問い合わせ →
+  AX=1 なら DX=path/CX=cmdtail で AH=4Bh EXEC → 繰り返し、AX=0 で 4Ch**」に。レジスタは毎周取り直すので EXEC 子の
+  挙動に依存しない。blob 62 byte。`bios/bios.c` に case 0xFEE90 追加 (patch 01 再生成、reverse-check で冪等確認済)。
+- **線形 ② 経路も同シェルに統合**: `qb_dos_stage_script` は内部で「cmd 文だけの文プログラム」に落ちる
+  (`stage_shell_image` 共用)。外部契約・ログは不変で、ゲスト内の旧 count+offset 表が消えた分むしろ単純化。
+- **Step 4 (配線)**: `np2kai_dos_stage_batch` export (bridge.c/CMakeLists)、`batscript.js serializeStatements`、
+  bridge.js Run フローで **hasControlFlow → buildStatements → stageAndRunBatch** (null は従来どおり ① へ honest
+  fallback / 制御フロー無しは従来 resolveSequence 経路のまま = 択一)。`batRecipeSummary` も分岐レシピは
+  「if/goto 分岐 — errorlevel を実行時評価」+関与コマンド一覧表示に。
+- **Step 5 (echo)**: インタプリタが echo 文で `qb_dos_tty_write` (新設、既存 `tty_putc` = ANSI/ESC/SJIS 対応) +CRLF。
+  作者メッセージ (封魔録の「GAME [ﾘﾀｰﾝ] で、…」等) がセッションの流れの中で表示される。
+- **設計に 1 点補強**: cmd を含まない文だけの循環 (`:A`→`goto A`) はフック内で無限ループ = **Wasm 凍結**になるため、
+  問い合わせ 1 回あたりのステップ上限 (4×文数+16) を入れ、超過は正直にログ+セッション終了。**EXEC を挟むループ
+  (FINALTY のデモループ等) は呼び出しごとに上限リセット = 制限なし**のまま (脱出は Stop)。
+- セッション開始時の errorlevel を明示 0 化 (`qb_dos_reset_state`/loader-start で `g_last_exit_code` リセット。
+  従来は前セッションの値が残り得た)。reset 再起動 (同 stage 再走) でも文 PC を先頭へ。
+
+**検証**: 新設 `tools/batch_test.js` (**8/8 PASS**、loader 実ブートの end-to-end 2 サイクル) — ①逆順ラダー:
+RET3.COM (exit 3) を `if errorlevel 4 / if not errorlevel 2` で判定し正解枝 WIN.COM のみ実行・誤答枝 LOSE.COM
+不実行・echo が text VRAM に表示、②後方 goto ループ (FINALTY 型): 自ファイルの flag byte を書き換えて 1 回目
+exit 0 / 2 回目 exit 1 を返す FLIP.COM (open/seek/write/close も踏む) で `:loop` が 2 周して脱出・WIN 到達。
+回帰: batscript_test **45/45** (serializeStatements ケース追加)、exec_env_test (線形 ② が新シェル経由で PASS)、
+xms_test、find_sjis_test、**bio100 triage ベースライン完全一致 (ALIVE20/RENDER4/BOOT5/WAIT2/EXIT0/CRASH0、
+描画到達 24・動作確認 26/31)**。TH02 e2e は `/tmp/th02_bat_e2e.js` (未コミット)。
+
 ## [起動 .bat の errorlevel 分岐インタプリタ — Step 1: JS 文モデル `buildStatements` (基盤・未配線)] — 2026-06-10
 
 封魔録など制御フロー入り .bat を**ドロップ→Run で自動起動**できるようにする作業の着手 (設計確定 + JS 側基盤)。

@@ -227,5 +227,16 @@ function mainOf(recipe, entries) {
         ['mdrv98.com'], ''), null, 'buildStatements: 本体無しは null');
 }
 
+// ---- 19. ③ serializeStatements (C qb_dos_stage_batch へ渡す直列化形式) ----
+{
+    const r = bat.parse(batBytes([
+        'detect', 'if not errorlevel 2 goto low', 'echo HI MODE', 'game -hi', 'goto end',
+        ':low', 'game -lo', ':end']));
+    const st = bat.buildStatements(r, ['detect.com', 'game.exe'], '');
+    eq(bat.serializeStatements(st),
+        'C\tdetect.com\t\nI\t2\t1\t5\nE\tHI MODE\nC\tgame.exe\t-hi\nG\t6\nC\tgame.exe\t-lo\n',
+        'serializeStatements: C/I/E/G 行形式 (\\t 区切り・neg=1・target=文index)');
+}
+
 console.log(`\nbatscript_test: pass=${pass} fail=${fail}`);
 process.exit(fail ? 1 : 0);

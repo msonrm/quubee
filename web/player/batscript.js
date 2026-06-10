@@ -251,6 +251,18 @@
         return out.join(' ');
     }
 
+    // buildStatements の文列 → C (qb_dos_stage_batch) へ渡す直列化文字列。1 文 1 行、
+    // フィールドは \t 区切り (SJIS の lead/trail に \t \n は現れないので生バイトと衝突しない):
+    //   C \t PATH \t ARGS   /   E \t TEXT   /   G \t TARGET   /   I \t N \t NEG \t TARGET
+    function serializeStatements(stmts) {
+        return stmts.map((s) => {
+            if (s.op === 'cmd')  return 'C\t' + s.name + '\t' + (s.args || '');
+            if (s.op === 'echo') return 'E\t' + s.text;
+            if (s.op === 'goto') return 'G\t' + s.target;
+            return 'I\t' + s.n + '\t' + (s.neg ? 1 : 0) + '\t' + s.target;   // iferr
+        }).join('\n') + '\n';
+    }
+
     // レシピが MIDI ドライバ (MIDDRV 等) を起動するか。Run 時に VERMOUTH (soundfont) を
     // 遅延ロードするかの判定に使う。
     function usesMidi(recipe) {
@@ -260,7 +272,7 @@
             MIDI_DRIVER_NAMES.has(l.base.toLowerCase().replace(/\.(com|exe|bat)$/, '')));
     }
 
-    const api = { parse, resolveMain, resolveSequence, buildStatements, buildCmdline, programBasename, usesMidi, DRIVER_NAMES };
+    const api = { parse, resolveMain, resolveSequence, buildStatements, serializeStatements, buildCmdline, programBasename, usesMidi, DRIVER_NAMES };
     if (typeof module !== 'undefined' && module.exports) {
         module.exports = api;
     } else {

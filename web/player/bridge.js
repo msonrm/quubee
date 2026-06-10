@@ -572,8 +572,17 @@ NP2KaiModule({
     function batRecipeSummary(rec) {
         if (!rec) return '▷ 起動レシピ — 起動する実行ファイルが束に見つかりません';
         const names = loadedEntries.map((e) => e.name);
-        const seq = qbBatScript.resolveSequence(rec.recipe, names, '');
         const fmt = (c) => sjisName(baseName(c.name)) + (c.args ? ` ${c.args}` : '');
+        if (rec.recipe.hasControlFlow) {
+            // ③ 分岐入り: 実行順は実行時の errorlevel 次第なので、関与するコマンド一覧を出す。
+            const stmts = qbBatScript.buildStatements(rec.recipe, names, '');
+            if (stmts) {
+                const cmds = [...new Set(stmts.filter((s) => s.op === 'cmd')
+                    .map((c) => sjisName(baseName(c.name))))];
+                return `▷ 起動レシピ (if/goto 分岐 — errorlevel を実行時評価して逐次 EXEC): ${cmds.join(', ')}`;
+            }
+        }
+        const seq = qbBatScript.resolveSequence(rec.recipe, names, '');
         if (seq && seq.length > 1) {
             return `▷ 起動順 (1 セッション逐次 EXEC): ${seq.map(fmt).join('  →  ')}`;
         }
@@ -762,6 +771,9 @@ NP2KaiModule({
                                   ['number', 'number', 'string', 'string']);
     // ② 起動 .bat の逐次実行 (ミニ COMMAND.COM)。script は生バイト (ptr,len) で渡す。
     const dosStageScript = M.cwrap('np2kai_dos_stage_script', 'number',
+                                  ['number', 'number', 'string']);
+    // ③ if errorlevel/goto 入り .bat (C 側文インタプリタ)。直列化文列を生バイトで渡す。
+    const dosStageBatch = M.cwrap('np2kai_dos_stage_batch', 'number',
                                   ['number', 'number', 'string']);
     // np2kai_dos_get_exit(int* code) — JS では HEAP に書き込み番地を渡す
     const dosGetExitFn = M.cwrap('np2kai_dos_get_exit', 'number', ['number']);
@@ -972,6 +984,20 @@ NP2KaiModule({
         await runStaged(label);
     }
 
+    // ③ if errorlevel/goto 入り .bat: buildStatements の文列を直列化して C 側文インタプリタへ。
+    // 分岐は実行中に errorlevel (EXEC 子の終了コード) で評価される。
+    async function stageAndRunBatch(stmts, label) {
+        const progStr = qbBatScript.serializeStatements(stmts);
+        const bytes = new Uint8Array(progStr.length);
+        for (let i = 0; i < progStr.length; i++) bytes[i] = progStr.charCodeAt(i) & 0xff;
+        const ptr = M._malloc(bytes.length);
+        M.HEAPU8.set(bytes, ptr);
+        const r = dosStageBatch(ptr, bytes.length, label || '');
+        M._free(ptr);
+        if (r !== 0) throw new Error(`stage_batch failed r=${r}`);
+        await runStaged(label);
+    }
+
     stopButton.addEventListener('click', () => {
         if (pollDosExit._stop) pollDosExit._stop();
         stopButton.blur();
@@ -990,17 +1016,32 @@ NP2KaiModule({
                 const ok = await ensureMidiLoaded();
                 if (!ok) runStatusEl.textContent = 'MIDI 準備に失敗 — 音源無しで起動します';
             }
-            // ② .bat がドライバ+本体の複数コマンド (制御フロー無し) なら、ミニ COMMAND.COM で
-            // 1 DOS セッション内に順次 EXEC する (音源ドライバ TSR が本体に効く)。
+            // ②/③ .bat の逐次実行: 1 DOS セッション内で順次 EXEC する (音源ドライバ TSR が
+            // 本体に効く)。if errorlevel/goto 入り (③) は C 側文インタプリタが分岐を実行時評価、
+            // 制御フロー無し (②) は従来の線形列。どちらも未対応構文等で null なら ① 単一起動へ。
             if (selectedRecipe) {
-                const seq = qbBatScript.resolveSequence(
-                    selectedRecipe.recipe, loadedEntries.map((e) => e.name), userArgs);
-                if (seq && seq.length > 1) {
-                    const label = `${sjisName(selectedEntry.name)} → `
-                        + `${sjisName(baseName(selectedRecipe.targetEntry.name))} (+${seq.length - 1} cmd)`;
-                    runStatusEl.textContent = `${label} を起動…`;
-                    await stageAndRunScript(seq, label);
-                    return;
+                const names = loadedEntries.map((e) => e.name);
+                if (selectedRecipe.recipe.hasControlFlow) {
+                    const stmts = qbBatScript.buildStatements(
+                        selectedRecipe.recipe, names, userArgs);
+                    if (stmts) {
+                        const ncmd = stmts.filter((s) => s.op === 'cmd').length;
+                        const label = `${sjisName(selectedEntry.name)} `
+                            + `(if/goto 分岐を実行時評価, ${ncmd} cmd)`;
+                        runStatusEl.textContent = `${label} を起動…`;
+                        await stageAndRunBatch(stmts, label);
+                        return;
+                    }
+                } else {
+                    const seq = qbBatScript.resolveSequence(
+                        selectedRecipe.recipe, names, userArgs);
+                    if (seq && seq.length > 1) {
+                        const label = `${sjisName(selectedEntry.name)} → `
+                            + `${sjisName(baseName(selectedRecipe.targetEntry.name))} (+${seq.length - 1} cmd)`;
+                        runStatusEl.textContent = `${label} を起動…`;
+                        await stageAndRunScript(seq, label);
+                        return;
+                    }
                 }
             }
             // 単一プログラム: .bat 主のみ / 制御フロー入り .bat (① フォールバック) / 素の EXE・COM。

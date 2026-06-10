@@ -2048,6 +2048,10 @@ void qb_dos_int21_dispatch(void) {
     }
 }
 
+void qb_dos_tty_write(const uint8_t *bytes, int len) {
+    for (int i = 0; i < len; i++) tty_putc(bytes[i]);
+}
+
 void qb_dos_tty_reset(void) {
     g_cur_row = 0;
     g_cur_col = 0;

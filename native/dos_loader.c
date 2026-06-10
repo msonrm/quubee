@@ -443,22 +443,90 @@ int qb_dos_stage_exe(const uint8_t *image, size_t size, const char *cmdline,
     return 0;
 }
 
-/* ② ミニ COMMAND.COM: シェル blob + コマンド表を COM image に組んで stage する。
+/* ================= ②/③ ミニ COMMAND.COM + .bat 文インタプリタ =================
+ *
+ * シェル (tools/dos_loader/shell.asm) は「C へ『次コマンド?』を far CALL (F000:EE90) で
+ * 問い合わせ → 返ってきた (path_off, tail_off) を AH=4Bh EXEC」を繰り返すだけの EXEC 発行役。
+ * どのコマンドを次に実行するかはホスト側の文テーブル (g_batch) を qb_dos_batch_next_hook()
+ * が PC (文ポインタ) で解釈して決める:
+ *   - 線形 .bat (制御フロー無し): qb_dos_stage_script が cmd 文だけの列に落とす (② 従来経路)
+ *   - if errorlevel / goto 入り .bat: qb_dos_stage_batch が JS (batscript.js buildStatements)
+ *     の直列化文列を受け取る (③)。errorlevel は EXEC 子の終了コード g_last_exit_code を
+ *     分岐評価時に読む遅延評価 = 実 DOS の意味論 (並び順非依存・後方 goto ループも成立)。
+ *
+ * ゲスト側 (シェル COM image) に置くのはパス ASCIZ + DOS cmdtail の文字列プールだけ。
+ * 文テーブル・echo テキストはホスト側に保持する (ゲストのメモリレイアウトは EXEC に必要な
+ * 文字列以外を増やさない)。
+ *
  * image レイアウト (COM なので segment 内 offset 0x100 ロード):
  *   [shell blob (固定コード, QB_DOS_SHELL_BLOB_LEN)]
- *   [count(1B)] [count 回: path_off(LE16), tail_off(LE16)]    ← shell の table ラベル位置
  *   [文字列領域: ASCIZ パス群 + DOS cmdtail 群 ([len][bytes][0Dh])]
  * シェルは自身を KEEP=0x200 para (8KB) に self-shrink しスタックを 0x1FFE へ退避するので、
  * image は 0x100+image_bytes < ~0x1E00 (= スタック手前) に収める必要がある。 */
-#define QB_SHELL_MAX_CMDS 32
+#define QB_SHELL_MAX_CMDS 48       /* TH02 game.bat = 約 31 cmd 文 (6 分岐 × ドライバ往復) */
 #define QB_SHELL_IMG_MAX  0x1C00   /* image バイト上限 (0x100+これ=0x1D00 < スタック 0x1FFE) */
+
+/* 文 op (batscript.js buildStatements と同じモデル) */
+#define QB_BATCH_CMD   0   /* EXEC するコマンド (path_off/tail_off = シェルセグメント内) */
+#define QB_BATCH_ECHO  1   /* 作者メッセージ → tty */
+#define QB_BATCH_GOTO  2   /* 無条件ジャンプ (target = 文 index、nstmts = 終了) */
+#define QB_BATCH_IFERR 3   /* if [not] errorlevel n goto target */
+
+#define QB_BATCH_MAX_STMTS 96
+#define QB_BATCH_ECHO_POOL 2048
+
+typedef struct {
+    uint8_t  op;
+    uint8_t  n, neg;               /* IFERR: しきい値 / NOT 反転 */
+    int16_t  target;               /* GOTO/IFERR: 飛び先文 index */
+    uint16_t path_off, tail_off;   /* CMD: ゲスト (シェルセグメント内) オフセット */
+    uint16_t echo_off, echo_len;   /* ECHO: g_batch_echo 内 */
+} qb_batch_stmt_t;
+
+static qb_batch_stmt_t g_batch_stmts[QB_BATCH_MAX_STMTS];
+static int  g_batch_nstmts = 0;
+static int  g_batch_pc     = 0;
+static int  g_batch_active = 0;    /* シェル stage 済 (qb_dos_reset_state でクリア) */
+static char g_batch_echo[QB_BATCH_ECHO_POOL];
+
+typedef struct { const char *path; size_t plen; const char *args; size_t alen; } shell_cmd_t;
+
+/* シェル blob + 文字列プールを COM image に組んで stage する (②/③ 共用)。
+ * 成功時 path_offs/tail_offs[i] にシェルセグメント内オフセットを書いて 0 を返す。 */
+static int stage_shell_image(const shell_cmd_t *cmds, int n, const char *name,
+                             uint16_t *path_offs, uint16_t *tail_offs) {
+    static uint8_t img[QB_SHELL_IMG_MAX];
+    size_t blob = QB_DOS_SHELL_BLOB_LEN;
+    size_t pos = blob;
+    if (pos > sizeof(img)) return -11;
+    memcpy(img, qb_dos_shell_blob, blob);
+
+    for (int i = 0; i < n; i++) {
+        /* path ASCIZ */
+        if (pos + cmds[i].plen + 1 > sizeof(img)) return -11;
+        path_offs[i] = (uint16_t)(0x100 + pos);
+        memcpy(&img[pos], cmds[i].path, cmds[i].plen); pos += cmds[i].plen;
+        img[pos++] = 0x00;
+        /* DOS cmdtail: [len][bytes][0x0D] */
+        size_t alen = cmds[i].alen; if (alen > 255) alen = 255;
+        if (pos + alen + 2 > sizeof(img)) return -11;
+        tail_offs[i] = (uint16_t)(0x100 + pos);
+        img[pos++] = (uint8_t)alen;
+        memcpy(&img[pos], cmds[i].args, alen); pos += alen;
+        img[pos++] = 0x0D;
+    }
+
+    /* シェルを通常の COM として stage (cmdline 不要)。loader-start が 0x100:0x100 に展開する。
+     * 中の qb_dos_reset_state が g_batch_active を 0 に戻すので、呼び出し側は stage 成功後に
+     * 文テーブルを設定して active を立てること。 */
+    return qb_dos_stage_com(img, pos, NULL, name);
+}
 
 int qb_dos_stage_script(const char *script, size_t len, const char *name) {
     if (!script) return -1;
 
     /* --- script を (path, args) コマンド列へ分解 (生バイト, len 境界で読む) --- */
-    struct { const char *path; size_t plen; const char *args; size_t alen; }
-        cmds[QB_SHELL_MAX_CMDS];
+    shell_cmd_t cmds[QB_SHELL_MAX_CMDS];
     int n = 0;
     const char *p = script, *end = script + len;
     while (p < end && n < QB_SHELL_MAX_CMDS) {
@@ -479,46 +547,194 @@ int qb_dos_stage_script(const char *script, size_t len, const char *name) {
     }
     if (n == 0) return -2;
 
-    /* --- image 組み立て --- */
-    static uint8_t img[QB_SHELL_IMG_MAX];
-    size_t blob = QB_DOS_SHELL_BLOB_LEN;
-    if (blob + 1 + (size_t)n * 4 > sizeof(img)) return -11;
-    memcpy(img, qb_dos_shell_blob, blob);
+    uint16_t path_offs[QB_SHELL_MAX_CMDS], tail_offs[QB_SHELL_MAX_CMDS];
+    int r = stage_shell_image(cmds, n, name, path_offs, tail_offs);
+    if (r != 0) return r;
 
-    size_t pos = blob;
-    img[pos++] = (uint8_t)n;                  /* count */
-    size_t entry_off = pos;
-    pos += (size_t)n * 4;                      /* path_off/tail_off ペア領域を予約 */
-
+    /* 線形列 = cmd 文だけの文プログラム */
     for (int i = 0; i < n; i++) {
-        /* path ASCIZ */
-        if (pos + cmds[i].plen + 1 > sizeof(img)) return -11;
-        uint16_t poff = (uint16_t)(0x100 + pos);
-        memcpy(&img[pos], cmds[i].path, cmds[i].plen); pos += cmds[i].plen;
-        img[pos++] = 0x00;
-        /* DOS cmdtail: [len][bytes][0x0D] */
-        size_t alen = cmds[i].alen; if (alen > 255) alen = 255;
-        if (pos + alen + 2 > sizeof(img)) return -11;
-        uint16_t toff = (uint16_t)(0x100 + pos);
-        img[pos++] = (uint8_t)alen;
-        memcpy(&img[pos], cmds[i].args, alen); pos += alen;
-        img[pos++] = 0x0D;
-        /* entry に offset を LE で書く */
-        img[entry_off + (size_t)i * 4 + 0] = (uint8_t)(poff & 0xFF);
-        img[entry_off + (size_t)i * 4 + 1] = (uint8_t)(poff >> 8);
-        img[entry_off + (size_t)i * 4 + 2] = (uint8_t)(toff & 0xFF);
-        img[entry_off + (size_t)i * 4 + 3] = (uint8_t)(toff >> 8);
+        qb_batch_stmt_t *s = &g_batch_stmts[i];
+        memset(s, 0, sizeof(*s));
+        s->op = QB_BATCH_CMD;
+        s->path_off = path_offs[i];
+        s->tail_off = tail_offs[i];
+    }
+    g_batch_nstmts = n;
+    g_batch_pc     = 0;
+    g_batch_active = 1;
+    fprintf(stderr, "[dos_loader] staged SHELL: %d cmd(s)\n", n);
+    return 0;
+}
+
+/* ③ 直列化文列 ("C\tPATH\tARGS" / "E\tTEXT" / "G\tTARGET" / "I\tN\tNEG\tTARGET" の \n 区切り、
+ * batscript.js serializeStatements が生成) をパースして stage する。
+ * 戻り値 0=OK / -1 引数不正 / -2 cmd 文ゼロ / -11 image 超過 / -12 文数超過 /
+ * -13 不正 target / -14 echo プール超過 / -15 構文不正。 */
+int qb_dos_stage_batch(const char *prog, size_t len, const char *name) {
+    if (!prog) return -1;
+
+    qb_batch_stmt_t stmts[QB_BATCH_MAX_STMTS];
+    shell_cmd_t cmds[QB_SHELL_MAX_CMDS];
+    char echo_pool[QB_BATCH_ECHO_POOL];
+    int nst = 0, ncmd = 0;
+    size_t echo_used = 0;
+    int cmd_of_stmt[QB_BATCH_MAX_STMTS];     /* CMD 文 → cmds[] index */
+
+    const char *p = prog, *end = prog + len;
+    while (p < end) {
+        while (p < end && (*p == '\n' || *p == '\r')) p++;
+        if (p >= end) break;
+        const char *line = p;
+        while (p < end && *p != '\n' && *p != '\r') p++;
+        const char *lend = p;
+        if (nst >= QB_BATCH_MAX_STMTS) return -12;
+
+        qb_batch_stmt_t *s = &stmts[nst];
+        memset(s, 0, sizeof(*s));
+        cmd_of_stmt[nst] = -1;
+
+        /* フィールド分解: op 1 文字 + '\t' 区切り (echo テキスト/引数はタブ以降を生で保持) */
+        char op = line[0];
+        const char *f1 = (lend - line >= 2 && line[1] == '\t') ? line + 2 : lend;
+
+        if (op == 'C') {                       /* C \t path \t args */
+            const char *tab = f1;
+            while (tab < lend && *tab != '\t') tab++;
+            size_t plen = (size_t)(tab - f1);
+            if (plen == 0) return -15;
+            if (ncmd >= QB_SHELL_MAX_CMDS) return -12;
+            cmds[ncmd].path = f1;  cmds[ncmd].plen = plen;
+            cmds[ncmd].args = (tab < lend) ? tab + 1 : lend;
+            cmds[ncmd].alen = (size_t)(lend - cmds[ncmd].args);
+            s->op = QB_BATCH_CMD;
+            cmd_of_stmt[nst] = ncmd++;
+        } else if (op == 'E') {                /* E \t text (生バイト、SJIS 可) */
+            size_t tl = (size_t)(lend - f1);
+            if (echo_used + tl > sizeof(echo_pool)) return -14;
+            memcpy(echo_pool + echo_used, f1, tl);
+            s->op = QB_BATCH_ECHO;
+            s->echo_off = (uint16_t)echo_used;
+            s->echo_len = (uint16_t)tl;
+            echo_used += tl;
+        } else if (op == 'G' || op == 'I') {   /* G \t target  /  I \t n \t neg \t target */
+            long v[3] = {0, 0, 0};
+            int nv = 0;
+            const char *q = f1;
+            while (q < lend && nv < 3) {
+                long acc = 0; int any = 0;
+                while (q < lend && *q >= '0' && *q <= '9') { acc = acc * 10 + (*q - '0'); q++; any = 1; }
+                if (!any) return -15;
+                v[nv++] = acc;
+                if (q < lend && *q == '\t') q++;
+            }
+            if (op == 'G') {
+                if (nv != 1) return -15;
+                s->op = QB_BATCH_GOTO;
+                s->target = (int16_t)v[0];
+            } else {
+                if (nv != 3 || v[0] > 255 || v[1] > 1) return -15;
+                s->op = QB_BATCH_IFERR;
+                s->n = (uint8_t)v[0];
+                s->neg = (uint8_t)v[1];
+                s->target = (int16_t)v[2];
+            }
+        } else {
+            return -15;
+        }
+        nst++;
+    }
+    if (ncmd == 0) return -2;
+
+    /* target 検証: 0..nstmts (== nstmts は「末尾へ = 終了」、buildStatements のラベル解決仕様) */
+    for (int i = 0; i < nst; i++) {
+        if (stmts[i].op == QB_BATCH_GOTO || stmts[i].op == QB_BATCH_IFERR) {
+            if (stmts[i].target < 0 || stmts[i].target > nst) return -13;
+        }
     }
 
-    fprintf(stderr, "[dos_loader] staged SHELL: %d cmd(s), image=%zu bytes\n", n, pos);
-    /* シェルを通常の COM として stage (cmdline 不要)。loader-start が 0x100:0x100 に展開する。 */
-    return qb_dos_stage_com(img, pos, NULL, name);
+    uint16_t path_offs[QB_SHELL_MAX_CMDS], tail_offs[QB_SHELL_MAX_CMDS];
+    int r = stage_shell_image(cmds, ncmd, name, path_offs, tail_offs);
+    if (r != 0) return r;
+
+    for (int i = 0; i < nst; i++) {
+        if (cmd_of_stmt[i] >= 0) {
+            stmts[i].path_off = path_offs[cmd_of_stmt[i]];
+            stmts[i].tail_off = tail_offs[cmd_of_stmt[i]];
+        }
+        g_batch_stmts[i] = stmts[i];
+    }
+    memcpy(g_batch_echo, echo_pool, echo_used);
+    g_batch_nstmts = nst;
+    g_batch_pc     = 0;
+    g_batch_active = 1;
+    fprintf(stderr, "[dos_loader] staged BATCH: %d stmt(s) (%d cmd)\n", nst, ncmd);
+    return 0;
+}
+
+/* シェルの「次コマンド?」(far CALL F000:EE90 → 0xFEE90 NOP)。文テーブルを PC で解釈し、
+ * 次に EXEC するコマンドがあれば AX=1 + DX=path_off + CX=tail_off、列が尽きたら AX=0
+ * (シェルは 4Ch でセッション終了)。echo/goto/iferr はこの中で消化する。
+ * iferr の errorlevel = 直近 EXEC 子の終了コード (g_last_exit_code、全終了経路で更新済)。 */
+int qb_dos_batch_next_hook(void) {
+    if (!g_batch_active) { CPU_AX = 0; return 1; }
+
+    /* cmd に到達しない文だけの循環 (例 :A → goto A) はここで無限ループ = Wasm 凍結に
+     * なるので、1 回の問い合わせで消化する文数に上限を置き、超えたら正直に終了する。
+     * EXEC を挟むループ (FINALTY のデモループ等) は呼び出しごとに上限がリセットされる
+     * ので制限なし (脱出はゲーム側の errorlevel か Stop ボタン)。 */
+    int steps = 0, limit = g_batch_nstmts * 4 + 16;
+
+    while (g_batch_pc >= 0 && g_batch_pc < g_batch_nstmts) {
+        if (++steps > limit) {
+            fprintf(stderr, "[batch] cmd の無い文ループを検出 (pc=%d) — セッションを終了します\n",
+                    g_batch_pc);
+            break;
+        }
+        qb_batch_stmt_t *s = &g_batch_stmts[g_batch_pc];
+        switch (s->op) {
+        case QB_BATCH_CMD:
+            CPU_DX = s->path_off;
+            CPU_CX = s->tail_off;
+            CPU_AX = 1;
+            g_batch_pc++;
+            return 1;
+        case QB_BATCH_ECHO:
+            qb_dos_tty_write((const uint8_t *)g_batch_echo + s->echo_off, (int)s->echo_len);
+            qb_dos_tty_write((const uint8_t *)"\r\n", 2);
+            g_batch_pc++;
+            break;
+        case QB_BATCH_GOTO:
+            g_batch_pc = s->target;
+            break;
+        case QB_BATCH_IFERR: {
+            int cond = (g_last_exit_code >= s->n);
+            if (s->neg) cond = !cond;
+            fprintf(stderr, "[batch] if %serrorlevel %u (code=%u) -> %s\n",
+                    s->neg ? "not " : "", s->n, g_last_exit_code,
+                    cond ? "goto" : "fall-through");
+            g_batch_pc = cond ? s->target : g_batch_pc + 1;
+            break;
+        }
+        default:
+            g_batch_pc++;
+            break;
+        }
+    }
+
+    CPU_AX = 0;   /* 列が尽きた → シェルが AH=4Ch でセッション終了 */
+    return 1;
 }
 
 void qb_dos_reset_state(void) {
     g_run.running = 0;
     g_run.exited = 0;
     g_run.exit_code = 0;
+    /* 新しい stage = 新しいセッション: 文インタプリタと errorlevel を初期化する。
+     * (②/③ のシェル stage は stage_com 経由でここを通った後に active を立て直す) */
+    g_batch_active = 0;
+    g_batch_pc = 0;
+    g_last_exit_code = 0;
+    g_last_exit_type = 0;
 }
 
 int qb_dos_get_exit(int *code_out) {
@@ -713,6 +929,10 @@ void qb_dos_install_trampolines(void) {
     poke8(QB_TRAMP_XMS_ENTRY + 0, 0x90);  /* NOP */
     poke8(QB_TRAMP_XMS_ENTRY + 1, 0xCB);  /* RETF */
 
+    /* .bat 文インタプリタ「次コマンド?」entry: シェルが far CALL するので NOP + RETF。 */
+    poke8(QB_TRAMP_BATCH_NEXT + 0, 0x90);  /* NOP */
+    poke8(QB_TRAMP_BATCH_NEXT + 1, 0xCB);  /* RETF */
+
     /* HLT ループ: F4 (HLT); EB FD (JMP -3) */
     poke8(QB_TRAMP_HALT_LOOP + 0, 0xF4);
     poke8(QB_TRAMP_HALT_LOOP + 1, 0xEB);
@@ -904,6 +1124,9 @@ int qb_dos_loader_start_hook(void) {
     g_exec_sp = 0;                 /* EXEC ネストをクリア (前回の残骸を持ち越さない) */
     g_prog_shrunk = 0;             /* この image の初回 self-shrink を再び有効化 */
     g_alloc_strategy = 0;          /* メモリ確保ストラテジを first-fit 既定へ (Run 毎) */
+    g_batch_pc = 0;                /* .bat 文インタプリタを先頭から (reset 再起動 = 同じ stage を再走) */
+    g_last_exit_code = 0;          /* errorlevel もセッション初期値 0 へ */
+    g_last_exit_type = 0;
 
     /* 連続実行で前回の cursor 位置が残らないように tty を (0,0) に戻す */
     qb_dos_tty_reset();
