@@ -76,7 +76,8 @@ headless smoke (game.bat ong1 経路を忠実線形化) + PNG 出力 (`/tmp/th02
 - [x] **壁4: AH=4Bh AL=03 (Load Overlay) 未実装** → op.exe が main.exe を overlay 読み込みして本編へ遷移する
       経路を実装 (`qb_dos_overlay_load`/`int21_4b_overlay`)。**main.exe (reloc 920) がロードされ本編稼働
       (exited=0, animated=true)。** 汎用 DOS 機能
-- [ ] **封魔録のブラウザ実機 T3 確認** (headless で描画到達済 → ブラウザでプレイ確認が次)
+- [x] **封魔録のブラウザ実機 T3 確認 (2026-06-10)** — 公式体験版書庫をブラウザに直接ドロップ → game.bat 選択 →
+      Run で動作をユーザー確認。errorlevel 分岐インタプリタ経由の自動起動 (下セクション) がブラウザでも成立
 - [ ] **自己展開 EXE (TH03/04/05) の SFX 取り込み** = .exe 内の埋め込み LZH (offset ~1702 の `-lh5-`) を
       archive.js で検出・展開 (PC-98 同人で頻出の配布形態・汎用性高)
 - 注: 封魔録の op→main は op.exe 内 overlay だが、**起動 game.bat 自体が `if errorlevel goto` の音源判別ラダー**を
@@ -121,7 +122,8 @@ headless smoke (game.bat ong1 経路を忠実線形化) + PNG 出力 (`/tmp/th02
       exec_env・xms・find_sjis PASS、bio100 triage ベースライン完全一致 (ALIVE20/RENDER4/BOOT5/WAIT2/EXIT0/CRASH0)。
 - [x] **実 TH02 game.bat の headless e2e** — 無改変の game.bat で `zun ongchk` の errorlevel 3 をラダーが実行時評価し
       実枝 :ong4 (pmd86) を選択 → op.exe 起動・描画到達 (colors=17)。`/tmp/th02_bat_e2e.js` (未コミット)。
-- [ ] その後: **封魔録ブラウザ実機 T3 確認** (上の Touhou 項と合流)。FINALTY (Super Depth2) / life100 X.BAT も同経路。
+- [x] **封魔録ブラウザ実機 T3 確認 (2026-06-10、ユーザー確認)** — 公式体験版書庫ドロップ → game.bat → Run で動作。
+- [ ] (任意) FINALTY (Super Depth2) / life100 X.BAT も同経路なのでブラウザで一度ずつ確認しておくとなお安心。
 - 設計の根拠・コーパス調査・多段分岐の正当性は [[project_bat_launcher_corpus]] / CHANGELOG 2026-06-10 参照。
 
 ---
