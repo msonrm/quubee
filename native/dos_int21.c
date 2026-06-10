@@ -491,15 +491,22 @@ static uint8_t  g_la_len;
  * 実在名へ解決する」リゾルバ方式を採る (旧実装の「両側で強制小文字化」ハックは廃止)。
  * サブディレクトリも保持する。 */
 
-/* MEMFS (Emscripten) のノード名は JS 文字列で、フロントエンド (archive.js decodeName) は
- * SJIS ファイル名を latin1 文字列 = 各バイトをそのままコードポイントにして書き込む。C 側の
- * readdir はそのノード名を UTF-8 で受け取るため、0x80-0xFF のバイトは 2 バイト (C2/C3 xx) に
- * 膨らむ (例: "東方封魔.録" の先頭 0x93 → C2 93)。一方 DOS 側 (op.exe 等) が INT 21h に渡す
- * パスは生 SJIS バイト列。両者を素朴に byte 比較すると不一致になり SJIS 名のファイルが永遠に
- * 開けない (東方封魔録 の op.exe が画像アーカイブを開けず黒画面、の真因)。
- * → 比較時に d_name (UTF-8) を 1 コードポイントずつデコードし下位 8bit (= 元の SJIS バイト) に
- *   畳んでから DOS 名と突き合わせる。一致時に found へ書く実在名は d_name (UTF-8) のままなので、
- *   後段の fopen は Emscripten の UTF8ToString で元ノード名に戻り正しく開ける (round-trip)。 */
+/* ===== ファイル名の不変条件 (正準形) ==================================================
+ * MEMFS のノード名 = 「SJIS 生バイト列を 1 文字 1 バイトで U+0000-00FF に写した JS 文字列
+ * (latin1)」。JS 側 (archive.js / diskimage.js) はこの形で書き、表示だけ decodeSjisText が
+ * SJIS→Unicode に復号する。C 側から見ると:
+ *   - readdir の d_name はノード名の UTF-8 符号化 = 0x80-0xFF のバイトが C2/C3 xx の
+ *     2 バイトに膨らんで見える (例: "東方封魔.録" の先頭 0x93 → C2 93)
+ *   - libc (fopen/mkdir/...) に渡すパスは UTF8ToString で復号される → 同じ UTF-8 符号化で
+ *     渡せば正確に latin1 ノード名へ round-trip する
+ * C 内部のパス表現は「生 SJIS バイト列」(DOS 世界の通貨そのまま) に統一し、変換は次の
+ * 2 箇所だけで行う:
+ *   - 読み (d_name → 内部): utf8_next_lowbyte / ci_equal_fsname / fold_fsname_to_sjis
+ *   - 書き (内部 → libc): fs_path_utf8 + fs_fopen/fs_opendir/... ラッパ群 (下)
+ * ラッパを通さず生 SJIS を fopen 等に渡してはならない: Emscripten がパスを UTF-8 として
+ * 復号し、不正バイトを TextDecoder が U+FFFD に潰す。これは不可逆で、例えば「東」(93 60)
+ * と「残」(8E 60) は同じ "�`" に衝突する — ゲスト (自己展開書庫等) が AH=3Ch で作る
+ * SJIS 名が化け、別ファイル同士が上書きし合い、FindFirst でも見つからなくなる真因だった。 */
 static uint8_t utf8_next_lowbyte(const unsigned char **pp) {
     const unsigned char *p = *pp;
     unsigned char c = p[0];
@@ -544,17 +551,62 @@ static void fold_fsname_to_sjis(const char *dname_utf8, char *out, size_t cap) {
     out[i] = '\0';
 }
 
+/* Shift-JIS 第 1 バイト判定 (0x81-0x9F, 0xE0-0xFC)。decodeSjisText (JS) と同一基準。 */
+static int sjis_is_lead(uint8_t c) {
+    return (c >= 0x81 && c <= 0x9F) || (c >= 0xE0 && c <= 0xFC);
+}
+
+/* ---- FS パス境界シム: 内部表現 (生 SJIS) → libc (UTF-8 of latin1) ----
+ * 0x80-FF の各バイトを C2/C3 xx の 2 バイトに符号化する。utf8_next_lowbyte の逆写像で、
+ * 0x00-FF 全バイトが可逆 (情報を落とさない)。ASCII のみのパスは恒等。 */
+static void fs_path_utf8(const char *sjis, char *out, size_t cap) {
+    size_t o = 0;
+    for (const unsigned char *p = (const unsigned char *)sjis; *p; p++) {
+        if (*p < 0x80) {
+            if (o + 1 >= cap) break;
+            out[o++] = (char)*p;
+        } else {
+            if (o + 2 >= cap) break;
+            out[o++] = (char)(0xC0 | (*p >> 6));
+            out[o++] = (char)(0x80 | (*p & 0x3F));
+        }
+    }
+    out[o] = '\0';
+}
+
+/* libc 呼び出しの薄いラッパ群。パスは必ず内部表現 (生 SJIS) で受ける。
+ * 不変条件 (上のコメント) を守るため、DOS 由来のパスで libc を直接呼んではならない。 */
+static FILE *fs_fopen(const char *path, const char *mode) {
+    char u[520]; fs_path_utf8(path, u, sizeof(u)); return fopen(u, mode);
+}
+static DIR *fs_opendir(const char *path) {
+    char u[520]; fs_path_utf8(path, u, sizeof(u)); return opendir(u);
+}
+static int fs_stat(const char *path, struct stat *st) {
+    char u[520]; fs_path_utf8(path, u, sizeof(u)); return stat(u, st);
+}
+static int fs_unlink(const char *path) {
+    char u[520]; fs_path_utf8(path, u, sizeof(u)); return unlink(u);
+}
+static int fs_mkdir(const char *path) {
+    char u[520]; fs_path_utf8(path, u, sizeof(u)); return mkdir(u, 0777);
+}
+static int fs_rmdir(const char *path) {
+    char u[520]; fs_path_utf8(path, u, sizeof(u)); return rmdir(u);
+}
+
 /* dir 内に name と大小無視で一致する実在エントリがあれば found に実在名を書いて 1。
- * 無ければ (dir が開けない場合含む) 0 を返し found は触らない。 */
+ * 無ければ (dir が開けない場合含む) 0 を返し found は触らない。
+ * dir / found とも内部表現 (生 SJIS)。d_name (UTF-8) は畳んでから返す —
+ * これで host パスは常に純粋な生 SJIS になり、libc へは fs_* ラッパが一括符号化する。 */
 static int ci_lookup(const char *dir, const char *name, char *found, size_t cap) {
-    DIR *d = opendir(dir);
+    DIR *d = fs_opendir(dir);
     if (!d) return 0;
     struct dirent *de;
     int hit = 0;
     while ((de = readdir(d)) != NULL) {
         if (ci_equal_fsname(de->d_name, name)) {
-            strncpy(found, de->d_name, cap - 1);
-            found[cap - 1] = '\0';
+            fold_fsname_to_sjis(de->d_name, found, cap);
             hit = 1;
             break;
         }
@@ -582,6 +634,17 @@ static void read_dos_rel(uint16_t seg, uint16_t off, char *rel, size_t cap) {
     while (n + 1 < sizeof(raw)) {
         uint8_t c = peek8(base + i++);
         if (c == 0) break;
+        /* DBCS ペアは素通し: SJIS トレイルバイトには 0x5C ("表"=95 5C 等) があり得るので、
+         * リードバイトの次の 1 バイトをパス区切りと解釈してはならない (実 DOS と同じ)。 */
+        if (sjis_is_lead(c) && n + 2 < sizeof(raw)) {
+            uint8_t c2 = peek8(base + i);
+            if (c2 != 0) {
+                i++;
+                raw[n++] = (char)c;
+                raw[n++] = (char)c2;
+                continue;
+            }
+        }
         raw[n++] = (c == '\\') ? '/' : (char)c;
     }
     raw[n] = '\0';
@@ -649,7 +712,7 @@ static int dos_path_to_host(uint16_t seg, uint16_t off, char *out, size_t cap) {
     resolve_dir(dirpart, dir, sizeof(dir));
 
     int dir_exists = 0;
-    { DIR *d = opendir(dir); if (d) { dir_exists = 1; closedir(d); } }
+    { DIR *d = fs_opendir(dir); if (d) { dir_exists = 1; closedir(d); } }
 
     char found[160];
     int leaf_hit = ci_lookup(dir, leaf, found, sizeof(found));
@@ -763,9 +826,8 @@ static int dos_wildcard_match(const char *pat, const char *name) {
         return dos_wildcard_match(pat, name);
     }
     if (*name == '\0') return 0;
-    char a = (*pat == '?') ? *name : (char)tolower((unsigned char)*pat);
-    char b = (char)tolower((unsigned char)*name);
-    if (a != b) return 0;
+    if (*pat != '?' &&
+        tolower((unsigned char)*pat) != tolower((unsigned char)*name)) return 0;
     return dos_wildcard_match(pat + 1, name + 1);
 }
 
@@ -810,8 +872,7 @@ static void dta_write_find(const char *fname, long fsize, time_t mtime, int is_d
     const unsigned char *q = (const unsigned char *)fname;
     while (*q && i + 1 < sizeof(up)) {
         unsigned char c = *q;
-        int is_lead = (c >= 0x81 && c <= 0x9F) || (c >= 0xE0 && c <= 0xFC);
-        if (is_lead && q[1]) {                  /* DBCS: 2 バイトを verbatim (trail は大文字化しない) */
+        if (sjis_is_lead(c) && q[1]) {          /* DBCS: 2 バイトを verbatim (trail は大文字化しない) */
             if (i + 2 >= sizeof(up)) break;     /* trail が 12 byte 内に収まらない → ここで打ち切り */
             up[i++] = c;
             up[i++] = q[1];
@@ -837,14 +898,14 @@ static int find_scan(void) {
         if (de->d_name[0] == '.') continue;
         /* DOS 側に見せる名前は生 SJIS。pattern (生 SJIS) との照合も DTA 書き込みも
          * 畳んだ名前で行い、open 経路 (ci_equal_fsname) と round-trip するようにする。
-         * host の stat だけは実ノード名 (UTF-8 d_name) で行う。 */
+         * stat も内部表現 (生 SJIS) でパスを組み fs_stat が一括符号化する。 */
         char sjisname[260];
         fold_fsname_to_sjis(de->d_name, sjisname, sizeof(sjisname));
         if (!dos_wildcard_match(g_find.pattern, sjisname)) continue;
         char full[512];
-        snprintf(full, sizeof(full), "%s/%s", g_find.dir, de->d_name);
+        snprintf(full, sizeof(full), "%s/%s", g_find.dir, sjisname);
         struct stat st;
-        int have   = (stat(full, &st) == 0);
+        int have   = (fs_stat(full, &st) == 0);
         int is_dir = have && S_ISDIR(st.st_mode);
         if (is_dir && !(g_find.attr_mask & 0x10)) continue;
         dta_write_find(sjisname,
@@ -867,7 +928,7 @@ static int find_first_match(const char *dir, const char *pattern_dos) {
     strncpy(g_find.pattern, pattern_dos, sizeof(g_find.pattern) - 1);
     g_find.pattern[sizeof(g_find.pattern) - 1] = '\0';
 
-    g_find.dirp = opendir(dir);
+    g_find.dirp = fs_opendir(dir);
     if (!g_find.dirp) return 1;
     return find_scan();
 }
@@ -1137,7 +1198,7 @@ static void int21_35_get_vec(void) {
 static int dos_open_common(const char *mode_str) {
     char host[256];
     int st = dos_path_to_host(CPU_DS, CPU_DX, host, sizeof(host));
-    FILE *fp = fopen(host, mode_str);
+    FILE *fp = fs_fopen(host, mode_str);
     if (!fp) {
         fprintf(stderr, "[int21h/open] fopen(%s, \"%s\") failed (path-status %d)\n",
                 host, mode_str, st);
@@ -1220,7 +1281,7 @@ static void int21_45_dup(void) {
     }
     long pos = ftell(g_fh[h].fp);
     const char *rm = fh_reopen_mode(g_fh[h].mode);
-    FILE *nf = fopen(g_fh[h].path, rm);
+    FILE *nf = fs_fopen(g_fh[h].path, rm);
     if (!nf) { CPU_AX = 4; CPU_FLAG |= C_FLAG; return; }   /* too many open files */
     if (pos >= 0) fseek(nf, pos, SEEK_SET);
     int nh = fh_alloc(nf, g_fh[h].path, rm);
@@ -1250,7 +1311,7 @@ static void int21_46_dup2(void) {
     if (g_fh[dst].used) fh_close(dst);
     long pos = ftell(g_fh[src].fp);
     const char *rm = fh_reopen_mode(g_fh[src].mode);
-    FILE *nf = fopen(g_fh[src].path, rm);
+    FILE *nf = fs_fopen(g_fh[src].path, rm);
     if (!nf) { CPU_AX = 4; CPU_FLAG |= C_FLAG; return; }
     if (pos >= 0) fseek(nf, pos, SEEK_SET);
     g_fh[dst].used = 1;
@@ -1319,7 +1380,7 @@ static void int21_40_write(void) {
 static void int21_41_delete(void) {
     char host[256];
     dos_path_to_host(CPU_DS, CPU_DX, host, sizeof(host));
-    if (unlink(host) != 0) {
+    if (fs_unlink(host) != 0) {
         fprintf(stderr, "[int21h/41] unlink(%s) failed\n", host);
         CPU_AX = 2;
         CPU_FLAG |= C_FLAG;
@@ -1359,7 +1420,7 @@ static void int21_43_attr(void) {
     if (CPU_AL == 0) {
         /* Get: stat してファイル存在を確認、attribute は archive bit のみ返す */
         struct stat st;
-        if (stat(host, &st) != 0) { CPU_AX = 2; CPU_FLAG |= C_FLAG; return; }
+        if (fs_stat(host, &st) != 0) { CPU_AX = 2; CPU_FLAG |= C_FLAG; return; }
         CPU_CX = 0x20;
         CPU_FLAG &= ~C_FLAG;
     } else if (CPU_AL == 1) {
@@ -1483,14 +1544,14 @@ static void int21_4b_overlay(void) {
     static uint8_t ovbuf[256 * 1024];
     {
         struct stat cst;
-        if (stat(host, &cst) == 0 && (size_t)cst.st_size > sizeof(ovbuf)) {
+        if (fs_stat(host, &cst) == 0 && (size_t)cst.st_size > sizeof(ovbuf)) {
             fprintf(stderr, "[int21h/4B/03] overlay too large: %ld > %zu\n",
                     (long)cst.st_size, sizeof(ovbuf));
             CPU_AX = 8; CPU_FLAG |= C_FLAG;
             return;
         }
     }
-    FILE *fp = fopen(host, "rb");
+    FILE *fp = fs_fopen(host, "rb");
     if (!fp) { CPU_AX = 2; CPU_FLAG |= C_FLAG; return; }
     size_t sz = fread(ovbuf, 1, sizeof(ovbuf), fp);
     fclose(fp);
@@ -1566,7 +1627,7 @@ static void int21_4b_exec(void) {
     static uint8_t childbuf[256 * 1024];
     {
         struct stat cst;
-        if (stat(host, &cst) == 0 && (size_t)cst.st_size > sizeof(childbuf)) {
+        if (fs_stat(host, &cst) == 0 && (size_t)cst.st_size > sizeof(childbuf)) {
             fprintf(stderr, "[int21h/4B] child too large: %ld > %zu — 切り捨てを避けて失敗\n",
                     (long)cst.st_size, sizeof(childbuf));
             CPU_AX = 8;   /* insufficient memory 相当 */
@@ -1574,7 +1635,7 @@ static void int21_4b_exec(void) {
             return;
         }
     }
-    FILE *fp = fopen(host, "rb");
+    FILE *fp = fs_fopen(host, "rb");
     if (!fp) { CPU_AX = 2; CPU_FLAG |= C_FLAG; return; }
     size_t sz = fread(childbuf, 1, sizeof(childbuf), fp);
     fclose(fp);
@@ -1683,7 +1744,7 @@ static void int21_39_mkdir(void) {
     int st = dos_path_to_host(CPU_DS, CPU_DX, host, sizeof(host));
     if (st == 0) { CPU_AX = 5; CPU_FLAG |= C_FLAG; return; }   /* 既に存在 */
     if (st == 2) { CPU_AX = 3; CPU_FLAG |= C_FLAG; return; }   /* 親ディレクトリが無い */
-    if (mkdir(host, 0777) != 0) {
+    if (fs_mkdir(host) != 0) {
         fprintf(stderr, "[int21h/39] mkdir(%s) failed\n", host);
         CPU_AX = 5; CPU_FLAG |= C_FLAG; return;
     }
@@ -1697,7 +1758,7 @@ static void int21_3a_rmdir(void) {
     char host[256];
     int st = dos_path_to_host(CPU_DS, CPU_DX, host, sizeof(host));
     if (st != 0) { CPU_AX = 3; CPU_FLAG |= C_FLAG; return; }
-    if (rmdir(host) != 0) {
+    if (fs_rmdir(host) != 0) {
         fprintf(stderr, "[int21h/3A] rmdir(%s) failed\n", host);
         CPU_AX = 5; CPU_FLAG |= C_FLAG; return;
     }
@@ -1715,6 +1776,11 @@ static void int21_3b_chdir(void) {
     while (n + 1 < sizeof(raw)) {
         uint8_t c = peek8(base + i++);
         if (!c) break;
+        /* DBCS ペア素通し (read_dos_rel と同じ: トレイル 0x5C を区切り扱いしない) */
+        if (sjis_is_lead(c) && n + 2 < sizeof(raw)) {
+            uint8_t c2 = peek8(base + i);
+            if (c2 != 0) { i++; raw[n++] = (char)c; raw[n++] = (char)c2; continue; }
+        }
         raw[n++] = (c == '\\') ? '/' : (char)c;
     }
     raw[n] = '\0';
@@ -1745,7 +1811,7 @@ static void int21_3b_chdir(void) {
     /* 候補が実在ディレクトリか検証 (case-insensitive 解決して opendir)。 */
     char host[256];
     resolve_dir(cand, host, sizeof(host));
-    DIR *d = opendir(host);
+    DIR *d = fs_opendir(host);
     if (!d) { CPU_AX = 3; CPU_FLAG |= C_FLAG; return; }   /* path not found */
     closedir(d);
 

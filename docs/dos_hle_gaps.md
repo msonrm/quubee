@@ -6,7 +6,7 @@
 > 80〜90% 想定）。BIOS レベル（INT 18h/1Bh/1Ch/DCh 等）は NP2kai の合成 BIOS が担当する
 > ので、本書の「未対応」は **DOS(INT 21h) 層に限った話**。
 
-実装済み AH: `01-0C / 19 1A 25 2A 2C 2F 30 31 33 35 / 3C-49 4A-4F / 52`
+実装済み AH: `01-0C / 19 1A 25 2A 2C 2F 30 31 33 35 / 3C-49 4A-4F / 52 58 63`
 （ディスパッチは `dos_int21.c` の `qb_dos_int21_dispatch()`）。
 
 ## 1. 未実装の INT 21h ファンクション（`default` → CF=1, AL=01「invalid function」）
@@ -18,12 +18,12 @@
 | 0F-17,21-24,27,28 | FCB 系ファイル I/O 全般 | 中（〜DOS2 系・FCB FindFirst） | 未対応 |
 | 56 / 57 | Rename / Get-Set ファイル日時 | 中（temp→rename セーブ・書庫ツール） | 未対応 |
 | 59 | Get Extended Error | 中（エラー後の詳細コード取得） | 未対応 |
-| 63 | Get DBCS Lead-Byte Table | 中（日本語特有。多くはハードコードにフォールバック） | 未対応 |
+| 63 | Get DBCS Lead-Byte Table | 中（日本語特有。多くはハードコードにフォールバック） | ✅ 2026-06-09 実装（東方 op.exe の壁①） |
 | 62 / 50 / 51 | Get/Set PSP | 中 | 未対応 |
 | 00 | Terminate（旧式） | 低（終了は INT 20h / 4Ch 想定） | 未対応 |
 | 2B / 2D | Set Date / Set Time | 低（Get のみ実装） | 未対応 |
 | 38 / 5B / 5A / 67 / 68 … | 国別 / 排他作成 / temp / handle 数 / commit | 低〜中 | 未対応 |
-| 4B AL=01,03 | Load-only / オーバーレイ | 中（大きめゲームの overlay） | 未対応（AL=00 のみ） |
+| 4B AL=01,03 | Load-only / オーバーレイ | 中（大きめゲームの overlay） | AL=03 ✅ 2026-06-09 実装（東方 op→main 遷移）。AL=01 未対応 |
 
 ## 2. 実装済みだが実 DOS と挙動が異なる点
 
@@ -68,6 +68,23 @@
     だけ**（再読込で復旧）。フロッピー2D 同人は install root 内で動くのが基本なので発生確率も低い。**対策保留**
     （2026-06-03 判断）。直すなら read_dos_rel/resolve_dir に `.` 破棄 + `..` で1段上がる正規化を入れ、`/run` より
     上には登らせず clamp すれば CHDIR との非対称も解消する（~15 行、defense-in-depth）。
+
+13. **ファイル名の正準形（2026-06-10 統一）** — 不変条件: **MEMFS ノード名 = SJIS 生バイト列を
+    1 文字 1 バイトで U+0000-00FF に写した JS 文字列（latin1）**。JS 側（archive.js / diskimage.js）は
+    この形で書き、表示だけ `decodeSjisText` が SJIS→Unicode に復号する。C 側は内部パスを生 SJIS に
+    統一し、変換は次の 2 箇所だけ:
+    - 読み（d_name → 内部）: `utf8_next_lowbyte` / `ci_equal_fsname` / `fold_fsname_to_sjis`
+    - 書き（内部 → libc）: `fs_path_utf8` + `fs_fopen/fs_opendir/fs_stat/fs_unlink/fs_mkdir/fs_rmdir`
+      ラッパ群（`dos_int21.c`）。**ラッパを通さず DOS 由来パスで libc を直接呼んではならない** —
+      Emscripten がパスを UTF-8 復号し、不正バイトを TextDecoder が U+FFFD に潰す（不可逆。
+      「東」93 60 と「残」8E 60 が同名に衝突）。自己展開書庫（東方 TH03-05 等）が AH=3Ch で作る
+      SJIS 名が化け・相互上書き・FindFirst 不一致になった真因で、2026-06-10 に根治。
+    - パス読み取り（`read_dos_rel` / CHDIR）は DBCS ペアを素通しし、トレイルバイト 0x5C
+      （「表」95 5C 等）を `\` 区切りと誤解しない（実 DOS と同じ DBCS-aware パース）。
+    - 回帰テスト: `tools/create_sjis_test.js`（ゲスト作成・衝突・round-trip）/
+      `tools/find_sjis_test.js`（find↔open 対称）。
+    - 残課題: JS 側の書庫内パス区切り変換（bridge.js `dosPathToSlash`）は 0x5C トレイル非対応
+      （トレイル 0x5C を含む SJIS 名がパス区切りに化ける。corpus では未遭遇のため保留）。
 
 ## 3. INT 21h の外（DOS 周辺機能）
 

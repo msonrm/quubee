@@ -87,6 +87,26 @@ headless smoke (game.bat ong1 経路を忠実線形化) + PNG 出力 (`/tmp/th02
 
 ---
 
+## ファイル名の正準形 (2026-06-10 完了) — ゲスト生成 SJIS 名の化け/衝突を根治
+
+**症状**: 東方 TH03-05 の自己展開書庫 (SFX .exe) をエミュレータ内で実行すると生成ファイルの日本語名が化け、
+game.bat が止まる (ユーザー報告)。**真因**: C 側 (INT 21h create 等) が生 SJIS パスを fopen に直渡し →
+Emscripten の UTF-8 復号で U+FFFD 化 (「東」93 60 と「残」8E 60 が衝突=相互上書きの危険)。
+JS 展開経路 (latin1 で書く) は最初から正しく、未設計だったのは C が作る側の境界。
+
+- [x] 不変条件を明文化: **MEMFS 名 = SJIS 生バイトの latin1 写像** ([docs/dos_hle_gaps.md §2-13](docs/dos_hle_gaps.md))
+- [x] `fs_path_utf8` シム + `fs_fopen/...` ラッパ群で全 libc 呼び出しを置換 (`native/dos_int21.c`)、
+      `ci_lookup` found の SJIS 畳み、`read_dos_rel`/CHDIR の DBCS-aware パース (トレイル 0x5C)
+- [x] 回帰テスト新設 `tools/create_sjis_test.js` (東/残 衝突ペアの round-trip) + 既存全テスト/triage 回帰ゼロ
+- [x] **TH03 headless 実証**: SFX 完走 (SJIS 名 5 本正準形) + GAME.BAT 分岐起動 + op.exe が夢時空1.DAT open・
+      描画到達 16色 (pmd 枝)。TH02 通し PASS (回帰なし)
+- [ ] **残課題 (別系統): TH03 :ong4 枝の pmd86.com が `zun -4 -z` 常駐下で install-check メモリ走査ループに
+      ハング** (同一バイナリが TH02 では成功)。音源ドライバ相互作用の調査が必要 — TH03-05 のブラウザ T3 はこれが
+      ブロッカー (ladder の自動選択が ong4=pmd86 を選ぶため)
+- [ ] (保留) JS 側 `dosPathToSlash` の 0x5C トレイル非対応 (corpus 未遭遇)
+
+---
+
 ## .bat errorlevel 分岐インタプリタ (2026-06-10 完了・ブラウザ T3 確認待ち) — 封魔録ほかをドロップ→Run で自動起動
 
 **動機**: PC-98 フリーソフトの起動 .bat 38本中 8本 (≒3-4タイトル: TH02 封魔録 / FINAL=Super Depth2 / life100) が

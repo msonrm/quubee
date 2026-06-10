@@ -1,5 +1,57 @@
 # CHANGELOG
 
+## [ファイル名の正準形を確立 — ゲスト生成 SJIS 名の化け/衝突を根治 (fs_path_utf8 シム)] — 2026-06-10
+
+**症状 (ユーザー報告)**: 東方旧作の自己展開書庫 (TH03-05、SFX .exe) を実行すると生成ファイルの日本語名が
+文字化けし、game.bat が途中で止まる。
+
+**真因**: ゲストが INT 21h (AH=3Ch create 等) で渡す生 SJIS パスを **C の fopen にそのまま渡していた**ため、
+Emscripten がパスを UTF-8 として復号し不正バイトを壊していた。パス >16B では TextDecoder (非 fatal) が
+不正バイトを **U+FFFD に潰す = 不可逆**で、「東」(93 60) と「残」(8E 60) が**同名 "�`" に衝突** —
+w+b の create が別ファイルを切り詰め上書きし得る。≤16B では Emscripten の手書きデコーダが後続バイトを
+巻き込んで別形に破壊。さらに U+FFFD 化した名前は FindFirst の fold (生 SJIS 比較) と永遠に不一致。
+JS 展開経路 (archive.js = latin1 で書く) は最初から正しく、**未設計だったのは「C 側がファイルを作る」境界**。
+
+**不変条件を明文化して統一**: MEMFS ノード名 = 「SJIS 生バイトを 1 文字 1 バイトで U+0000-00FF に写した
+JS 文字列 (latin1)」。C 内部のパス表現は生 SJIS に統一し、変換は 2 箇所だけ:
+- 読み (d_name→内部): 既存の `utf8_next_lowbyte`/`ci_equal_fsname`/`fold_fsname_to_sjis` (逆向きは実装済だった)
+- 書き (内部→libc): **新設 `fs_path_utf8`** (0x80-FF → C2/C3 xx、`utf8_next_lowbyte` の逆写像で全バイト可逆) +
+  **`fs_fopen/fs_opendir/fs_stat/fs_unlink/fs_mkdir/fs_rmdir` ラッパ群** (`native/dos_int21.c`)。
+  open/create/DUP 再 open/delete/attr/EXEC/overlay/mkdir/rmdir/chdir/find の全 libc 呼び出しを置換。
+- あわせて `ci_lookup` の found を生 SJIS に畳み (host パスを純粋 SJIS に)、`read_dos_rel`/CHDIR のパースを
+  **DBCS-aware** に (トレイル 0x5C =「表」等を `\` 区切りと誤解しない、実 DOS 同等)。
+
+**検証**:
+- 新設 `tools/create_sjis_test.js`: ゲストが「東.DAT」「残.DAT」を AH=3Ch で作成 → 正準 latin1 名で別々に
+  保存・内容無破壊・再 open round-trip。修正前は衝突/U+FFFD で FAIL する判別力あり。
+- **TH03 (夢時空) SFX が headless で完走**: [Y/N] プロンプト応答 → 17 ファイル抽出、SJIS 名 5 本
+  (お試し版.TXT/夢の人々.TXT/夢時空.TXT/夢時空1.DAT/夢時空2.DAT) すべて正準形・衝突なし。
+- **TH03 GAME.BAT が分岐インタプリタで自動起動し、op.exe が SJIS 名データ「夢時空1.DAT」を open 成功・
+  描画到達 (16色)** (pmd 枝の線形化で確認。TH02 GAME.BAT 通しも現ビルドで PASS = 回帰なし)。
+- 回帰: find_sjis/batch 8/8/batscript 51/exec_env/xms/diskimage 30/lzh_l1ext 全 PASS、bio100 triage
+  ベースライン完全一致 (ALIVE20/RENDER4/BOOT5/WAIT2/EXIT0/CRASH0)。
+
+**残課題 (別系統)**: TH03 の自動選択枝 :ong4 の **pmd86.com が `zun -4 -z` 常駐と組むと install-check の
+メモリ走査ループでハング** (同一バイナリ・同引数が TH02 では成功 = 名前と無関係の音源ドライバ相互作用)。
+TH02 は影響なし。要別調査。JS 側 `dosPathToSlash` の 0x5C トレイル非対応も保留 (docs/dos_hle_gaps.md 参照)。
+
+## [コードレビュー修正 5 件 — .bat パーサの正直化 + find の '?' 大小不一致] — 2026-06-10
+
+直近の分岐インタプリタ + SJIS find 対称化のセルフレビュー (7 finder + 検証) で確定した 8 件のうち 5 件を修正:
+1. **`%VAR%` 入り if 比較を null に** (`batscript.js parseIf`) — `set` 未対応のまま literal 比較で静的畳み込みすると
+   無言の誤分岐 (実証: 両枝逐次実行) になっていた → substArg 後に `%` が残れば null = ① へ honest fallback。
+2. **クォート無し空白入り比較の trim** (同) — `if %1 == FM goto fm` の正規表現キャプチャが `"%1 "` (末尾空白) になり
+   条件が常偽 → trim して評価。
+3. **stage_batch 失敗時の ① フォールバック** (`bridge.js`) — C 側上限 (96文/48cmd/echo 2KB/errorlevel≤255) 超過で
+   throw して Run が完全失敗していた → false 返却で既存 ① 単一起動へフォールスルー (変更前の挙動を回復)。
+4. **`dos_wildcard_match` の `?` が大文字に絶対マッチしない** (`dos_int21.c`、既存バグ) — `?` 分岐が生バイト vs
+   小文字化バイトを比較していた ('A'≠'a' で false)。`SAVE?.DAT`/`????????.???` 型 FindFirst が全滅する状態だった
+   (既存タイトルは `*`/完全名のみ使用のため未顕在)。比較スキップに修正。
+5. **goto の語境界** (`batscript.js` 2 箇所) — `gotoxy 0 0` のような goto* 名コマンドが goto 文に誤分類されていた →
+   `/^goto(\s|$)/`。
+テスト: `batscript_test.js` に 6 ケース追加 (51/51)。報告のみ (未修正・低優先): 重複ラベル last-wins、
+find 返却名の 8.3 超過切り詰め (ステージング時 8.3 正規化が本筋)、diskimage readChain の実読了長 subarray。
+
 ## [起動 .bat の errorlevel 分岐インタプリタ — Step 2-6 完了: 封魔録 GAME.BAT がそのまま自動起動 (headless)] — 2026-06-10
 
 Step 1 (JS 文モデル) に続き残り全段を実装・配線し、**if errorlevel/goto 入り .bat の実インタプリタが全経路で動作**。
