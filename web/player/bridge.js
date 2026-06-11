@@ -1148,14 +1148,54 @@ NP2KaiModule({
     const viewerTitleEl  = document.getElementById('viewer-title');
     const viewerBodyEl   = document.getElementById('viewer-body');
     const viewerCanvasEl = document.getElementById('viewer-canvas');
+    // VZ Editor 慣習の「%X タグ」(目次⇔本文の手作りリンク) をリンク化してテキストを描画する。
+    // 当時の readme は VZ の HELP キー (カーソル下の単語で検索ジャンプ) で目次から各セクションへ
+    // 飛ぶ前提で %A〜%O 等のタグを目次と見出しの両方に置いた (例: CANV2C30 canvas.doc)。
+    // それをマウスクリックに翻訳する: クリックで「次の同タグ出現位置」へ巡回ジャンプ
+    // (目次→本文→目次と回れる、VZ の検索と同じ意味論)。
+    // 同じタグが 2 回以上出るものだけリンク化 (1 回きりは飛び先が無い = "100%" 等の誤爆も防ぐ)。
+    const VIEWER_TAG_RE = /(?<![0-9A-Za-z%])%[0-9A-Za-z@](?=[\s　]|$)/gm;
+    const renderViewerText = (text) => {
+        viewerBodyEl.textContent = '';
+        const counts = new Map();
+        for (const m of text.matchAll(VIEWER_TAG_RE)) {
+            counts.set(m[0], (counts.get(m[0]) || 0) + 1);
+        }
+        const frag = document.createDocumentFragment();
+        let pos = 0;
+        for (const m of text.matchAll(VIEWER_TAG_RE)) {
+            if ((counts.get(m[0]) || 0) < 2) continue;
+            frag.appendChild(document.createTextNode(text.slice(pos, m.index)));
+            const span = document.createElement('span');
+            span.className = 'viewer-tag';
+            span.dataset.tag = m[0];
+            span.title = '次の ' + m[0] + ' へジャンプ (VZ の HELP キー相当)';
+            span.textContent = m[0];
+            frag.appendChild(span);
+            pos = m.index + m[0].length;
+        }
+        frag.appendChild(document.createTextNode(text.slice(pos)));
+        viewerBodyEl.appendChild(frag);
+    };
+    viewerBodyEl.addEventListener('click', (e) => {
+        const el = e.target.closest('.viewer-tag');
+        if (!el) return;
+        const all = [...viewerBodyEl.querySelectorAll('.viewer-tag')]
+            .filter((s) => s.dataset.tag === el.dataset.tag);
+        const next = all[(all.indexOf(el) + 1) % all.length];
+        next.scrollIntoView({ block: 'start' });
+        next.classList.remove('viewer-tag-hit');
+        void next.offsetWidth;                    // reflow でアニメーションを再始動可能に
+        next.classList.add('viewer-tag-hit');
+    });
     // いま表示している内容 (ファイル名 + テキスト or 画像) をそのまま大きくポップアップに写す。
     const openViewer = () => {
         viewerTitleEl.textContent = textHeadEl.textContent;
         if (currentImage) {                       // 画像: canvas を大きく
             renderImageTo(viewerCanvasEl, currentImage);
             viewerBodyEl.hidden = true; viewerCanvasEl.hidden = false;
-        } else {                                  // テキスト: pre を大きく
-            viewerBodyEl.textContent = textBodyEl.textContent;
+        } else {                                  // テキスト: pre を大きく (+ %X タグリンク)
+            renderViewerText(textBodyEl.textContent);
             viewerBodyEl.scrollTop = 0;
             viewerCanvasEl.hidden = true; viewerBodyEl.hidden = false;
         }

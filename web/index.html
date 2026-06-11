@@ -175,7 +175,19 @@ body.panel-hidden #panel, body.panel-hidden #divider { display: none; }
     flex: 1 1 auto; overflow: auto; margin: 0; padding: 12px 14px;
     font-family: "Noto Sans Mono CJK JP", "Noto Sans CJK JP", "Migu 1M",
                  "MS Gothic", "Osaka-Mono", ui-monospace, "DejaVu Sans Mono", monospace;
-    white-space: pre; tab-size: 8; color: #cdc8c0; line-height: 1.4; font-size: 14px;
+    /* 実機 (PC-98 25行モード) は行間ゼロ = 罫線/アスキーアートが縦に繋がる。
+     * 文字は実機より大きめ (18px) で読みやすく。80 桁 ≒ 720px が箱に収まる。 */
+    white-space: pre; tab-size: 8; color: #cdc8c0; line-height: 1.0; font-size: 18px;
+}
+/* VZ Editor 慣習の %X タグ (目次⇔本文の手作りリンク)。クリックで次の同タグへジャンプ */
+#viewer-body .viewer-tag {
+    color: #8ec7ff; text-decoration: underline; cursor: pointer; scroll-margin-top: 12px;
+}
+#viewer-body .viewer-tag:hover { color: #d6ecff; background: #234; }
+#viewer-body .viewer-tag-hit { animation: viewer-tag-hit 1.2s ease-out; }
+@keyframes viewer-tag-hit {
+    0%   { background: #58a; color: #fff; }
+    100% { background: transparent; }
 }
 #viewer-canvas {
     flex: 1 1 auto; min-height: 0; width: 100%;
