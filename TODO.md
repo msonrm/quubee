@@ -159,7 +159,11 @@ JS 展開経路 (latin1 で書く) は最初から正しく、未設計だった
 - [x] **実 TH02 game.bat の headless e2e** — 無改変の game.bat で `zun ongchk` の errorlevel 3 をラダーが実行時評価し
       実枝 :ong4 (pmd86) を選択 → op.exe 起動・描画到達 (colors=17)。→ 恒久回帰 `tools/touhou_test.js` に統合済 (2026-06-11)。
 - [x] **封魔録ブラウザ実機 T3 確認 (2026-06-10、ユーザー確認)** — 公式体験版書庫ドロップ → game.bat → Run で動作。
-- [ ] (任意) FINALTY (Super Depth2) / life100 X.BAT も同経路なのでブラウザで一度ずつ確認しておくとなお安心。
+- [x] **FINALTY / life100 の .bat 経由不具合を根治 (2026-06-11)** — どちらも**インタプリタは無実**で別真因:
+      FINALTY = EXEC の「ファイル全長 256KB 上限」が付加データ連結 EXE (finmain.exe 628KB 中イメージ 138KB) を
+      弾いていた → `read_child_image` で MZ ヘッダ記載分だけ読む実 DOS 仕様に。life100 = 合成 ROM に
+      "NEC N-88" が無く Turbo-C BGI の NEC 実機判定で grNotDetected → E800:0DC0 に "NEC N-88BASIC(86)" 配置。
+      あわせて Canvas-98 の COMSPEC 存在チェックも env 追加で根治。詳細 CHANGELOG 2026-06-11。ブラウザ確認待ち
 - 設計の根拠・コーパス調査・多段分岐の正当性は [[project_bat_launcher_corpus]] / CHANGELOG 2026-06-10 参照。
 
 ---

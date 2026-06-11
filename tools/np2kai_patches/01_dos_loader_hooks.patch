@@ -1,5 +1,5 @@
 diff --git a/bios/bios.c b/bios/bios.c
-index 59758ca..ff8bb49 100755
+index 59758ca..5737207 100755
 --- a/bios/bios.c
 +++ b/bios/bios.c
 @@ -410,6 +410,17 @@ static void setbiosseed(UINT8 *ptr, UINT size, UINT seedpos) {
@@ -20,7 +20,19 @@ index 59758ca..ff8bb49 100755
  void bios_initialize(void) {
  
  	BOOL	biosrom;
-@@ -517,6 +528,9 @@ void bios_initialize(void) {
+@@ -463,6 +474,11 @@ void bios_initialize(void) {
+ 		CopyMemory(mem + 0x0e8000, nosyscode, sizeof(nosyscode));
+ 		if ((!biosrom) && (!(pccore.model & PCMODEL_EPSON))) {
+ 			CopyMemory(mem + 0xe8dd8, neccheck, 0x25);
++			/* QB: 実機 N88-BASIC ROM 同様に先頭 4KB 内へ "NEC N-88BASIC(86)" を置く。
++			 * Turbo-C BGI 等が E800:0000-0FFF を "NEC N-88" でスキャンして NEC 実機
++			 * 判定するため (Epson チェックの変種、life100 -egc の grNotDetected 根治)。
++			 * 番地は neccheck (E800:0DD8) 直前の未使用域。setbiosseed より前に書く。 */
++			CopyMemory(mem + 0xe8dc0, "NEC N-88BASIC(86)", 17);
+ 			pos = LOADINTELWORD(itfrom + 2);
+ 			CopyMemory(mem + 0xf538e, itfrom + pos, 0x27);
+ 		}
+@@ -517,6 +533,9 @@ void bios_initialize(void) {
  	mem[0xffff0] = 0xea;
  	STOREINTELDWORD(mem + 0xffff1, 0xfd800000);
  
@@ -30,7 +42,7 @@ index 59758ca..ff8bb49 100755
  	CopyMemory(mem + 0x0fd800 + 0x0e00, keytable[0], 0x60 * 8);
  	
  	//fh = file_create_c(_T("emuitf.rom"));
-@@ -911,7 +925,7 @@ void biosioemu_proc(void) {
+@@ -911,7 +930,7 @@ void biosioemu_proc(void) {
  UINT MEMCALL biosfunc(UINT32 adrs) {
  
  	UINT16	bootseg;
@@ -39,7 +51,7 @@ index 59758ca..ff8bb49 100755
  // np21w ver0.86 rev46 BIOS I/O emulation
  #if defined(BIOS_IO_EMULATION)
  	UINT32	oldEIP;
-@@ -1172,6 +1186,41 @@ UINT MEMCALL biosfunc(UINT32 adrs) {
+@@ -1172,6 +1191,41 @@ UINT MEMCALL biosfunc(UINT32 adrs) {
  			CPU_REMCLOCK -= 2000;
  			bootstrapload();
  			return(0);

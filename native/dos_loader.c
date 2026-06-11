@@ -1032,9 +1032,15 @@ static void build_env(uint16_t seg) {
     uint32_t base = (uint32_t)seg << 4;
     memset(&mem[base], 0, 256);
     uint32_t p = 0;
-    const char *var = "PATH=A:\\";    /* ダミー env var 1 個 (末尾を var\0\0 にするため) */
-    for (size_t i = 0; var[i]; i++) poke8(base + p++, (uint8_t)var[i]);
-    poke8(base + p++, 0x00);          /* var 終端 NUL */
+    /* env vars (各 NUL 終端)。COMSPEC は実 DOS が必ず設定する変数で、外部プログラム起動の
+     * 起点として存在チェックするソフトがある (Canvas-98 は無いと exit 5 で起動拒否)。
+     * 実ファイル A:\COMMAND.COM は置かない — シェルアウトを試みたソフトには EXEC が
+     * file not found を正直に返す (起動ゲートだけ実 DOS と同じ景色にする)。 */
+    static const char *const vars[] = { "COMSPEC=A:\\COMMAND.COM", "PATH=A:\\" };
+    for (size_t v = 0; v < sizeof(vars) / sizeof(vars[0]); v++) {
+        for (size_t i = 0; vars[v][i]; i++) poke8(base + p++, (uint8_t)vars[v][i]);
+        poke8(base + p++, 0x00);      /* var 終端 NUL */
+    }
     poke8(base + p++, 0x00);          /* 空文字列 = env vars 末端 → ここで "00 00" 成立 */
     poke8(base + p++, 0x01);          /* WORD: 後続文字列数 = 1 (LE) */
     poke8(base + p++, 0x00);

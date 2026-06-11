@@ -1584,6 +1584,36 @@ static void int21_49_free(void) {
  * 【段階1.5】AL=00 のみ。親 (ランチャ zar.exe) を常駐させたまま、子 (siz エンジン) を
  *   親確保領域の上にロードして CPU を子へ切替える。親の IVT フック/コードが生き残るので
  *   段階1 の「置換」で起きた暴走を解消。子終了時の親復帰 (メニュー往復) は段階2 で実装。 */
+/* 子/overlay イメージをファイルから読む。実 DOS のローダ同様、MZ EXE は「ヘッダ記載の
+ * ロードイメージ (header+body) と reloc 表」だけを読み、ファイル末尾の付加データは読まない。
+ * PC-98 ソフトは EXE 末尾に演出データを連結する慣用があり (FINALTY finmain.exe = 628KB 中
+ * ロード対象は 138KB、自分のファイルを開いて後読みする)、ファイル全長でバッファ上限を
+ * 判定すると起動できる EXE まで弾いてしまう。非 MZ (COM) はバッファ上限まで読む
+ * (64KB 超 COM は exec_load 側の検証が正直に弾く)。
+ * 戻り値: 読めたバイト数 (>=0)。-1 = open 失敗、-2 = ロード必要量がバッファ超 (正直失敗)。 */
+static long read_child_image(const char *host, uint8_t *buf, size_t bufsz) {
+    FILE *fp = fs_fopen(host, "rb");
+    if (!fp) return -1;
+    size_t got = fread(buf, 1, 0x1C, fp);
+    uint16_t magic = (got >= 2) ? (uint16_t)(buf[0] | ((uint16_t)buf[1] << 8)) : 0;
+    size_t want = bufsz;
+    if (got >= 0x1C && (magic == 0x5A4D || magic == 0x4D5A)) {
+        uint16_t e_cblp   = (uint16_t)(buf[0x02] | ((uint16_t)buf[0x03] << 8));
+        uint16_t e_cp     = (uint16_t)(buf[0x04] | ((uint16_t)buf[0x05] << 8));
+        uint16_t e_crlc   = (uint16_t)(buf[0x06] | ((uint16_t)buf[0x07] << 8));
+        uint16_t e_lfarlc = (uint16_t)(buf[0x18] | ((uint16_t)buf[0x19] << 8));
+        size_t image_file = (size_t)e_cp * 512;
+        if (e_cblp != 0 && e_cp != 0) image_file -= (512 - e_cblp);
+        size_t reloc_end = (size_t)e_lfarlc + (size_t)e_crlc * 4;
+        want = (image_file > reloc_end) ? image_file : reloc_end;
+        if (want > bufsz) { fclose(fp); return -2; }
+        if (want < got) want = got;   /* 壊れヘッダ (e_cp=0 等) は最低限読んで検証側で弾く */
+    }
+    got += fread(buf + got, 1, want - got, fp);
+    fclose(fp);
+    return (long)got;
+}
+
 /* AH=4Bh AL=03h Load Overlay。子イメージを呼び出し元指定の load_seg:0000 へロード&リロケート
  * して呼び出し元へ戻る (PSP も CPU 切替も無し)。op.exe → main.exe の本編遷移で踏む。
  * パラメータブロック ES:BX: +0 = load segment、+2 = relocation factor。 */
@@ -1600,19 +1630,15 @@ static void int21_4b_overlay(void) {
     uint16_t reloc_fac = peek16(pb + 2);
 
     static uint8_t ovbuf[256 * 1024];
-    {
-        struct stat cst;
-        if (fs_stat(host, &cst) == 0 && (size_t)cst.st_size > sizeof(ovbuf)) {
-            fprintf(stderr, "[int21h/4B/03] overlay too large: %ld > %zu\n",
-                    (long)cst.st_size, sizeof(ovbuf));
-            CPU_AX = 8; CPU_FLAG |= C_FLAG;
-            return;
-        }
+    long rd = read_child_image(host, ovbuf, sizeof(ovbuf));
+    if (rd == -1) { CPU_AX = 2; CPU_FLAG |= C_FLAG; return; }
+    if (rd == -2) {
+        fprintf(stderr, "[int21h/4B/03] overlay load image too large (>%zu): %s\n",
+                sizeof(ovbuf), host);
+        CPU_AX = 8; CPU_FLAG |= C_FLAG;
+        return;
     }
-    FILE *fp = fs_fopen(host, "rb");
-    if (!fp) { CPU_AX = 2; CPU_FLAG |= C_FLAG; return; }
-    size_t sz = fread(ovbuf, 1, sizeof(ovbuf), fp);
-    fclose(fp);
+    size_t sz = (size_t)rd;
 
     const char *base = host;
     for (const char *q = host; *q; q++) if (*q == '/' || *q == '\\') base = q + 1;
@@ -1680,23 +1706,19 @@ static void int21_4b_exec(void) {
         if (f2_seg || f2_off) fcb2_lin = lin(f2_seg, f2_off);
     }
 
-    /* 子イメージを host から読む。buffer を超えるサイズはサイレントに切り捨てると
-     * 壊れた EXE を実行してしまうので、事前に stat して大きすぎれば明示的に失敗する。 */
+    /* 子イメージを host から読む (MZ はヘッダ記載のロードイメージ分だけ。末尾付加データは
+     * 実 DOS 同様に読まない — read_child_image のコメント参照)。 */
     static uint8_t childbuf[256 * 1024];
-    {
-        struct stat cst;
-        if (fs_stat(host, &cst) == 0 && (size_t)cst.st_size > sizeof(childbuf)) {
-            fprintf(stderr, "[int21h/4B] child too large: %ld > %zu — 切り捨てを避けて失敗\n",
-                    (long)cst.st_size, sizeof(childbuf));
-            CPU_AX = 8;   /* insufficient memory 相当 */
-            CPU_FLAG |= C_FLAG;
-            return;
-        }
+    long rd = read_child_image(host, childbuf, sizeof(childbuf));
+    if (rd == -1) { CPU_AX = 2; CPU_FLAG |= C_FLAG; return; }
+    if (rd == -2) {
+        fprintf(stderr, "[int21h/4B] child load image too large (>%zu) — 正直に失敗: %s\n",
+                sizeof(childbuf), host);
+        CPU_AX = 8;   /* insufficient memory 相当 */
+        CPU_FLAG |= C_FLAG;
+        return;
     }
-    FILE *fp = fs_fopen(host, "rb");
-    if (!fp) { CPU_AX = 2; CPU_FLAG |= C_FLAG; return; }
-    size_t sz = fread(childbuf, 1, sizeof(childbuf), fp);
-    fclose(fp);
+    size_t sz = (size_t)rd;
     if (sz < 2) { CPU_AX = 0x0B; CPU_FLAG |= C_FLAG; return; }
 
     const char *base = host;

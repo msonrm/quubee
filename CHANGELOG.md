@@ -1,5 +1,46 @@
 # CHANGELOG
 
+## [EXEC の付加データ EXE 対応 + 合成 ROM の NEC 実機判定文字列 + COMSPEC — FINALTY/life100/Canvas-98 を根治] — 2026-06-11
+
+ユーザー報告 3 件をそれぞれ別の真因として根治。3 つとも .bat インタプリタ自体は無実だった
+(FINALTY/life100 の症状は .bat 経由でのみ出るが、原因は EXEC と BIOS ROM)。
+
+**① FINALTY (Super Depth 2): デモから Space でタイトルに行かずロゴに戻る**
+- **真因**: finalty.bat の `finmain %1..%5` が **EXEC の「ファイル全長 256KB 上限」で正直失敗**していた
+  (シェルは EXEC 失敗でも次コマンドへ → finend → goto LOOP → findemo = ロゴ、が「ロゴに戻る」の正体)。
+  finmain.exe は **628KB 中ロードイメージ 138KB** — PC-98 ソフトに多い「EXE 末尾に演出データを連結し、
+  自分のファイルを開いて後読みする」慣用で、ファイル全長でバッファ上限判定するのは過剰制限だった。
+- **修正**: `read_child_image` (`native/dos_int21.c`) — 実 DOS のローダ同様 **MZ ヘッダ記載のロード
+  イメージ (header+body) + reloc 表だけを読む**。EXEC (AH=4Bh AL=00) と overlay (AL=03) の両方に適用。
+  非 MZ (COM) は従来どおり (64KB 超は exec_load の検証が弾く)。
+- なお finalty.bat の `IF ERRORLEVEL == 1 GOTO END` (`=` を区切り扱いする実 DOS 仕様の変種構文) は
+  既存パーサが最初から対応していた。
+- 回帰 = `tools/batch_test.js` にサイクル 3 新設 (合成 MZ 37B イメージ + 300KB 付加データ EXE の EXEC +
+  `IF ERRORLEVEL == N` の遅延評価)。**12/12 PASS**。
+
+**② life100 (ライフゲーム): exe 直起動は動くが x.bat 経由だと停止**
+- **真因**: x.bat は `life -egc life.ref` を起動するが、life.exe (Turbo-C) 内蔵 BGI ドライバの機種判定が
+  **E800:0000-0FFF を "NEC N-88" でスキャンする NEC 実機チェック** (Epson チェックの変種) を行い、我々の
+  合成 ROM (`nosyscode`) にこの文字列が無く「NEC 機にあらず」→ EGC グレード判定に進めず grNotDetected(-2)
+  で exit 255。直起動が動いたのは引数無し = 既定ドライバ (PC98.BGI) がこの判定を踏まないため。
+  切り分け = `-egc` は直ステージでも同様に失敗 (= .bat 無実)、GRCG/EGC 機能プローブ・VRAM ページ独立性
+  プローブ・BIOS ワークエリア (0:054C bit2=16色 / 0:054D bit6=EGC) は全て元から正常だった。
+- **修正**: 実機 N88-BASIC ROM 同様、合成 ROM の E800:0DD8 (`neccheck` 著作権文字列、既存) の直前
+  **0xE8DC0 に "NEC N-88BASIC(86)" を配置** (`core/np2kai/bios/bios.c`、patch 01 再生成。EPSON モデル時は
+  従来どおり置かない・setbiosseed より前なのでチェックサム整合)。`-egc` が直ステージ・x.bat 経由とも起動。
+  NEC 実機判定を行うソフト全般に効く。
+
+**③ Canvas-98 (CANV2C30、bio100% 恋塚氏のグラフィックエディタ): 「環境変数COMSPECが設定されていません」**
+- **真因**: 我々の env に COMSPEC が無い。Canvas-98 は外部プログラム起動の起点として COMSPEC を起動時に
+  存在チェックし、無いと exit 5 で起動拒否する (canvas.doc 記載のエラー 5)。
+- **修正**: `build_env` (`native/dos_loader.c`) の env を `COMSPEC=A:\COMMAND.COM` + `PATH=A:\` の 2 変数に
+  (子 env へは変数部コピーで自動伝播)。**実ファイル A:\COMMAND.COM は置かない** — シェルアウトは EXEC が
+  file not found を正直に返す (docs/dos_hle_gaps.md §3 に差異を明記)。**タイトルダイアログ
+  (Canvas-98 1992/12/30 ©恋塚 [確認]) 表示まで headless 確認**。マウス操作なのでプレイ確認はブラウザで。
+
+回帰: batch 12/12・batscript 51/51・touhou 4/4・exec_env/xms/find_sjis/create_sjis/sft/sgr/lzh_l1ext 全 PASS・
+bio100 triage ベースライン一致。
+
 ## [東方旧作 4 作の恒久回帰テスト tools/touhou_test.js 新設 + 調査スクリプト退避] — 2026-06-11
 
 **動機**: 東方マイルストーン (4 作ブラウザ動作) の headless 検証が `/tmp` の使い捨てスクリプト 17 本に

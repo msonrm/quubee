@@ -11,6 +11,10 @@
 //   サイクル 2: 後方 goto ループ (FINALTY 型) — FLIP.COM は自分のファイルの flag byte を
 //     書き換えて 1 回目 exit 0 / 2 回目 exit 1 を返す。:loop → flip → if errorlevel 1 →
 //     goto loop が 2 周で抜け、WIN.COM に到達することを確認 (分岐の遅延評価 = ループ成立)。
+//   サイクル 3: 付加データ付き EXE の EXEC (FINALTY finmain.exe 型) — MZ ヘッダ記載の
+//     ロードイメージ 37 byte + 付加データ 300KB (EXEC バッファ 256KB 超) の合成 EXE を
+//     EXEC できること (実 DOS 同様ヘッダ記載分だけ読む) + `IF ERRORLEVEL == N` 変種構文
+//     (実 DOS は `=` を区切り扱い。finalty.bat が使用) の遅延評価を確認。
 // 使い方: node tools/batch_test.js
 const path = require('path');
 const fs = require('fs');
@@ -159,6 +163,51 @@ const FLIP = [
         logs.slice(mark2).some((l) => /if errorlevel 1 \(code=1\) -> goto/.test(l)),
         'iferr が周回ごとの errorlevel (0→1) を評価');
     chk(vt2.includes('LOOP-DONE'), 'echo "LOOP-DONE" が text VRAM に表示');
+
+    // ---- サイクル 3: 付加データ付き EXE (256KB 超ファイル・ロードイメージは 37 byte) ----
+    console.log('cycle 3: appended-data EXE exec (FINALTY finmain 型)');
+    {
+        // 最小 MZ EXE: header 32B (e_cparhdr=2) + body 5B (mov ax,4C05h / int 21h = exit 5)。
+        // image_in_file = 37 → e_cp=1, e_cblp=37。後ろに 0xAA を 300KB 連結 (ロード対象外)。
+        const hdr = Buffer.alloc(32);
+        hdr.write('MZ', 0, 'latin1');
+        hdr.writeUInt16LE(37, 0x02);        // e_cblp
+        hdr.writeUInt16LE(1, 0x04);         // e_cp
+        hdr.writeUInt16LE(0, 0x06);         // e_crlc
+        hdr.writeUInt16LE(2, 0x08);         // e_cparhdr (32 byte header)
+        hdr.writeUInt16LE(0x100, 0x0A);     // e_minalloc
+        hdr.writeUInt16LE(0xFFFF, 0x0C);    // e_maxalloc
+        hdr.writeUInt16LE(0, 0x0E);         // e_ss
+        hdr.writeUInt16LE(0x1000, 0x10);    // e_sp
+        hdr.writeUInt16LE(0, 0x14);         // e_ip
+        hdr.writeUInt16LE(0, 0x16);         // e_cs
+        hdr.writeUInt16LE(0x1E, 0x18);      // e_lfarlc
+        const body = Buffer.from([0xB8, 0x05, 0x4C, 0xCD, 0x21]);   // exit code 5
+        const appended = Buffer.alloc(300 * 1024, 0xAA);
+        M.FS.writeFile('/run/BIGRET.EXE', new Uint8Array(Buffer.concat([hdr, body, appended])));
+        r = stageBat([
+            'bigret',
+            'IF ERRORLEVEL == 6 GOTO wrong',    // 5>=6 偽 → fall (== 変種は finalty.bat の実構文)
+            'IF ERRORLEVEL == 5 GOTO ok',       // 5>=5 真 → goto
+            ':wrong',
+            'lose',
+            'goto end',
+            ':ok',
+            'win',
+            'echo BIG-OK',
+            ':end',
+        ], ['BIGRET.EXE', 'WIN.COM', 'LOSE.COM'], '');
+        chk(r === 0, `stage_batch r=${r}`);
+        const mark3 = logs.length;
+        M.ccall('np2kai_reset', null, ['number'], [handle]);
+        for (let i = 0; i < 2200; i++) runFrame(handle);
+        const ex3 = execsIn(logs.slice(mark3));
+        chk(ex3.join(',') === 'BIGRET.EXE,WIN.COM',
+            `EXEC 列 = BIGRET→WIN (307KB ファイルの EXE が EXEC 成功・LOSE 不実行): [${ex3.join(',')}]`);
+        chk(logs.slice(mark3).some((l) => /if errorlevel 5 \(code=5\) -> goto/.test(l)),
+            'IF ERRORLEVEL == 5 (変種構文) が code=5 で goto 評価');
+        chk(vramText().includes('BIG-OK'), 'echo "BIG-OK" が text VRAM に表示');
+    }
 
     console.log(`\nbatch_test: pass=${pass} fail=${fail}`);
     if (fail) {
