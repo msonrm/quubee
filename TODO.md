@@ -64,7 +64,7 @@ T3 確認は入力が要るのでブラウザで人が行う (headless は T0〜
 
 ### 東方旧作 (TH02 封魔録ほか) — 封魔録が headless でステージ1プレイ描画まで到達 (2026-06-09)
 games/touhou に東方旧作 4 作 (TH02 封魔録=通常 LZH / TH03 夢時空・TH04 幻想郷・TH05 怪綺談=自己展開 EXE)。
-headless smoke (game.bat ong1 経路を忠実線形化) + PNG 出力 (`/tmp/th02_smoke.js` / `/tmp/th02_png.js`) で
+headless smoke (game.bat ong1 経路を忠実線形化) + PNG 出力 (調査スクリプトは `games/touhou/debug/` に退避済み) で
 **4 つの壁を突破し、封魔録 (TH02) がステージ1フィールド・スコア加算・敵/弾幕/アイテムまで実走**:
 - [x] **壁1: AH=63h (DBCS リードバイト表) 未実装** → 実装 (DS:SI で SJIS 範囲表を返す)
 - [x] **壁2: zun.com が常駐失敗 (FCB1 から引数を読むのに我々の EXEC が FCB を組んでいなかった)** → EXEC で
@@ -85,6 +85,10 @@ headless smoke (game.bat ong1 経路を忠実線形化) + PNG 出力 (`/tmp/th02
       ワークエリア 0:0712h (テキスト行数−1) 未初期化で master.lib `text_fillca` の全画面黒被覆が row 0 で切れて
       いた。0x711/0x712 初期化 + `ESC[>1h/>3h` 実装 (`native/dos_int21.c`)。**Dynamo 起動時の上部テキスト残留も
       巻き添え根治**。詳細 CHANGELOG 2026-06-11
+- [x] **恒久回帰テスト `tools/touhou_test.js` 新設 (2026-06-11)** — 4 作の e2e (TH02=LZH 展開 (archive.js) /
+      TH03-05=SFX ゲスト内自己展開+生成名の SJIS 正準形検証 → 実 GAME.BAT を errorlevel 分岐インタプリタで
+      起動 → 描画到達)。**4/4 PASS**。/tmp に散っていた調査スクリプト 17 本は `games/touhou/debug/` へ退避
+      (README 付き、git 外・ローカル保全)
 - [ ] (任意) **SFX の JS 側展開** = .exe 内の埋め込み LZH (offset ~1702 の `-lh5-`) を archive.js で検出・展開。
       上の「ゲスト内自己展開」で実用は足りているため、ワンステップ UX 化したい時に
 - 注: 封魔録の op→main は op.exe 内 overlay だが、**起動 game.bat 自体が `if errorlevel goto` の音源判別ラダー**を
@@ -153,7 +157,7 @@ JS 展開経路 (latin1 で書く) は最初から正しく、未設計だった
       ループ 2 周脱出 (FLIP.COM の自己書換) + echo の text VRAM 表示、loader 実ブート 2 サイクル)。回帰: batscript 45/45・
       exec_env・xms・find_sjis PASS、bio100 triage ベースライン完全一致 (ALIVE20/RENDER4/BOOT5/WAIT2/EXIT0/CRASH0)。
 - [x] **実 TH02 game.bat の headless e2e** — 無改変の game.bat で `zun ongchk` の errorlevel 3 をラダーが実行時評価し
-      実枝 :ong4 (pmd86) を選択 → op.exe 起動・描画到達 (colors=17)。`/tmp/th02_bat_e2e.js` (未コミット)。
+      実枝 :ong4 (pmd86) を選択 → op.exe 起動・描画到達 (colors=17)。→ 恒久回帰 `tools/touhou_test.js` に統合済 (2026-06-11)。
 - [x] **封魔録ブラウザ実機 T3 確認 (2026-06-10、ユーザー確認)** — 公式体験版書庫ドロップ → game.bat → Run で動作。
 - [ ] (任意) FINALTY (Super Depth2) / life100 X.BAT も同経路なのでブラウザで一度ずつ確認しておくとなお安心。
 - 設計の根拠・コーパス調査・多段分岐の正当性は [[project_bat_launcher_corpus]] / CHANGELOG 2026-06-10 参照。

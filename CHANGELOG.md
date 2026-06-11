@@ -1,5 +1,24 @@
 # CHANGELOG
 
+## [東方旧作 4 作の恒久回帰テスト tools/touhou_test.js 新設 + 調査スクリプト退避] — 2026-06-11
+
+**動機**: 東方マイルストーン (4 作ブラウザ動作) の headless 検証が `/tmp` の使い捨てスクリプト 17 本に
+散在し未コミットだった (Crostini の /tmp は揮発)。看板成果の回帰ガードが消失リスクを抱えていた。
+
+**`tools/touhou_test.js`** (新設・コミット): 4 作の e2e をブラウザ Run と同一経路で一括検証。
+- TH02 封魔録 (通常 LZH): `archive.js parseLzh` (自前デコーダ) で展開 → /run へ latin1 (=SJIS 生バイト
+  正準形) 配置 → 実 GAME.BAT を errorlevel 分岐インタプリタ (`buildStatements`→`stage_batch`) で起動
+- TH03 夢時空 / TH04 幻想郷 / TH05 怪綺談 (自己展開 EXE): SFX をゲスト内実行で自己展開 (Y/Enter 散発注入)
+  → **生成ファイル名の SJIS 正準形を検証** (U+FFFD/非 latin1 を FAIL) → GAME.BAT を同経路で起動
+- 判定 = 描画到達 (色数≥8) かつ非終了。**初回 4/4 PASS** (TH02 colors=17 / TH03 16 / TH04 13 / TH05 16、
+  SFX 抽出 ~830 フレーム・各 ~33 秒)。corpus 不在は SKIP (bio100_triage と同じ local-only 流儀)。
+- 守っている根治の束: AH=63h DBCS / EXEC FCB parse / SJIS 名 open・find 正準形 / AH=4Bh AL=03 overlay /
+  .bat errorlevel インタプリタ / DOS CON 0:0712h / 合成 SFT (各 CHANGELOG 2026-06-09〜11)
+
+**調査スクリプト退避**: /tmp の一回性プローブ 17 本 (0:0712h 画面端ゴミ調査 10 本・SFT ハングデバッグ・
+e2e 原型・PNG ダンプ等) + games/touhou 直下の 5 本を **`games/touhou/debug/` に集約** (README 付き、
+git 外・ローカル保全)。恒久回帰は tools/touhou_test.js に一本化。
+
 ## [合成 SFT 実装 — TH03 夢時空の GAME.BAT ハング (pmd86 install-check) を根治] — 2026-06-11
 
 **症状**: TH03 夢時空 (`yume_ts2.exe`) を SFX 展開 → GAME.BAT 起動すると、errorlevel 分岐で選ばれる
