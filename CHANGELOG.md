@@ -1,5 +1,27 @@
 # CHANGELOG
 
+## [EXEC 子の SFT stale エントリに実ファイル全長を記録 (コードレビュー追補)] — 2026-06-12
+
+セルフレビューで発見した整合性修正。`read_child_image` 化 (2026-06-11) の副作用で、EXEC された
+**付加データ連結 EXE** の合成 SFT stale エントリのファイルサイズが「実ファイル全長」でなく
+「ロードイメージサイズ」になっていた (例: finmain.exe なら 628KB でなく約 138KB)。実 DOS の
+stale エントリは実サイズを持ち、PMD86 型の install-check (`SFT の +0x11 から自イメージ末尾の
+シグネチャを照合`) が使う値なので、嘘の値より正直な実値 (honest-failure 原則)。
+
+- **修正**: `read_child_image` に実ファイル全長の出力引数 (`fs_stat`) を追加し、
+  `qb_dos_exec_load(…, file_bytes, …)` 経由で `qb_dos_sft_note_load` へ引き回す
+  (`native/dos_int21.c` / `dos_loader.{c,h}`)。overlay (AL=03) は SFT を書かないので NULL。
+- **実害は現状ゼロ**だった: 実際に SFT 自己照合する PMD86 は COM (全量読み = 元から正確) で、
+  「EXE かつ付加データ持ちで SFT 自己照合」する corpus タイトルは無し。将来への正直化。
+- **回帰**: batch_test に**サイクル 3b 新設** — 付加データ EXE (BIGRET.EXE 307,237B、ロード
+  イメージ 37B) を唯一の EXEC にしたミニランで、SFT entry0 の FCB 名と +0x11 サイズが
+  「実ファイル全長」になることを直接検証。**14/14 PASS** (旧コードなら 37 で FAIL する判別力)。
+  batscript 51/51・touhou 4/4・sft/sgr/exec_env/xms/find_sjis/create_sjis PASS・
+  bio100 triage ベースライン一致。
+- **ブラウザ実機確認済 (2026-06-12、ユーザー)**: FINALTY (FINAL100.LZH ドロップ → finalty.bat) が
+  修正後ビルドで動作、**音源 3 種 (FM=middrv -T3 / BEEP=finaltyb.bat / RS-MIDI=finaltyr.bat) とも発音**。
+  ユーザー判断: 「フリーソフトのゲームの実行環境としては、ベースは完成として良いかも」。
+
 ## [拡大ビューア: VZ 流 %X タグリンク + 実機風タイポグラフィ] — 2026-06-12
 
 readme ビューアの `⛶ 拡大` ポップアップ限定の QoL 2 点 (JS のみ・Wasm 不変、サイドバー側は不変):

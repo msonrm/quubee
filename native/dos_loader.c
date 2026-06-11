@@ -1325,7 +1325,7 @@ static const char *build_one_fcb(uint32_t fcb_base, const char *p) {
     return p;
 }
 
-int qb_dos_exec_load(const uint8_t *image, size_t size,
+int qb_dos_exec_load(const uint8_t *image, size_t size, uint32_t file_bytes,
                      const char *cmdtail, uint16_t env_seg,
                      const char *child_name,
                      uint32_t fcb1_lin, uint32_t fcb2_lin) {
@@ -1521,8 +1521,9 @@ int qb_dos_exec_load(const uint8_t *image, size_t size,
 
     /* 実 DOS の EXEC は子ファイルを open→close するので SFT に stale エントリが残る。
      * これを再現する (PMD86 等「SFT から自分の名前+サイズを探す」install-check が
-     * 実 DOS と同じ経路で成立する)。 */
-    qb_dos_sft_note_load(child_name, (uint32_t)size);
+     * 実 DOS と同じ経路で成立する)。サイズは実ファイル全長 — 付加データ連結 EXE では
+     * size (ロードイメージのみ) と異なる。 */
+    qb_dos_sft_note_load(child_name, file_bytes ? file_bytes : (uint32_t)size);
 
     fprintf(stderr,
             "[dos_exec] child @ PSP=%04X img=%04X entry=%04X:%04X SS:SP=%04X:%04X "

@@ -140,13 +140,15 @@ void qb_dos_sft_note_load(const char *name, uint32_t file_bytes);
 
 /* AH=4Bh EXEC 子ロード (親常駐・子をアリーナの最大空きブロックに置いて CPU 切替)。
  * image=子イメージ (MZ/ZM ヘッダなら EXE、それ以外は COM として PSP:0x100 にロード)、
+ * file_bytes=実ファイル全長 (SFT stale エントリ用。付加データ連結 EXE では size=ロード
+ *   イメージのみと異なる。0 なら size で代用)、
  * cmdtail=子 PSP[0x80] に入れるコマンドテイル (先頭スペース込み可)、
  * env_seg=パラメータブロック由来の環境セグメント (0 なら親 env 継承)、
  * child_name=子の basename (argv[0] を "A:\\NAME" に正規化するのに使う。NULL/空なら既定)。
  * fcb1_lin/fcb2_lin=EXEC パラメータブロックの FCB1/FCB2 linear addr (0=複写しない)。
  *   子 PSP の 0x5C/0x6C へ 16B 複写する (親が AH=29h で組んだ FCB を子へ渡す経路)。
  * 戻り値 0=成功、<0=失敗。 */
-int qb_dos_exec_load(const uint8_t *image, size_t size,
+int qb_dos_exec_load(const uint8_t *image, size_t size, uint32_t file_bytes,
                      const char *cmdtail, uint16_t env_seg,
                      const char *child_name,
                      uint32_t fcb1_lin, uint32_t fcb2_lin);

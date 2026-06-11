@@ -1590,8 +1590,16 @@ static void int21_49_free(void) {
  * ロード対象は 138KB、自分のファイルを開いて後読みする)、ファイル全長でバッファ上限を
  * 判定すると起動できる EXE まで弾いてしまう。非 MZ (COM) はバッファ上限まで読む
  * (64KB 超 COM は exec_load 側の検証が正直に弾く)。
+ * out_file_bytes (NULL 可) には実ファイル全長を返す — SFT の stale エントリは実 DOS 同様
+ * 「ファイルの実サイズ」を持つべきで、付加データ連結 EXE では読込量と異なる (stat 失敗 = 0)。
  * 戻り値: 読めたバイト数 (>=0)。-1 = open 失敗、-2 = ロード必要量がバッファ超 (正直失敗)。 */
-static long read_child_image(const char *host, uint8_t *buf, size_t bufsz) {
+static long read_child_image(const char *host, uint8_t *buf, size_t bufsz,
+                             uint32_t *out_file_bytes) {
+    if (out_file_bytes) {
+        struct stat cst;
+        *out_file_bytes = (fs_stat(host, &cst) == 0 && cst.st_size > 0)
+                          ? (uint32_t)cst.st_size : 0;
+    }
     FILE *fp = fs_fopen(host, "rb");
     if (!fp) return -1;
     size_t got = fread(buf, 1, 0x1C, fp);
@@ -1630,7 +1638,7 @@ static void int21_4b_overlay(void) {
     uint16_t reloc_fac = peek16(pb + 2);
 
     static uint8_t ovbuf[256 * 1024];
-    long rd = read_child_image(host, ovbuf, sizeof(ovbuf));
+    long rd = read_child_image(host, ovbuf, sizeof(ovbuf), NULL);
     if (rd == -1) { CPU_AX = 2; CPU_FLAG |= C_FLAG; return; }
     if (rd == -2) {
         fprintf(stderr, "[int21h/4B/03] overlay load image too large (>%zu): %s\n",
@@ -1709,7 +1717,8 @@ static void int21_4b_exec(void) {
     /* 子イメージを host から読む (MZ はヘッダ記載のロードイメージ分だけ。末尾付加データは
      * 実 DOS 同様に読まない — read_child_image のコメント参照)。 */
     static uint8_t childbuf[256 * 1024];
-    long rd = read_child_image(host, childbuf, sizeof(childbuf));
+    uint32_t file_bytes = 0;
+    long rd = read_child_image(host, childbuf, sizeof(childbuf), &file_bytes);
     if (rd == -1) { CPU_AX = 2; CPU_FLAG |= C_FLAG; return; }
     if (rd == -2) {
         fprintf(stderr, "[int21h/4B] child load image too large (>%zu) — 正直に失敗: %s\n",
@@ -1730,7 +1739,8 @@ static void int21_4b_exec(void) {
                 (int)peek8(fcb1_lin), (char *)&mem[fcb1_lin + 1], (char *)&mem[fcb1_lin + 9]);
 
     /* 親常駐のまま子を上にロードして CPU を子へ切替える (base = 子の basename → argv[0] 正規化用)。 */
-    int r = qb_dos_exec_load(childbuf, sz, cmdtail, env_seg, base, fcb1_lin, fcb2_lin);
+    int r = qb_dos_exec_load(childbuf, sz, file_bytes, cmdtail, env_seg, base,
+                             fcb1_lin, fcb2_lin);
     if (r != 0) {
         fprintf(stderr, "[int21h/4B] exec_load failed r=%d\n", r);
         CPU_AX = (r == -10) ? 8 : 0x0B;   /* -10=メモリ不足(8), 他=書式不正(11) */

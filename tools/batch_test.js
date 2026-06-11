@@ -207,6 +207,25 @@ const FLIP = [
         chk(logs.slice(mark3).some((l) => /if errorlevel 5 \(code=5\) -> goto/.test(l)),
             'IF ERRORLEVEL == 5 (変種構文) が code=5 で goto 評価');
         chk(vramText().includes('BIG-OK'), 'echo "BIG-OK" が text VRAM に表示');
+
+        // ---- サイクル 3b: 付加データ EXE の SFT stale エントリ = 実ファイル全長 ----
+        // EXEC の SFT エントリは「直近ロード 1 本」なので、BIGRET を唯一の EXEC にした
+        // ミニランで終了後の SFT を見る (サイクル 3 本編は WIN.COM が上書きするため不可)。
+        // サイズはロードイメージ 37B でなく stat した実ファイル全長 (付加データ込み) が
+        // 入るべき — 実 DOS の stale エントリと同じ (PMD86 型の自己照合が使う値)。
+        // entry0: linear 0xB06、file size +0x11、FCB 名 +0x20。
+        r = stageBat(['bigret'], ['BIGRET.EXE'], '');
+        chk(r === 0, `stage_batch r=${r} (3b)`);
+        M.ccall('np2kai_reset', null, ['number'], [handle]);
+        for (let i = 0; i < 1200; i++) runFrame(handle);
+        let sftNm = '';
+        for (let k = 0; k < 11; k++) sftNm += String.fromCharCode(peek8(handle, 0xB26 + k));
+        const sftSz = (peek8(handle, 0xB17) | (peek8(handle, 0xB18) << 8) |
+                       (peek8(handle, 0xB19) << 16) | (peek8(handle, 0xB1A) << 24)) >>> 0;
+        const bigretTotal = 32 + 5 + 300 * 1024;   // header+body+付加データ = 実ファイル全長
+        chk(sftNm === 'BIGRET  EXE' && sftSz === bigretTotal,
+            `SFT stale エントリ = "BIGRET  EXE" + 実ファイル全長 ${bigretTotal} ` +
+            `(実測 "${sftNm}" ${sftSz})`);
     }
 
     console.log(`\nbatch_test: pass=${pass} fail=${fail}`);
