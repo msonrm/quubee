@@ -41,6 +41,7 @@ static struct {
     qb_dos_image_kind kind;
     uint8_t buf[640 * 1024];
     size_t  size;
+    size_t  file_bytes;         /* 元ファイルのバイト数 (EXE は header 込み。SFT エントリ用) */
     char    cmdline[128];       /* PSP[0x80] 領域に入る最大長 = 127 + 終端 */
     char    name[16];           /* image の basename (大文字、argv[0] 生成用) */
     int     ready;
@@ -171,6 +172,77 @@ void qb_dos_alloc_reset(uint16_t arena_base_para) {
  * 実 DOS の「先頭 MCB」相当。master.lib 系はこれを辿って利用可能メモリを算定する。 */
 uint16_t qb_dos_first_mcb_seg(void) {
     return g_first_mcb;
+}
+
+/* ---------------- 合成 SFT (System File Table) ----------------
+ * AH=52h List of Lists の [+4] が指す DOS 5 形式の SFT ブロックを QB_SFT_SEG:0000 に常設する。
+ * 旧実装は LoL[+4] を FFFF:FFFF「無し」マーカとしていたが、実機の SFT walker (例: PMD86 の
+ * install-check) は先頭ポインタを終端チェックなしで follow し、offset==FFFF の終端判定は
+ * 2 ブロック目以降にしか掛けない (RBIL 慣例どおり)。結果 FFFF セグメント先のゴミ count/next を
+ * 辿る無限走査になり得る (TH03 GAME.BAT の pmd86 ハングの真因、2026-06-11)。チェーン先頭に
+ * 「無し」は表現不能 → 正規終端された空 SFT を置くのが最小の忠実形。
+ *
+ * エントリには実 DOS 同様「直近 EXEC/ロードしたファイルの stale エントリ」(close 済で
+ * ref count=0 だが名前・サイズ等が残る) を 1 本だけ書く。PMD86 はこの名前 ("PMD86   COM") を
+ * 見つけたあと +0x11 のファイルサイズから自イメージ末尾 16B のシグネチャ "M.Kajihara(KAJA)" を
+ * 照合するので、サイズも実バイト数を入れる (照合一致 = 実 DOS と同じ正規インストール経路)。
+ * レイアウト (DOS 4+/5。AH=30h で 5.00 を名乗る我々と整合):
+ *   ブロック: +0 next.off / +2 next.seg (offset FFFF=終端) / +4 エントリ数 /
+ *             +6 から エントリ数 × 0x3B
+ *   エントリ: +0 ref count(w) / +4 attr(b) / +5 device info(w) / +0x11 file size(dw) /
+ *             +0x20 FCB 形式名 11B
+ * 差異: AH=3Dh open は C 側ハンドル管理で SFT を経由しない (docs/dos_hle_gaps.md に記載)。 */
+#define QB_SFT_ENTRIES   8u
+#define QB_SFT_ENTRY_SZ  0x3Bu
+
+void qb_dos_sft_note_load(const char *name, uint32_t file_bytes) {
+    uint32_t base = (uint32_t)QB_SFT_SEG << 4;
+    /* ヘッダ + 全エントリを毎回作り直す (init 順非依存。保持するのは直近ロード 1 本だけ)。 */
+    poke16(base + 0, 0xFFFF);
+    poke16(base + 2, 0xFFFF);                       /* next ptr = 終端 (offset FFFF) */
+    poke16(base + 4, QB_SFT_ENTRIES);
+    for (uint32_t i = 0; i < QB_SFT_ENTRIES * QB_SFT_ENTRY_SZ; i++)
+        poke8(base + 6 + i, 0);
+    if (!name || !name[0]) return;
+
+    /* basename を切り出す (DBCS-aware: SJIS トレイルの 0x5C を '\' と誤認しない)。 */
+    const char *b = name;
+    for (const char *p = name; *p; ) {
+        uint8_t c = (uint8_t)*p;
+        if (((c >= 0x81 && c <= 0x9F) || (c >= 0xE0 && c <= 0xFC)) && p[1]) { p += 2; continue; }
+        p++;
+        if (c == '\\' || c == '/' || c == ':') b = p;
+    }
+
+    uint32_t e  = base + 6;                          /* entry 0 = 直近ロードの stale エントリ */
+    uint32_t nm = e + 0x20;
+    for (int i = 0; i < 11; i++) poke8(nm + (uint32_t)i, ' ');
+    int n = 0;
+    while (*b && *b != '.') {                        /* name 8B (SJIS ペアは大文字化せず対で) */
+        uint8_t c = (uint8_t)*b++;
+        if (((c >= 0x81 && c <= 0x9F) || (c >= 0xE0 && c <= 0xFC)) && *b) {
+            if (n < 7) { poke8(nm + (uint32_t)n, c); poke8(nm + (uint32_t)n + 1, (uint8_t)*b); }
+            b++; n += 2;
+            continue;
+        }
+        if (c >= 'a' && c <= 'z') c -= 32;
+        if (n < 8) poke8(nm + (uint32_t)n, c);
+        n++;
+    }
+    if (*b == '.') {                                 /* ext 3B */
+        b++;
+        int x = 0;
+        for (; *b; b++) {
+            uint8_t c = (uint8_t)*b;
+            if (c >= 'a' && c <= 'z') c -= 32;
+            if (x < 3) poke8(nm + 8 + (uint32_t)x, c);
+            x++;
+        }
+    }
+    /* ref count (+0) は 0 のまま = close 済。実 DOS も EXEC 後は名前等だけが残る。 */
+    poke8 (e + 0x04, 0x20);                          /* attr: archive */
+    poke16(e + 0x05, 0x0040);                        /* device info: drive A(0) + not-written */
+    poke32(e + 0x11, file_bytes);                    /* file size — PMD86 が自己照合に使う */
 }
 
 /* AH=48h: first-fit で空きブロックを確保。大きければ分割。所有者 = g_cur_psp。
@@ -355,6 +427,7 @@ int qb_dos_stage_com(const uint8_t *image, size_t size, const char *cmdline,
     g_stage.kind = QB_DOS_IMG_COM;
     memcpy(g_stage.buf, image, size);
     g_stage.size = size;
+    g_stage.file_bytes = size;          /* COM はファイル全体 = image */
     stage_cmdline(cmdline);
     stage_name(name);
     g_stage.ready = 1;
@@ -406,6 +479,7 @@ int qb_dos_stage_exe(const uint8_t *image, size_t size, const char *cmdline,
     g_stage.kind = QB_DOS_IMG_EXE;
     memcpy(g_stage.buf, image + header_bytes, body_bytes);
     g_stage.size   = body_bytes;
+    g_stage.file_bytes = size;          /* SFT エントリにはヘッダ込みの実ファイルサイズ */
     g_stage.exe_cs = e_cs;
     g_stage.exe_ip = e_ip;
     g_stage.exe_ss = e_ss;
@@ -1131,6 +1205,10 @@ int qb_dos_loader_start_hook(void) {
     /* 連続実行で前回の cursor 位置が残らないように tty を (0,0) に戻す */
     qb_dos_tty_reset();
 
+    /* 合成 SFT を再構築し、最上位 image の stale エントリを書く (実 DOS が EXEC の
+     * open→close 後に残すものの再現。AH=52h 経由の SFT walker が正規終端を得る)。 */
+    qb_dos_sft_note_load(g_stage.name, (uint32_t)g_stage.file_bytes);
+
     /* DOS プログラム入口のレジスタ。仕様で定義されるのは CS:IP/SS:SP/DS/ES と
      * AX (コマンドライン FCB のドライブ有効性。FCB を作らない我々は AL=AH=0 =
      * 「有効」) のみ。残りは規定外なので 0 にする (旧実装の CPU_ECX=0xFF /
@@ -1434,6 +1512,11 @@ int qb_dos_exec_load(const uint8_t *image, size_t size,
         mem[splin] = 0; mem[splin + 1] = 0;
         CPU_ESI = 0x0100; CPU_EDI = 0;
     }
+
+    /* 実 DOS の EXEC は子ファイルを open→close するので SFT に stale エントリが残る。
+     * これを再現する (PMD86 等「SFT から自分の名前+サイズを探す」install-check が
+     * 実 DOS と同じ経路で成立する)。 */
+    qb_dos_sft_note_load(child_name, (uint32_t)size);
 
     fprintf(stderr,
             "[dos_exec] child @ PSP=%04X img=%04X entry=%04X:%04X SS:SP=%04X:%04X "

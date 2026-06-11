@@ -138,8 +138,9 @@ static void vram_put_char(int row, int col, uint8_t ch) {
     mem[attr_off]     = g_tty_attr;
     mem[attr_off + 1] = 0;
     /* メモリ直書きでは NP2kai の dirty-flag が立たないので明示通知。
-     * 行単位 dirty flag は内部詳細が不明なので、全体再描画フラグで対応。
-     * 1 文字単位の書き込みでも次フレームで反映される。 */
+     * 正規 CPU 経路 (memtram_wr8) はセル単位 tramupdate[] + GDCSCRN_REDRAW を立てるが、
+     * ALLDRAW2 は maketext に全セル無条件再描画をさせる上位互換通知 (NP2kai 自身の
+     * 合成 BIOS bios18.c と同じイディオム)。1 文字の書き込みでも次フレームで反映される。 */
     gdcs.textdisp |= GDCSCRN_ALLDRAW2;
 }
 
@@ -203,7 +204,7 @@ static void vram_clear_all(void) {
         }
     }
     /* 我々はメモリ直書きで VRAM を更新したので、NP2kai の dirty-flag
-     * 最適化 (行単位の差分検出) に「全行を再描画」を通知する必要がある。
+     * 最適化 (セル単位 tramupdate[] の差分検出) に「全セル再描画」を通知する必要がある。
      * これがないと前フレームの描画結果がそのまま画面に残ってしまう。 */
     gdcs.textdisp |= GDCSCRN_ALLDRAW2;
 }
@@ -1967,7 +1968,11 @@ static void int21_29_parse_filename(void) {
  * 0xA00、env 0x00F0 / PSP 0x0100 の手前で未使用) に構築して返す。
  * フィールド配置は DOS 3.1+ の慣例 (RBIL INT 21/AH=52h) に倣い、得られる範囲で妥当な値を
  * 埋める。負オフセット (BX-12..BX-2) の余地を残すため BX は 0x26 に置く。
- * 子が LoL のどのフィールドを読むかは実測で詰める前提 (まずは先頭 MCB を最優先で正しく返す)。 */
+ * 子が LoL のどのフィールドを読むかは実測で詰める前提 (まずは先頭 MCB を最優先で正しく返す)。
+ * [+4] first SFT は合成 SFT (dos_loader.c qb_dos_sft_note_load、QB_SFT_SEG:0000) を指す。
+ * かつて FFFF:FFFF「無し」としていたが、SFT walker (PMD86 の install-check 等) は先頭
+ * ポインタを終端チェックなしで follow するため、ゴミ count/next を辿る無限走査になった
+ * (TH03 GAME.BAT ハングの真因、2026-06-11)。チェーン先頭に「無し」は表現不能。 */
 #define QB_LOL_SEG  0x00A0u
 static void int21_52_list_of_lists(void) {
     uint32_t base = (uint32_t)QB_LOL_SEG << 4;   /* linear */
@@ -1985,7 +1990,7 @@ static void int21_52_list_of_lists(void) {
 
     /* -- 正オフセット -- */
     poke16(p + 0x00, NONE); poke16(p + 0x02, NONE);  /* first DPB (無し) */
-    poke16(p + 0x04, NONE); poke16(p + 0x06, NONE);  /* first SFT (無し) */
+    poke16(p + 0x04, 0x0000); poke16(p + 0x06, QB_SFT_SEG);  /* first SFT → 合成 SFT (正規終端) */
     poke16(p + 0x08, NONE); poke16(p + 0x0A, NONE);  /* CLOCK$ device */
     poke16(p + 0x0C, NONE); poke16(p + 0x0E, NONE);  /* CON device */
     poke16(p + 0x10, 512);       /* max bytes per block of any block device */

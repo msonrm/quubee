@@ -68,6 +68,10 @@
  * PSP の直前 (0x00F0:0000 = linear 0x0F00、256 byte 確保) に配置。
  * 当該領域は BIOS data area 後の DOS work area で、我々は他用途なし。 */
 #define QB_DOS_ENV_SEG          0x00F0u
+/* 合成 SFT (System File Table) ブロックのセグメント。AH=52h List of Lists の [+4] が指す。
+ * linear 0xB00..0xCDD (ヘッダ 6B + 8 エントリ × 0x3B)。LoL/DBCS scratch (segment 0x00A0、
+ * 〜linear 0xA66) の上・env ブロック MCB (linear 0xEF0) の下の未使用域。 */
+#define QB_SFT_SEG              0x00B0u
 
 /* ゲスト RAM (NP2kai `mem[0x200000]` = 2MB 固定配列) のアドレスマスク。
  * poke/peek の linear アドレスをこの境界に収める。リアルモードの最大線形
@@ -127,6 +131,12 @@ int qb_dos_batch_next_hook(void);
  * 戻り値: 1 = CPU 状態を書き換えたので caller は return(1) すること
  *         0 = stage されていないので素通り */
 int qb_dos_loader_start_hook(void);
+
+/* 合成 SFT (QB_SFT_SEG) を再構築し「直近ロードしたファイルの stale エントリ」を書く
+ * (実 DOS が EXEC の open→close 後に SFT へ残すものの再現)。loader-start (最上位 image) と
+ * AH=4Bh EXEC (子) から呼ぶ。name はパス可 (basename を FCB 8+3 に整形)、
+ * file_bytes は実ファイルサイズ (PMD86 の install-check が自己照合に使う)。 */
+void qb_dos_sft_note_load(const char *name, uint32_t file_bytes);
 
 /* AH=4Bh EXEC 子ロード (親常駐・子をアリーナの最大空きブロックに置いて CPU 切替)。
  * image=子イメージ (MZ/ZM ヘッダなら EXE、それ以外は COM として PSP:0x100 にロード)、

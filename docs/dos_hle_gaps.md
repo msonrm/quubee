@@ -39,13 +39,14 @@
 4. **ファイル属性 43h** — Get は常に 0x20(archive)、Set は無視。read-only/hidden を区別しない。
 
 5. **MCB チェーンは実 DOS 同様の単一連続鎖**（2026-06-09 で忠実化）。先頭 MCB `g_first_mcb`=env ブロックの MCB（`ENV_SEG-1`）から、**env ブロック → プログラム本体ブロック → 空きアリーナ**を 0xA000 まで連続被覆する（いずれも owner=最上位 PSP）。env・プログラム本体も実 MCB なので、それらの `AH=4Ah` resize / `AH=49h` free / 先頭から歩くメモリツールが忠実に動く。**無効ブロックの resize/free は嘘の成功でなく `AX=9`（invalid memory block address）/ CF=1 で正直に失敗**。
-   - **AH=52h (Get List of Lists)** は最小の**合成 List of Lists** を返す（segment 0x00A0）。`[BX-2]`=先頭 MCB は `g_first_mcb`（=env の MCB、実 DOS 同等）、DPB/SFT/CDS/デバイス系は `0xFFFF`「無し」、NUL デバイスヘッダ・LASTDRIVE=5・max 512B/block のみ実値。master.lib 系 (例: Super Spartan の本体 `sspartan.d98`) の「先頭 MCB を辿って利用可能メモリを算定する」用途に十分。DPB/CDS/SFT を実際に辿るツールとは整合しない（必要になったら実体を足す）。
+   - **AH=52h (Get List of Lists)** は最小の**合成 List of Lists** を返す（segment 0x00A0）。`[BX-2]`=先頭 MCB は `g_first_mcb`（=env の MCB、実 DOS 同等）、DPB/CDS/デバイス系は `0xFFFF`「無し」、NUL デバイスヘッダ・LASTDRIVE=5・max 512B/block のみ実値。master.lib 系 (例: Super Spartan の本体 `sspartan.d98`) の「先頭 MCB を辿って利用可能メモリを算定する」用途に十分。
+   - **`[+4]` first SFT は合成 SFT ブロックを指す**（✅ 2026-06-11、`QB_SFT_SEG=0x00B0`、DOS 5 形式: ヘッダ 6B + 8 エントリ × 0x3B、FCB 名 +0x20 / file size +0x11）。チェーン先頭に `FFFF:FFFF`「無し」は**置けない** — 実機の SFT walker（PMD86.COM の install-check 等）は先頭ポインタを終端チェックなしで follow するため、ゴミ count/next を辿る無限走査になる（TH03 GAME.BAT ハングの真因だった）。エントリには実 DOS 同様「**直近 EXEC/ロードしたファイルの stale エントリ**」（close 済 ref=0、名前+実ファイルサイズ）を 1 本だけ書く（loader-start と AH=4Bh EXEC で更新、`qb_dos_sft_note_load`）。PMD86 はこれで自分を発見しサイズ照合まで実 DOS と同じ経路で成立する。**差異**: AH=3Dh open / 3Ch create は SFT エントリを作らない（ハンドルはホスト `FILE*`）ので、「開いている全ファイル」を SFT で列挙するツールとは整合しない。回帰 = `tools/sft_test.js`。DPB/CDS を実際に辿るツールも未整合（必要になったら実体を足す）。
 
 6. **DOS 経由の拡張キー入力が落ちる** — BIOS キーバッファの**下位バイト(ANK)だけ**返す。矢印/ファンクションキー（DOS では 00h+スキャンコードの2バイト）の2バイト目が失われる。多くは BIOS INT 18h / 生 IRQ で読むので実害限定。
 
 7. **Ctrl-C / Ctrl-Break を検出しない**（33h は値保持のみ、INT 23h は IRET スタブ）。
 
-8. **PSP の既定 FCB をパースしない**（0x5C/0x6C はゼロ）。引数を旧式に PSP FCB から読むソフトは引数を得られない（0x80 コマンドテイルは正常）。
+8. **最上位プログラムの PSP 既定 FCB はパースしない**（0x5C/0x6C はゼロ）。**AH=4Bh EXEC の子は ✅ 2026-06-09 で実機 COMMAND.COM 同様にコマンドテイル第1/第2トークンを FCB1/FCB2 へ parse 済**（東方 zun.com の常駐成立に必須だった）。引数を PSP FCB から読むソフトを直接 stage した場合のみ引数を得られない（0x80 コマンドテイルは正常）。
 
 9. **セーブが揮発** — 書き込みは MEMFS `/run`。セッション中（Run 往復）は残るが**ページ再読込で消える**。永続化（IndexedDB 本棚）は別レイヤの将来課題。
 
