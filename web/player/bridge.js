@@ -392,8 +392,10 @@ NP2KaiModule({
 
     const isExecName = (n) => /\.(exe|com)$/i.test(n);
     const isBatName  = (n) => /\.bat$/i.test(n);   // 起動レシピ (qbBatScript で解釈)
+    // man=マニュアル / hed=BBS・Vector 配布のヘッダ紹介文 (例: ZUN の huma_ts2.hed) /
+    // his=更新履歴 — いずれも corpus 実在 (2026-06-12 棚卸し)
     const isTextName = (n) =>
-        /\.(txt|doc|me|1st|asc|ini|cfg|nfo|faq|hlp|dic|wri)$/i.test(n) ||
+        /\.(txt|doc|man|hed|his|me|1st|asc|ini|cfg|nfo|faq|hlp|dic|wri)$/i.test(n) ||
         /readme|read\.me|どきゅめんと|説明|よみ/i.test(n);
     const isReadme   = (n) => /readme|read\.me|よみ|説明|どきゅめんと/i.test(n);
     const isImageName = (n) => /\.mag$/i.test(n);   // PC-98 標準画像 (MAKI02)。.MKI は別系統で未対応
@@ -505,9 +507,9 @@ NP2KaiModule({
     // 表示エリアを「テキスト」モードに切替 (画像 canvas を隠し pre を出す)。
     function showTextMode() { currentImage = null; textImageEl.hidden = true; textBodyEl.hidden = false; }
 
-    // テキスト (readme / .bat 等) を表示。annotation を渡すと本文の先頭に注記行を足す
+    // テキスト (readme / .bat 等) を表示
     // (起動 .bat の「解釈した起動順」を見せる用)。
-    function openText(ent, annotation) {
+    function openText(ent) {
         showTextMode();
         textHeadEl.textContent = sjisName(ent.name);
         // DOS EOF (Ctrl-Z=0x1A) 以降は本文ではない。生バイトで切る
@@ -516,8 +518,7 @@ NP2KaiModule({
         let bytes = ent.data;
         const eof = bytes.indexOf(0x1a);
         if (eof >= 0) bytes = bytes.subarray(0, eof);
-        const body = decodeSjisText(bytes).replace(/\r\n?/g, "\n");
-        textBodyEl.textContent = annotation ? `${annotation}\n\n${body}` : body;
+        textBodyEl.textContent = decodeSjisText(bytes).replace(/\r\n?/g, "\n");
         textBodyEl.scrollTop = 0;
         textPopoutBtn.hidden = false;   // 本文があるので別窓ボタンを出す
     }
@@ -567,29 +568,6 @@ NP2KaiModule({
         return { targetEntry: target, args: m.args, recipe };
     }
 
-    // 起動 .bat の「解釈した起動順」を 1 行サマリにする (Run でこう動く、の透明化)。
-    // リテラルフラグ (-r/-v 等) は出すが %N はユーザー入力前なので省く (本文の生 .bat で確認可)。
-    function batRecipeSummary(rec) {
-        if (!rec) return '▷ 起動レシピ — 起動する実行ファイルが束に見つかりません';
-        const names = loadedEntries.map((e) => e.name);
-        const fmt = (c) => sjisName(baseName(c.name)) + (c.args ? ` ${c.args}` : '');
-        if (rec.recipe.hasControlFlow) {
-            // ③ 分岐入り: 実行順は実行時の errorlevel 次第なので、関与するコマンド一覧を出す。
-            const stmts = qbBatScript.buildStatements(rec.recipe, names, '');
-            if (stmts) {
-                const cmds = [...new Set(stmts.filter((s) => s.op === 'cmd')
-                    .map((c) => sjisName(baseName(c.name))))];
-                return `▷ 起動レシピ (if/goto 分岐 — errorlevel を実行時評価して逐次 EXEC): ${cmds.join(', ')}`;
-            }
-        }
-        const seq = qbBatScript.resolveSequence(rec.recipe, names, '');
-        if (seq && seq.length > 1) {
-            return `▷ 起動順 (1 セッション逐次 EXEC): ${seq.map(fmt).join('  →  ')}`;
-        }
-        const a = rec.args.join(' ');
-        return `▷ 起動: ${sjisName(baseName(rec.targetEntry.name))}${a ? ` ${a}` : ''}`;
-    }
-
     function selectEntry(ent) {
         if (isBatName(ent.name)) {
             // .bat は「作者の起動レシピ」。主プログラム + 引数を解決して run 対象にする。
@@ -597,18 +575,15 @@ NP2KaiModule({
             if (!rec) {
                 // 起動できなくても中身は読ませる (③敬意: 作者のレシピ)。
                 runStatusEl.textContent = `${sjisName(ent.name)}: 起動する実行ファイルが見つかりません`;
-                openText(ent, batRecipeSummary(null));
+                openText(ent);
                 return;
             }
             selectedEntry = ent;
             selectedRecipe = rec;
-            // プレビューはレシピ引数を素のまま見せる (%1 等のプレースホルダも) ―― ユーザーに
-            // 「cmdline 欄に引数が要る」ことを伝える。実起動時は buildCmdline で %N を差し込む。
-            const preview = rec.args.join(' ');
-            runEntryEl.textContent =
-                `${sjisName(ent.name)} → ${sjisName(baseName(rec.targetEntry.name))}` + (preview ? ` ${preview}` : '');
-            // 起動 .bat の中身 (作者のレシピ) を解釈した起動順つきでテキスト面に表示。
-            openText(ent, batRecipeSummary(rec));
+            // Run バーは .bat 名のみ (シンプル優先)。起動内容は .bat 本文そのもの (ビューア表示)
+            // が伝える — 解釈サマリの前置は冗長なので出さない。%N は buildCmdline で差し込む。
+            runEntryEl.textContent = sjisName(ent.name);
+            openText(ent);
         } else {
             selectedEntry = ent;
             selectedRecipe = null;
