@@ -301,8 +301,9 @@ NP2KaiModule({
     const addArchiveBtn  = document.getElementById('add-archive');
     const closeRunBtn    = document.getElementById('close-run');
     const textHeadBar = document.getElementById('text-head');        // ビューアのヘッダ帯 (何も開いていない間は隠す)
-    // 初期の歓迎文 (HTML 直書き) を退避 — 「閉じる」/新規オープンで復元する
-    const WELCOME_BODY = textBodyEl.textContent;
+    // 初期の歓迎文 (HTML 直書き・「宣言を読む」リンク入り) を退避 — 「閉じる」/新規オープンで
+    // 復元する。リンク要素ごと戻すため innerHTML で持つ (クリックは textBodyEl への委譲で拾う)
+    const WELCOME_HTML = textBodyEl.innerHTML;
 
     let loadedEntries  = [];   // { name(=/run 相対), data, mtime }  path は last-wins
     let selectedEntry  = null; // ▶ Run の実行対象 (EXE/COM もしくは 起動 .bat) — 一覧ではアイコンチップで示す
@@ -732,10 +733,16 @@ NP2KaiModule({
     // 機械をページ読込直後と同じ待機状態 (自己起動 HELLO ディスク) に戻す。
     // 直前まで走っていたゲーム/常駐 TSR はこのリセットで消える。staged image は
     // loader-start フックが 1 ショット消費済み (g_stage.ready=0) なので再実行されない。
+    // 既に HELLO 待機なら何もしない — リセットの目的は「前のゲームを止める」ことだけで、
+    // メモリ衛生は毎 Run の reset + pristine loader.d88 が保証する (新規ドロップのたびに
+    // 左画面が無意味に再起動しないように)。
+    let machineAtIdle = true;   // 初期ブート = HELLO 待機。Run で false / 本リセットで true
     function resetToIdle() {
         if (currentPoll && pollDosExit._stop) pollDosExit._stop();   // exit 監視を停止
+        if (machineAtIdle) return;
         insertFdd(handle, '/tmp/boot.d88', 0, 0);   // 失敗しても reset で BIOS 待機になるだけ
         reset(handle);
+        machineAtIdle = true;
     }
 
     // 開いている束を完全に閉じる: 機械リセット + /run クリア + UI を初期状態 (歓迎文) へ。
@@ -750,7 +757,7 @@ NP2KaiModule({
         showTextMode();
         textHeadBar.hidden = true;   // 歓迎文の上にヘッダ帯は出さない
         textHeadEl.textContent = '';
-        textBodyEl.textContent = WELCOME_BODY;
+        textBodyEl.innerHTML = WELCOME_HTML;
         textPopoutBtn.hidden = true;
         textSaveBtn.hidden = true;
         viewedEntry = null;
@@ -901,6 +908,7 @@ NP2KaiModule({
         const r = insertFdd(handle, '/tmp/loader.d88', 0, 0);
         if (r !== 0) throw new Error(`loader.d88 insert failed (r=${r})`);
         reset(handle);
+        machineAtIdle = false;   // ゲーム実行開始 — 以後の resetToIdle は実リセットする
     }
 
     // 現在 polling 中のハンドル (Stop ボタンで強制中断する用)。
@@ -1261,6 +1269,7 @@ NP2KaiModule({
     });
     // いま表示している内容 (ファイル名 + テキスト or 画像) をそのまま大きくポップアップに写す。
     const openViewer = () => {
+        viewerBodyEl.classList.remove('prose');   // 宣言 (About) の散文モードを解除
         viewerTitleEl.textContent = textHeadEl.textContent;
         if (currentImage) {                       // 画像: canvas を大きく
             renderImageTo(viewerCanvasEl, currentImage);
@@ -1276,10 +1285,52 @@ NP2KaiModule({
             viewerBodyEl.scrollTop = 0;
         }
     };
-    const closeViewer = () => { viewerModalEl.hidden = true; };
+    const closeViewer = () => {
+        viewerModalEl.hidden = true;
+        if (aboutShowing) {
+            aboutShowing = false;
+            // 既読は「閉じた」時点で記録する。読まずにタブごと離脱した人には次回も出す
+            try { localStorage.setItem(ABOUT_SEEN_KEY, '1'); } catch (e) { /* storage 不可なら毎回表示 */ }
+        }
+    };
     textPopoutBtn.addEventListener('click', openViewer);
     document.getElementById('viewer-close').addEventListener('click', closeViewer);
     viewerModalEl.addEventListener('click', (e) => { if (e.target === viewerModalEl) closeViewer(); });
+
+    // ---- 宣言 (About) — 初回訪問時に自動表示 + ヘッダ About で随時再表示 ----
+    // 本文は index.html の #about-text (歓迎文と同じく site copy は HTML 側)。
+    // キー名の v1 は文面の大改訂時にバンプして全員にもう一度見せるための版数。
+    const ABOUT_SEEN_KEY = 'quubee_about_seen_v1';
+    const ABOUT_TEXT = document.getElementById('about-text').textContent;
+    let aboutShowing = false;
+    const openAbout = () => {
+        viewerTitleEl.textContent = 'QuuBee — 宣言 / Declaration';
+        viewerBodyEl.textContent = '';
+        // URL だけ実リンク化 (新規タブ)。それ以外はプレーンテキストのまま
+        const frag = document.createDocumentFragment();
+        let pos = 0;
+        for (const m of ABOUT_TEXT.matchAll(/https?:\/\/\S+/g)) {
+            frag.appendChild(document.createTextNode(ABOUT_TEXT.slice(pos, m.index)));
+            const a = document.createElement('a');
+            a.href = m[0]; a.target = '_blank'; a.rel = 'noopener';
+            a.textContent = m[0];
+            frag.appendChild(a);
+            pos = m.index + m[0].length;
+        }
+        frag.appendChild(document.createTextNode(ABOUT_TEXT.slice(pos)));
+        viewerBodyEl.appendChild(frag);
+        viewerBodyEl.classList.add('prose');
+        viewerCanvasEl.hidden = true; viewerBodyEl.hidden = false;
+        viewerModalEl.hidden = false;
+        viewerBodyEl.scrollTop = 0;   // 表示「後」にリセット (display:none 中の代入は no-op)
+        aboutShowing = true;
+    };
+    // 再表示入口は歓迎文 (ファイル未オープン時のマニュアル部分) 内の「宣言を読む」リンク。
+    // 歓迎文は innerHTML 復元で要素が作り直されるため、リスナは委譲で textBodyEl に置く
+    textBodyEl.addEventListener('click', (e) => {
+        if (e.target.closest('.about-link')) openAbout();
+    });
+    try { if (!localStorage.getItem(ABOUT_SEEN_KEY)) openAbout(); } catch (e) { /* storage 不可時は出さない */ }
 
     // 表示中ファイルをダウンロード保存。/run ライブ反映は entry オブジェクトを同一性
     // 保持で更新するので、実行中にゲームが書き換えたセーブも最新の data が落ちる。

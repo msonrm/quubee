@@ -21,7 +21,7 @@ QuuBee は配布しない。）
 | i386c CPU コア（NONAKA Kimihiro 他） | BSD（2条項） |
 | **FPU `fpemul_dosbox*.c`（DOSBox Team）** | **GPLv2 or later**（← 全体を GPL 化する要因） |
 | `web/assets/font.bmp` | 修正 BSD |
-| `web/assets/boot.d88`（FreeDOS(98)・未使用同梱） | GPL |
+| `tools/testdata/boot.d88`（FreeDOS(98)・テスト専用素材） | GPL |
 
 ---
 
@@ -77,11 +77,11 @@ QuuBee のビルドに含まれる主なものは:
 
 ---
 
-## FreeDOS — `web/assets/boot.d88`
+## FreeDOS — `tools/testdata/boot.d88`
 
-FreeDOS(98) の 2HD フロッピーイメージ（**GPL**、再配布可）。現状はブートが完走しないため**未使用**だが
-開発の名残として同梱。FreeDOS は自由ソフトウェアで再配布に問題はない（帰属: The FreeDOS Project）。
-不要なら削除可（`.gitignore` に追加すればよい）。
+FreeDOS(98) の 2HD フロッピーイメージ（**GPL**、再配布可）。headless テスト
+（`tools/bench_frame.js` / `tools/diskimage_test.js`）専用の素材で、**デプロイ対象外**
+（サイトには含まれない。帰属: The FreeDOS Project）。
 
 ---
 
