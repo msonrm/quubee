@@ -125,7 +125,7 @@ for (const rel of ['web/assets/loader.d88', 'web/assets/np2kai_boot.d88']) {
 // ---- 4b. FreeDOS boot.d88 は本物の FAT12 (深い入れ子の再帰検証) ----
 console.log('\n[positive] FreeDOS boot.d88 is real FAT12 with deep subdirs');
 {
-    const p = path.join(ROOT, 'web/assets/boot.d88');
+    const p = path.join(ROOT, 'tools/testdata/boot.d88');
     if (fs.existsSync(p)) {
         const res = di.extractDiskImage(new Uint8Array(fs.readFileSync(p)), 'boot.d88');
         ok(res.ok, 'boot.d88 should extract (FreeDOS FAT12)');

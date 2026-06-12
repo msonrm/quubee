@@ -33,19 +33,17 @@ qb/
 │   └── build.sh             # patch 適用 → emcmake → emmake のローカルビルド
 │
 ├── web/                     # ブラウザフロントエンド
-│   ├── index.html           # ドライブ/Run スロット UI、D&D、cmdline 入力
+│   ├── index.html           # ファイラ + Run バー UI、D&D、cmdline 入力
 │   ├── player/
 │   │   ├── bridge.js        # Wasm ラッパ、入力ハンドラ、表示パイプライン、Run 経路、readme/画像ビューア
 │   │   ├── archive.js       # LZH (LH1/4/5/6/7 + header L0/1/2) デコーダ + ZIP (deflate) 展開
 │   │   ├── diskimage.js     # ディスクイメージ→FAT12/16 取り出し (ブートせず)
 │   │   ├── batscript.js     # 起動 .bat を「作者の起動レシピ」として解釈
 │   │   └── magimage.js      # PC-98 .MAG (MAKI02) 画像デコーダ (NEC罫線→Unicode は bridge.js)
-│   ├── db -> ../db          # symlink (emrun が web/ を serve するため)
 │   ├── assets/
 │   │   ├── font.bmp         # ANK 8x16 / 漢字フォント (2048×2048 1bpp)
 │   │   ├── loader.d88       # Phase 3 ローダ用ブート disk (boot.asm 8B + 残ゼロ)
-│   │   ├── boot.d88         # FreeDOS(98) 2HD (完走しない、TODO)
-│   │   ├── np2kai_boot.d88  # 自己起動最小ディスク (動作確認用)
+│   │   ├── np2kai_boot.d88  # 自己起動最小ディスク (HELLO 待機画面)
 │   │   └── freepats/        # GUS パッチ (MIDI 用、gitignore、setup_freepats.sh で展開)
 │   ├── np2kai_core.js       # ビルド成果物 (gitignore)
 │   └── np2kai_core.wasm     # ビルド成果物 (gitignore)
@@ -58,14 +56,10 @@ qb/
 │   ├── vsync_test/          # VSYNC IRQ 配送パス確認用 boot disk
 │   ├── dos_loader/          # Phase 3: boot.asm + make_d88.py + {hello,args}.com.py
 │   │                        #          + hello.exe.py + sjistest.com.py + build.sh
-│   └── np2kai_patches/      # NP2kai 改変を patch 化 (build.sh が自動適用)
-│       ├── 01_dos_loader_hooks.patch  # bios.c: トランポリン install + biosfunc case
-│       └── 02_font_reset_fix.patch    # pccore_reset の fontrom ゼロ埋め抑止
-│
-├── db/
-│   └── games.json           # テストスイートの {title, kind, entry, cmdline, notes}
-│                            # ※ファイル名キーの簡易ルックアップ (仕様書の "ハッシュ
-│                            #   フィンガープリント DB" はまだ未実装)
+│   ├── np2kai_patches/      # NP2kai 改変を patch 化 (build.sh が自動適用)
+│   │   ├── 01_dos_loader_hooks.patch  # bios.c: トランポリン install + biosfunc case
+│   │   └── 02_font_reset_fix.patch    # pccore_reset の fontrom ゼロ埋め抑止
+│   └── testdata/            # テスト専用素材 (FreeDOS boot.d88 — bench_frame/diskimage_test 用。デプロイ対象外)
 │
 ├── games/                   # テスト用アーカイブ (.lzh/.zip/.rar)。derived .fdi/.d88 は gitignore
 │

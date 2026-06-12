@@ -1,10 +1,10 @@
 #!/bin/bash
 # QuuBee 静的デプロイ用ディレクトリ dist/ を生成する。
 #   - wasm/js が無ければ emscripten ビルド (bash emscripten/build.sh)
-#   - web/ を dist/ へ複製。db 等の symlink を実体化 (-L)。
+#   - web/ を dist/ へ複製。
 #     MIDI 用 freepats (~33MB) は同梱する (本番でも MIDI が鳴るように。遅延 on-demand なので
 #     MIDI ゲーム起動時のみ初回 DL され、非 MIDI ユーザーは取得しない)。
-#     未使用の FreeDOS boot.d88 と *.map は除外。
+#     *.map は除外。テスト専用素材 (FreeDOS boot.d88) は tools/testdata/ にあり web/ に入れない。
 #
 # 生成後のアップロード (Cloudflare Pages、ドメイン不要 → quubee.pages.dev):
 #   npx wrangler login                                              # 初回のみ (ブラウザ認証)
@@ -21,8 +21,7 @@ fi
 
 rm -rf "$DIST"
 mkdir -p "$DIST"
-cp -rL web/. "$DIST/"                                    # -L: db 等の symlink を実体化
-rm -rf "$DIST/assets/boot.d88"                           # 未使用 FreeDOS を除外 (freepats は同梱)
+cp -rL web/. "$DIST/"                                    # -L: symlink は実体化 (現状 web/ に無し)
 find "$DIST" -name '*.map' -delete
 
 echo "dist 生成: $DIST ($(du -sh "$DIST" | cut -f1))"

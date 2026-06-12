@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: MIT OR GPL-2.0-or-later
 const canvas = document.getElementById('screen');
 const ctx    = canvas.getContext('2d');
-// ドライブ UI 要素
-const driveEls = Array.from(document.querySelectorAll('.drive'));
-function setDriveName(kind, drive, name) {
-    const el = driveEls.find(d => d.dataset.kind === kind && +d.dataset.drive === drive);
-    if (el) el.querySelector('.name').textContent = name;
+// 初期化失敗・致命的エラーの表示先。Run バーのステータス行が唯一の常設テキスト
+// (console だけに出すとユーザーには「何も起きない」ようにしか見えない)。
+function showFatal(msg) {
+    const el = document.getElementById('run-status');
+    if (el) el.textContent = msg;
+    console.error(msg);
 }
 
 // オフスクリーンキャンバス: エミュレータの生解像度フレームを受け取る
@@ -124,8 +125,6 @@ NP2KaiModule({
     printErr: (t) => { if (qbChatter.test(t)) { if (qbVerbose()) console.log(t); }
                        else console.error(t); },
 }).then(async function (M) {
-    setDriveName('fdd', 0, 'initializing…');
-
     M.ccall('np2kai_set_data_dir', null, ['string'], ['/tmp/']);
 
     // FONT.BMP を有効化。以前「化けの原因」と疑ったが実際は boot.asm の DS
@@ -162,7 +161,7 @@ NP2KaiModule({
 
     const handle = M.ccall('np2kai_create', 'number', [], []);
     if (!handle) {
-        setDriveName('fdd', 0, 'np2kai_create failed');
+        showFatal('np2kai_create failed');
         return;
     }
 
@@ -176,9 +175,9 @@ NP2KaiModule({
         const r = M.ccall('np2kai_insert_fdd', 'number',
             ['number', 'string', 'number', 'number'],
             [handle, diskPath, 0, 0]);
-        setDriveName('fdd', 0, r === 0 ? 'np2kai_boot.d88' : `(insert failed r=${r})`);
+        if (r !== 0) showFatal(`boot disk insert failed (r=${r})`);
     } else {
-        setDriveName('fdd', 0, '(no disk)');
+        showFatal(`boot disk fetch failed (${diskUrl})`);
     }
 
     // ---- オーディオ再生 (pull 型, C1) ----
@@ -275,51 +274,15 @@ NP2KaiModule({
         if (document.pointerLockElement === canvas) e.preventDefault();
     });
 
-    // ---- ディスク差し替え (D&D / ファイル選択) ----
+    // ---- 同梱ディスクの挿入 (A: 固定) ----
+    // QuuBee はユーザーのディスクイメージをブートしない (concept の赤線 — ドロップされた
+    // イメージは qbDiskImage が中身だけを取り出す)。機械に挿さるのは同梱の 2 枚
+    // (np2kai_boot.d88 = HELLO 待機 / loader.d88 = Phase 3 ローダ) のみで、どちらも
+    // A: 固定・挿入後 reset。旧 A/B/C/D ドライブスロットの任意イメージ挿入+ブート機構は
+    // UI 撤去 (2026-06-01) 以来の死に経路だったため削除した。
     const insertFdd = M.cwrap('np2kai_insert_fdd', 'number',
         ['number', 'string', 'number', 'number']);
-    const insertHdd = M.cwrap('np2kai_insert_hdd', 'number',
-        ['number', 'string', 'number']);
     const reset     = M.cwrap('np2kai_reset',      null,     ['number']);
-
-    // ロード中のディスクパス (FS 上)。同名で複数回ロードしても良いように名前を都度生成する。
-    // FS はセッション内では永続するので、同 slot へ挿し直す際は旧イメージを unlink する
-    // (下記 slotPaths)。さもないと Run 連打で loader.d88 (~1.2MB) が MEMFS に積み上がる。
-    let loadSeq = 0;
-    const slotPaths = {};   // `${kind}${drive}` → 現在その slot に挿入中の FS パス
-
-    /**
-     * kind: 'fdd' | 'hdd'
-     * drive: FDD は 0=A, 1=B / HDD は 0=C, 1=D
-     * FDD A: 挿入はリセットあり (新規ブート想定)
-     * FDD B: 挿入はリセットなし (ゲーム中の差し替え想定)
-     * HDD: 挿入後リセットして HDD からブート (PC-98 BIOS は POST 時に HDD を読む)
-     */
-    async function loadDiskFromBlob(file, kind, drive) {
-        const buf = await file.arrayBuffer();
-        const safe = file.name.replace(/[^A-Za-z0-9._-]/g, '_');
-        const fsPath = `/tmp/disk_${loadSeq++}_${safe}`;
-        M.FS.writeFile(fsPath, new Uint8Array(buf));
-        let r;
-        if (kind === 'hdd') {
-            r = insertHdd(handle, fsPath, drive);
-        } else {
-            r = insertFdd(handle, fsPath, drive, 0);
-        }
-        if (r !== 0) {
-            try { M.FS.unlink(fsPath); } catch (_) {}   // 挿入失敗分は即掃除
-            setDriveName(kind, drive, `(insert failed r=${r}: ${file.name})`);
-            return;
-        }
-        // 挿入成功: 同 slot の旧イメージを掃除 (NP2kai は fdd_set/sxsi で新パスを参照済みなので安全)。
-        const slot = `${kind}${drive}`;
-        const prev = slotPaths[slot];
-        slotPaths[slot] = fsPath;
-        if (prev && prev !== fsPath) { try { M.FS.unlink(prev); } catch (_) {} }
-        setDriveName(kind, drive, `${file.name} (${(buf.byteLength/1024)|0} KB)`);
-        // HDD は挿入後に再ブートしないと BIOS が拾わない。FDD は A: のみリセット。
-        if (kind === 'hdd' || drive === 0) reset(handle);
-    }
 
     // ---- filer (書庫を /run/ に展開し、一覧/テキスト表示/エントリ選択) ----
     const runEntryEl  = document.getElementById('run-entry');
@@ -881,9 +844,13 @@ NP2KaiModule({
             if (!res.ok) throw new Error(`loader.d88 fetch failed (${res.status})`);
             loaderDiskCached = new Uint8Array(await res.arrayBuffer());
         }
-        // /tmp に書いて A: に挿入。loadDiskFromBlob は File を要求するので Blob で包む。
-        const f = new File([loaderDiskCached], 'loader.d88');
-        await loadDiskFromBlob(f, 'fdd', 0);  // A: 挿入 + reset
+        // 毎 Run、pristine な内容を同一パスへ書き直して A: に挿入 (前 Run でゲストがディスクへ
+        // 書いた変更を持ち越さない + 固定パス上書きなので MEMFS に積み上がらない)。
+        // 挿入失敗は throw → Run ハンドラの catch がステータス行に表示する。
+        M.FS.writeFile('/tmp/loader.d88', loaderDiskCached);
+        const r = insertFdd(handle, '/tmp/loader.d88', 0, 0);
+        if (r !== 0) throw new Error(`loader.d88 insert failed (r=${r})`);
+        reset(handle);
     }
 
     // 現在 polling 中のハンドル (Stop ボタンで強制中断する用)。
@@ -1697,6 +1664,6 @@ NP2KaiModule({
     requestAnimationFrame(frame);
 
 }).catch(function (e) {
-    setDriveName('fdd', 0, 'Error: ' + e);
+    showFatal('QuuBee init error: ' + e);
     console.error(e);
 });

@@ -334,8 +334,10 @@
         return { ok: true, files, info };
     }
 
-    // 拡張子がディスクイメージか (UI 側 accept / 振り分け用)
-    const DISK_IMAGE_RE = /\.(d88|d77|d98|88d|98d|fdi|hdm|xdf|2hd|dup|flp|dcp|dcu|nfd|hdb|dd6|ddb)$/i;
+    // 拡張子がディスクイメージか (UI 側 accept / 振り分け用)。恒久対応外の拡張子
+    // (nfd/hdb/dd6/ddb/fdd) も含める — extractDiskImage まで届けば UNSUPPORTED_EXT の
+    // 明示メッセージが出る (含めないと汎用「Unsupported file」になり理由が伝わらない)。
+    const DISK_IMAGE_RE = /\.(d88|d77|d98|88d|98d|fdi|hdm|xdf|2hd|dup|flp|dcp|dcu|nfd|hdb|dd6|ddb|fdd)$/i;
     function isDiskImageName(name) { return DISK_IMAGE_RE.test(name); }
 
     const api = { extractDiskImage, isDiskImageName, DISK_IMAGE_RE,

@@ -1,5 +1,33 @@
 # CHANGELOG
 
+## [サイト側コードの棚卸し — 旧ディスクブート機構の撤去 + デッドコード/残骸の掃除] — 2026-06-12
+
+サイト側 (web/) を「もう使わないデッドコード」「商用ソフト起動の窓口になりうる痕跡 (ディスク
+イメージブート等)」の 2 観点でレビューし、検出 6 件を全て解消 (JS/sh/docs のみ・Wasm 不変)。
+公開 UI からのブート導線が無いこと、diskimage.js が「ブートせず取り出すだけ」であることは確認済み。
+
+- **旧ディスクブート機構 `loadDiskFromBlob` を撤去** (bridge.js): FDD A/B + HDD C/D への任意イメージ
+  挿入+リセット (=ブート) のロジック一式と `np2kai_insert_hdd` cwrap・複数スロット管理 (slotPaths) を
+  削除。ドライブスロット UI 撤去 (ccce1a5, 2026-06-01) 以来の死に経路で、再配線一発で「ユーザー画像
+  ブート」が復活しうる形だった。`loadLoaderDisk` は loader.d88 専用に縮退 — 毎 Run pristine な内容を
+  固定パス `/tmp/loader.d88` へ書き直して A: に挿入 (旧: 連番パス+旧イメージ unlink。前 Run の
+  ゲスト書き込みを持ち越さない性質は維持)、挿入失敗は throw で Run ハンドラの catch に乗せる。
+- **no-op の `driveEls`/`setDriveName` を削除し、エラー表示を復活** (bridge.js): `.drive` 要素は
+  ccce1a5 で HTML から全廃済みでセレクタは常に空 = 初期化失敗・ディスク挿入失敗・最後の catch の
+  エラーが**画面に一切出ていなかった**。`showFatal()` (Run バーのステータス行 + console.error) に集約。
+- **`web/db` symlink + `db/games.json` を削除**: フィンガープリント DB 構想 (concept v3 で廃止) の
+  残骸。コード参照ゼロなのに deploy.sh の `cp -rL` で実体化され**公開サイトに乗っていた**。
+  batscript.js の言及コメントも書き換え。
+- **FreeDOS `boot.d88` を `web/assets/` → `tools/testdata/` へ移動**: フロント未参照のテスト専用素材
+  (bench_frame.js の CPU ベンチ題材 + diskimage_test.js の FAT12 再帰コーパス)。deploy.sh の個別除外
+  行も不要になり削除。CLAUDE.md の構造図を実態に同期 (loader.d88/testdata 追記)。
+- **diskimage.js `DISK_IMAGE_RE` に `fdd` を追加**: UNSUPPORTED_EXT の VFDD 明示メッセージが UI 振り
+  分け (isDiskImageName) で堰き止められ到達不能だったのを解消 (nfd/hdb 等と同じ扱いに)。
+- **空の `web/ui/` を削除**。
+- 検証: `node --check` 3 ファイル / diskimage_test **30/30** / batscript_test **51/51** /
+  bench_frame 81.2fps (insert_r=0、新パスで動作) / deploy.sh を一時 dist へ実行し
+  **db/・ui/・boot.d88 が公開物から消えたこと**と loader/np2kai_boot/freepats の同梱を確認。
+
 ## [ファイラ UI 全面整理 — ヘッダ状態機械・完全リセット・選択 2 軸化・ラベル英語化 (プロダクト層パス第 2 弾)] — 2026-06-12
 
 開発最初期のままだったファイラ UI をユーザーと対話的に再設計 (JS/CSS のみ・Wasm 不変、ブラウザ実機

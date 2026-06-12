@@ -254,8 +254,8 @@ qb/
 │   ├── player/diskimage.js # ディスクイメージ→FAT12/16 取り出し (ブートせず)
 │   ├── player/magimage.js # PC-98 .MAG (MAKI02) 画像デコーダ
 │   ├── assets/
-│   │   ├── boot.d88       # FreeDOS(98) 2HD (起動完走しない、TODO)
-│   │   ├── np2kai_boot.d88 # 自己起動最小ディスク (動作確認用)
+│   │   ├── np2kai_boot.d88 # 自己起動最小ディスク (HELLO 待機画面)
+│   │   ├── loader.d88     # Phase 3 DOS ローダディスク
 │   │   └── font.bmp       # フォント
 │   ├── np2kai_core.js     # ビルド成果物（gitignore）
 │   └── np2kai_core.wasm   # ビルド成果物（gitignore）
@@ -266,7 +266,8 @@ qb/
 │   ├── boot_hello/        # 最小自己起動ディスク (HELLO NP2KAI 表示)
 │   ├── vsync_test/        # Day 0c VSYNC IRQ 配送確認用 boot disk
 │   ├── dos_loader/        # Phase 3: boot.asm + make_d88.py + hello.com.py + build.sh
-│   └── np2kai_patches/    # NP2kai 改変を patch 化 (build.sh が自動適用)
+│   ├── np2kai_patches/    # NP2kai 改変を patch 化 (build.sh が自動適用)
+│   └── testdata/          # テスト専用素材 (FreeDOS boot.d88 — bench_frame/diskimage_test 用。デプロイ対象外)
 ├── docs/
 │   └── structure.md       # 構成詳細
 ├── CLAUDE.md

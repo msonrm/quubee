@@ -19,7 +19,7 @@ const NP2KaiModule = require(path.join(WEB, 'np2kai_core.js'));
     M.FS.writeFile('/tmp/FONT.BMP', new Uint8Array(fs.readFileSync(path.join(WEB, 'assets/font.bmp'))));
     const handle = M.ccall('np2kai_create', 'number', [], []);
     if (!handle) { console.error('np2kai_create failed'); process.exit(1); }
-    M.FS.writeFile('/tmp/boot.d88', new Uint8Array(fs.readFileSync(path.join(WEB, 'assets/boot.d88'))));
+    M.FS.writeFile('/tmp/boot.d88', new Uint8Array(fs.readFileSync(path.join(ROOT, 'tools/testdata/boot.d88'))));
     const r = M.ccall('np2kai_insert_fdd', 'number', ['number', 'string', 'number', 'number'],
         [handle, '/tmp/boot.d88', 0, 0]);
     const runFrame = M.cwrap('np2kai_run_frame', null, ['number']);
