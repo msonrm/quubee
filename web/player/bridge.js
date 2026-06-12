@@ -295,6 +295,7 @@ NP2KaiModule({
     const textBodyEl  = document.getElementById('text-body');
     const textHeadEl  = document.getElementById('text-head-name');   // head 内のファイル名 span
     const textPopoutBtn = document.getElementById('text-popout');    // 別窓ビューア起動ボタン
+    const textSaveBtn = document.getElementById('text-save');        // 表示中ファイルのダウンロード保存
     const textImageEl = document.getElementById('text-image');       // .MAG 画像プレビュー canvas (text 面と排他)
     const openArchiveBtn = document.getElementById('open-archive');
     const addArchiveBtn  = document.getElementById('add-archive');
@@ -370,6 +371,17 @@ NP2KaiModule({
     const isReadme   = (n) => /readme|read\.me|よみ|説明|どきゅめんと/i.test(n);
     const isImageName = (n) => /\.mag$/i.test(n);   // PC-98 標準画像 (MAKI02)。.MKI は別系統で未対応
     const baseName   = (n) => n.slice(n.lastIndexOf('/') + 1);   // /run 相対 → ファイル名
+    // DOS 8.3 (ASCII) 名か — ＋Add の単体ファイル受け入れ / Save ボタン有効化の共通判定。
+    // /run の名前正準形は SJIS 生バイトだが、ブラウザの File.name / download 名は Unicode。
+    // 逆変換 (Unicode→SJIS エンコーダ) を持たずに往復を成立させるため、出入りとも
+    // 変換不要な ASCII 8.3 名に限定する (= Save できたものは必ず ＋Add で戻せる対称性)。
+    // 許可文字は DOS の有効ファイル名文字 (英数 + !#$%&'()@^_`{}~-)。デバイス名は /run に
+    // 置けてもゲストの open がデバイス I/O に化けるため弾く。
+    const DOS83_RE = /^[A-Za-z0-9!#$%&'()@^_`{}~-]{1,8}(\.[A-Za-z0-9!#$%&'()@^_`{}~-]{1,3})?$/;
+    const DOS_DEVICE_NAMES = new Set(['CON', 'PRN', 'AUX', 'NUL', 'CLOCK$',
+        'COM1', 'COM2', 'COM3', 'COM4', 'LPT1', 'LPT2', 'LPT3']);
+    const isDos83Name = (n) =>
+        DOS83_RE.test(n) && !DOS_DEVICE_NAMES.has(n.split('.')[0].toUpperCase());
     const fmtSize = (n) => n >= 1024 ? `${(n / 1024) | 0}K` : `${n}`;
     const fmtTime = (d) => {
         if (!d) return '';
@@ -490,6 +502,21 @@ NP2KaiModule({
 
     // 直近に表示した .MAG (別窓ポップアップ用に保持)。null = テキスト表示中。
     let currentImage = null;
+    // ビューアに表示中のエントリ (Save ボタンの対象)。focusedEntry とは別物 —
+    // EXE/COM をタップすると focused は動くがビューアの中身は前のままなので、
+    // 「ファイル名の隣の Save はそのファイルを保存する」を成立させるには表示追従が要る。
+    let viewedEntry = null;
+
+    // Save ボタンを表示中エントリに同期する。有効化は ASCII 8.3 名のみ
+    // (＋Add 読み戻しと対称 — 書き出せたものは必ず戻せる)。漢字名等は無効化+理由表示。
+    function showSaveFor(ent) {
+        viewedEntry = ent;
+        textSaveBtn.hidden = false;
+        const ok = isDos83Name(baseName(ent.name));
+        textSaveBtn.disabled = !ok;
+        textSaveBtn.title = ok ? 'このファイルをダウンロード保存'
+                               : '保存は半角英数の 8.3 名のみ (＋Add で読み戻せる名前に限定)';
+    }
 
     // 表示エリアを「テキスト」モードに切替 (画像 canvas を隠し pre を出す)。
     function showTextMode() { currentImage = null; textImageEl.hidden = true; textBodyEl.hidden = false; }
@@ -511,6 +538,7 @@ NP2KaiModule({
         textBodyEl.textContent = decodeSjisText(bytes).replace(/\r\n?/g, "\n");
         textBodyEl.scrollTop = 0;
         textPopoutBtn.hidden = false;   // 本文があるので別窓ボタンを出す
+        showSaveFor(ent);
     }
 
     // デコード済 MAG を canvas へ描く (アスペクト/200ライン縦2倍は intrinsic で持たせ、
@@ -541,6 +569,7 @@ NP2KaiModule({
             textHeadEl.textContent = sjisName(ent.name);
             textBodyEl.textContent = `画像をデコードできませんでした:\n${e.message}`;
             textBodyEl.scrollTop = 0; textPopoutBtn.hidden = false;
+            showSaveFor(ent);   // デコード不能でも生バイトの保存はできる
             return;
         }
         currentImage = img;
@@ -548,6 +577,7 @@ NP2KaiModule({
         renderImageTo(textImageEl, img);
         textBodyEl.hidden = true; textImageEl.hidden = false;
         textPopoutBtn.hidden = false;
+        showSaveFor(ent);
     }
 
     // 起動 .bat を解釈し、実際に走らせる主プログラム entry + 引数テンプレを解決する。
@@ -616,6 +646,23 @@ NP2KaiModule({
                 const data = new Uint8Array(await file.arrayBuffer());
                 M.FS.writeFile('/run/' + file.name, data);
                 mergeEntries([{ name: file.name, data, mtime: file.lastModified ? new Date(file.lastModified) : null }]);
+            } else if (append) {
+                // ＋Add 限定: 任意の単体ファイルを /run に重ねる (Save したセーブの読み戻し /
+                // 自作データ・MML 等の持ち込み)。ASCII 8.3 名のみ (上記 isDos83Name の対称性)。
+                // 新規 Open / ドロップは従来どおり弾く — 誤ドロップで束を閉じない安全弁。
+                if (!isDos83Name(file.name)) {
+                    runStatusEl.textContent =
+                        `Not a DOS 8.3 (ASCII) name: ${file.name} — rename and retry`;
+                    return;
+                }
+                ensureRunDir();
+                const data = new Uint8Array(await file.arrayBuffer());
+                // 既存エントリと大文字小文字だけ違う名前は既存側の表記に揃える (MEMFS は
+                // case-sensitive なので、素直に書くと同名異 case のファイルが 2 つできる)。
+                const prior = loadedEntries.find((e) => e.name.toLowerCase() === file.name.toLowerCase());
+                const rel = prior ? prior.name : file.name;
+                M.FS.writeFile('/run/' + rel, data);
+                mergeEntries([{ name: rel, data, mtime: file.lastModified ? new Date(file.lastModified) : null }]);
             } else {
                 runStatusEl.textContent =
                     `Unsupported file: ${file.name} (.lzh / .zip / disk image / .com / .exe)`;
@@ -704,6 +751,8 @@ NP2KaiModule({
         textHeadEl.textContent = '';
         textBodyEl.textContent = WELCOME_BODY;
         textPopoutBtn.hidden = true;
+        textSaveBtn.hidden = true;
+        viewedEntry = null;
         renderFileList();
     }
 
@@ -1084,6 +1133,7 @@ NP2KaiModule({
 
     // ---- filer 配線: ファイル選択 / ＋追加 / クリア / ドロップ / 仕切り ----
     const fileInput = document.getElementById('file-input');
+    const pickerAcceptNew = fileInput.accept;   // 新規 Open 用の拡張子フィルタ (HTML の accept)
     let pickerAppend = false;
     fileInput.addEventListener('change', () => {
         if (fileInput.files && fileInput.files[0]) {
@@ -1092,10 +1142,12 @@ NP2KaiModule({
         }
     });
     openArchiveBtn.addEventListener('click', () => {
-        pickerAppend = false; fileInput.click();     // 新規 (前の束を閉じて展開)
+        pickerAppend = false; fileInput.accept = pickerAcceptNew;
+        fileInput.click();                           // 新規 (前の束を閉じて展開)
     });
     addArchiveBtn.addEventListener('click', () => {
-        pickerAppend = true; fileInput.click();      // 同じ /run/ に重ねて展開 (HD インストール)
+        pickerAppend = true; fileInput.accept = '';  // ＋Add は単体ファイルも受けるので無フィルタ
+        fileInput.click();                           // 同じ /run/ に重ねて展開 (HD インストール)
     });
     closeRunBtn.addEventListener('click', () => {
         // 破壊的 (ゲーム停止 + 取り出したファイル/セーブ消滅) なので確認を挟む。
@@ -1212,6 +1264,21 @@ NP2KaiModule({
     textPopoutBtn.addEventListener('click', openViewer);
     document.getElementById('viewer-close').addEventListener('click', closeViewer);
     viewerModalEl.addEventListener('click', (e) => { if (e.target === viewerModalEl) closeViewer(); });
+
+    // 表示中ファイルをダウンロード保存。/run ライブ反映は entry オブジェクトを同一性
+    // 保持で更新するので、実行中にゲームが書き換えたセーブも最新の data が落ちる。
+    textSaveBtn.addEventListener('click', () => {
+        if (!viewedEntry || textSaveBtn.disabled) return;
+        const url = URL.createObjectURL(
+            new Blob([viewedEntry.data], { type: 'application/octet-stream' }));
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = baseName(viewedEntry.name);   // ASCII 8.3 のみ有効なので符号化問題なし
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+    });
 
     renderFileList();   // 初期表示 (空一覧)
 

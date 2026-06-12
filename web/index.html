@@ -143,14 +143,15 @@ body.panel-hidden #panel, body.panel-hidden #divider { display: none; }
     display: flex; align-items: center; gap: 6px;
 }
 #text-head-name { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* テキスト/画像を大きめポップアップ (別窓) で開くボタン。content-agnostic に作り、
-   将来 .MAG 画像ビューアもこのモーダルに相乗りさせる */
-#text-popout {
+/* テキスト/画像を大きめポップアップ (別窓) で開くボタンと、表示中ファイルの
+   ダウンロード保存ボタン (ASCII 8.3 名のみ有効 — ＋Add 読み戻しとの対称性)。 */
+#text-popout, #text-save {
     flex: 0 0 auto; background: #fbf9f3; color: #176bb3; border: 1px solid #c8c0ae;
     border-radius: 3px; padding: 1px 7px; font: inherit;
     cursor: pointer; opacity: .8;
 }
-#text-popout:hover { opacity: 1; background: #e9e3d3; }
+#text-popout:hover, #text-save:hover:enabled { opacity: 1; background: #e9e3d3; }
+#text-save:disabled { opacity: .35; cursor: default; }
 #text-body {
     flex: 1 1 auto; overflow: auto; padding: 8px 10px;
     /* 等幅 + CJK 対応 (AA・かな・標準罫線を崩さない)。インラインは「紙」で読みやすく、
@@ -246,6 +247,7 @@ body.panel-hidden #panel, body.panel-hidden #divider { display: none; }
             <div id="text-head" hidden>
                 <span id="text-head-name"></span>
                 <button id="text-popout" title="別窓で大きく表示" hidden>View</button>
+                <button id="text-save" hidden>Save</button>
             </div>
             <pre id="text-body">QuuBee — PC-98 フリーソフトのブラウザプレイヤー
 
@@ -255,8 +257,9 @@ body.panel-hidden #panel, body.panel-hidden #divider { display: none; }
 
   ・ファイル一覧から readme などを開いて読みながら、
   ・EXE / COM を選んで [▶ Run] で起動できます。
-  ・ドロップはいつでも「新しく開く」。重ねて展開したいときは [＋Add]
-  　（HD インストール風・パッチ当てに）。
+  ・ドロップはいつでも「新しく開く」。重ねるときは [＋Add]
+  　（HD インストール風・パッチ当て・[Save] したセーブや自作データの
+  　　単体読み戻しに。単体ファイルは半角英数 8.3 名のみ）。
   ・ディスクイメージはブートせず、中のファイルだけを取り出します
   　（自己起動・非 FAT のイメージは対象外）。
   ・右上「▦ パネル」でこの欄を隠すと画面が広がります。
