@@ -427,10 +427,10 @@ NP2KaiModule({
     }
 
     function renderFileList() {
-        // ヘッダは 2 状態 (タブ的メタファ):
-        //   空       = 左なし / 右「開く」のみ (開き方は歓迎文が説明)
-        //   ロード済 = 左「× 書庫名」(×=この書庫を閉じる) / 右「＋追加」のみ
-        //     — ロード中の「開く」は出さない: ドロップが常に新規だし、ピッカー派は ×→開く が直感的
+        // ヘッダは 2 状態 (タブ的メタファ)。左 = 環境の開閉 / 右端 = ファイル入出力:
+        //   空       = 左「Open」のみ (開き方は歓迎文が説明)
+        //   ロード済 = 左「× 書庫名」(×=この書庫を閉じる) / 右「＋Add」のみ
+        //     — ロード中の「Open」は出さない: ドロップが常に新規だし、ピッカー派は ×→Open が直感的
         const has = loadedArchives.length > 0;
         arcNameEl.textContent = has ? loadedArchives.join(' + ') : '';
         closeRunBtn.hidden = !has;
@@ -624,6 +624,7 @@ NP2KaiModule({
     // ドロップ/選択された 1 ファイルを開く。append=true で /run/ に重ねて展開。
     async function openDropped(file, append) {
         document.body.classList.remove('panel-hidden');   // 投入時はパネルを表示
+        syncStageMax();                                   // 取っ手のツールチップも追従
         currentDir = '';                                  // 投入時はルート表示に戻す
         try {
             // 新規 = 前の束を完全に閉じてから (機械リセット込み — 前のゲームが左画面で
@@ -1182,6 +1183,8 @@ NP2KaiModule({
         const app = document.getElementById('app');
         let dragging = false;
         divider.addEventListener('mousedown', (e) => {
+            if (e.target !== divider) return;   // 取っ手のクリックを幅調整に化けさせない
+            if (document.body.classList.contains('panel-hidden')) return;   // 最大化中は幅調整なし
             dragging = true; e.preventDefault(); document.body.style.userSelect = 'none';
         });
         window.addEventListener('mousemove', (e) => {
@@ -1196,11 +1199,20 @@ NP2KaiModule({
         });
     })();
 
-    // パネル表示/非表示トグル (没入用)。隠すと canvas が全幅に広がる。
-    document.getElementById('panel-toggle').addEventListener('click', () => {
+    // 仕切りの取っ手: ゲーム画面の最大化⇄復帰 (シアターモード相当)。最大化中も仕切りは
+    // 右端に細く残るため、取っ手は両状態で同じ場所に居続ける (戻すボタンが行方不明に
+    // ならない)。グリフ ▸/◂ は CSS ::before が body.panel-hidden で切り替える。
+    const stageMaxBtn = document.getElementById('stage-max');
+    function syncStageMax() {
+        stageMaxBtn.title = document.body.classList.contains('panel-hidden')
+            ? 'パネルを戻す' : 'ゲーム画面を最大化';
+    }
+    stageMaxBtn.addEventListener('click', () => {
         document.body.classList.toggle('panel-hidden');
+        syncStageMax();
         fitCanvas(offscreen.width || 640, offscreen.height || 400);
     });
+    syncStageMax();
 
     // ---- 別窓ビューア (readme/テキストを大きく読む。将来 .MAG 画像も同じモーダルに相乗り) ----
     const viewerModalEl  = document.getElementById('viewer-modal');
@@ -1253,12 +1265,16 @@ NP2KaiModule({
         if (currentImage) {                       // 画像: canvas を大きく
             renderImageTo(viewerCanvasEl, currentImage);
             viewerBodyEl.hidden = true; viewerCanvasEl.hidden = false;
+            viewerModalEl.hidden = false;
         } else {                                  // テキスト: pre を大きく (+ %X タグリンク)
             renderViewerText(textBodyEl.textContent);
-            viewerBodyEl.scrollTop = 0;
             viewerCanvasEl.hidden = true; viewerBodyEl.hidden = false;
+            // scrollTop=0 は必ずモーダル表示「後」に行う。display:none 中の代入は no-op で、
+            // Chrome は再表示時に前回のスクロール位置を復元するため、非表示中に 0 を入れても
+            // 前回位置が残る (「View を開くと前回の位置のまま」の真因)。
+            viewerModalEl.hidden = false;
+            viewerBodyEl.scrollTop = 0;
         }
-        viewerModalEl.hidden = false;
     };
     const closeViewer = () => { viewerModalEl.hidden = true; };
     textPopoutBtn.addEventListener('click', openViewer);

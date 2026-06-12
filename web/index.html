@@ -29,18 +29,25 @@ body {
 #screen.captured { cursor: none; outline: 1px solid #6af; }
 #canvas-wrap.dragover { box-shadow: inset 0 0 0 2px #6af; }
 
-/* パネル表示/非表示トグル (canvas 右上、常時表示・通常は控えめ) */
-#panel-toggle {
-    position: absolute; top: 6px; right: 6px; z-index: 20;
-    background: #222; color: #9bd; border: 1px solid #456; border-radius: 3px;
-    padding: 2px 8px; font: inherit; cursor: pointer; opacity: .35;
-}
-#panel-toggle:hover { opacity: 1; }
-
-/* 仕切り */
-#divider { flex: 0 0 6px; cursor: col-resize; background: #cfc8b9; }
+/* 仕切り + 取っ手 (ゲーム画面の最大化⇄復帰)。最大化中も仕切りは右端に細く残り、
+ * 取っ手が両状態で同じ物理位置に居続ける = 「戻すボタン」が行方不明にならない。
+ * 旧 ▦ Panel オーバーレイ (canvas 右上) は「見えるほど邪魔・控えめだと不可視」の
+ * ジレンマがあり廃止。 */
+#divider { flex: 0 0 6px; cursor: col-resize; background: #cfc8b9; position: relative; }
 #divider:hover { background: #9db7d6; }
-body.panel-hidden #panel, body.panel-hidden #divider { display: none; }
+body.panel-hidden #panel { display: none; }
+body.panel-hidden #divider { cursor: default; }
+body.panel-hidden #divider:hover { background: #cfc8b9; }
+#stage-max {
+    position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+    width: 16px; height: 56px; padding: 0; z-index: 20;
+    background: #ece6d8; color: #5a5344; border: 1px solid #b3ab97; border-radius: 4px;
+    font: inherit; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+}
+#stage-max:hover { background: #9db7d6; border-color: #7a96b5; color: #fff; }
+#stage-max::before { content: "▸"; }                    /* パネルが右へ畳まれる方向 */
+body.panel-hidden #stage-max::before { content: "◂"; }  /* パネルが左へ戻ってくる方向 */
 
 /* 右: filer (ヘッダ → 一覧 → Run バー → テキスト)
  * 配色 = 明るい紙系。ゲーム画面 (左・黒) と意図的にコントラストを付ける:
@@ -57,7 +64,9 @@ body.panel-hidden #panel, body.panel-hidden #divider { display: none; }
     flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between;
     gap: 8px; padding: 6px 10px; background: #ece6d8; border-bottom: 1px solid #d8d1c0;
 }
-/* 左 = [× 書庫名] (タブ的メタファ: × はこの書庫を閉じる)。右 = 状態に応じたボタン */
+/* 左 = 環境の開閉 (空: Open / ロード済: × 書庫名)。右端 = ファイル入出力 (＋Add)。
+ * 「左 = 環境を開く/閉じる、右端 = ファイルの読み書き」の空間対応をビューアヘッダ
+ * (View=左 / Save=右端) とも揃え、誤クリックと迷いを減らす。 */
 .ph-left { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 0 1 auto; }
 .ph-right { flex: 0 0 auto; }
 /* 書庫名は表示専用 (タップ不可) なので、リンクと誤認させない無彩色寄りの題字に */
@@ -138,13 +147,14 @@ body.panel-hidden #panel, body.panel-hidden #divider { display: none; }
 /* 何も開いていない間 (歓迎文表示中) はヘッダ帯ごと出さない */
 #text-head[hidden] { display: none; }
 #text-head {
-    flex: 0 0 auto; padding: 3px 6px 3px 10px; background: #ece6d8; color: #5a5344;
+    flex: 0 0 auto; padding: 3px 6px; background: #ece6d8; color: #5a5344;
     border-bottom: 1px solid #d8d1c0;
     display: flex; align-items: center; gap: 6px;
 }
 #text-head-name { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* テキスト/画像を大きめポップアップ (別窓) で開くボタンと、表示中ファイルの
-   ダウンロード保存ボタン (ASCII 8.3 名のみ有効 — ＋Add 読み戻しとの対称性)。 */
+/* View = 別窓ポップアップ (ファイル名の左) / Save = ダウンロード保存 (ヘッダ右端、
+   ASCII 8.3 名のみ有効 — ＋Add 読み戻しとの対称性)。隣接させると誤クリックするので
+   左右に分離し、「右端 = ファイルの読み書き」をファイラヘッダの ＋Add と揃える。 */
 #text-popout, #text-save {
     flex: 0 0 auto; background: #fbf9f3; color: #176bb3; border: 1px solid #c8c0ae;
     border-radius: 3px; padding: 1px 7px; font: inherit;
@@ -221,14 +231,13 @@ body.panel-hidden #panel, body.panel-hidden #divider { display: none; }
     <div id="stage">
         <div id="canvas-wrap">
             <canvas id="screen" width="640" height="400"></canvas>
-            <button id="panel-toggle" title="パネルの表示/非表示">▦ Panel</button>
         </div>
     </div>
-    <div id="divider" title="ドラッグで幅を調整"></div>
+    <div id="divider" title="ドラッグで幅を調整"><button id="stage-max"></button></div>
     <div id="panel">
         <div id="panel-head">
-            <span class="ph-left"><button id="close-run" title="書庫を閉じる" hidden>×</button><span id="arc-name"></span></span>
-            <span class="ph-right"><button id="open-archive">Open</button><button id="add-archive" hidden>＋Add</button></span>
+            <span class="ph-left"><button id="open-archive">Open</button><button id="close-run" title="書庫を閉じる" hidden>×</button><span id="arc-name"></span></span>
+            <span class="ph-right"><button id="add-archive" hidden>＋Add</button></span>
         </div>
         <div id="crumbs" hidden></div>
         <div id="file-list"></div>
@@ -245,8 +254,8 @@ body.panel-hidden #panel, body.panel-hidden #divider { display: none; }
         </div>
         <div id="text-view">
             <div id="text-head" hidden>
-                <span id="text-head-name"></span>
                 <button id="text-popout" title="別窓で大きく表示" hidden>View</button>
+                <span id="text-head-name"></span>
                 <button id="text-save" hidden>Save</button>
             </div>
             <pre id="text-body">QuuBee — PC-98 フリーソフトのブラウザプレイヤー
@@ -262,10 +271,30 @@ body.panel-hidden #panel, body.panel-hidden #divider { display: none; }
   　　単体読み戻しに。単体ファイルは半角英数 8.3 名のみ）。
   ・ディスクイメージはブートせず、中のファイルだけを取り出します
   　（自己起動・非 FAT のイメージは対象外）。
-  ・右上「▦ パネル」でこの欄を隠すと画面が広がります。
+  ・左右の境目にある ▸ でゲーム画面を最大化（◂ で戻る）。
 
 ゲームは同梱していません。お手元のフリーソフトをどうぞ。
-画面クリックでマウスキャプチャ（ESC で解除）。</pre>
+画面クリックでマウスキャプチャ（ESC で解除）。
+
+────────────────────────────────────────
+
+QuuBee — a browser player for PC-98 freeware
+
+Drop a freeware archive (.lzh / .zip) or a disk image
+(.d88 / .fdi / .hdm etc.) onto this panel or the game screen.
+(You can also pick a file with [Open].)
+
+  - Open the readme and other files from the list, then
+  - select an EXE / COM and press [▶ Run] to start it.
+  - A drop always opens fresh. Use [＋Add] to layer files on top
+    (HD-install style, patches, or re-importing saves and your own
+    data exported with [Save]. Single files: ASCII 8.3 names only).
+  - Disk images are never booted — only the files inside are
+    extracted (self-booting / non-FAT images are not supported).
+  - The ▸ handle on the seam maximizes the game screen (◂ restores).
+
+No games are bundled. Bring your own freeware.
+Click the screen to capture the mouse (press ESC to release).</pre>
             <canvas id="text-image" hidden></canvas>
         </div>
     </div>
