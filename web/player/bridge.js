@@ -333,10 +333,17 @@ NP2KaiModule({
     const textHeadEl  = document.getElementById('text-head-name');   // head 内のファイル名 span
     const textPopoutBtn = document.getElementById('text-popout');    // 別窓ビューア起動ボタン
     const textImageEl = document.getElementById('text-image');       // .MAG 画像プレビュー canvas (text 面と排他)
+    const openArchiveBtn = document.getElementById('open-archive');
+    const addArchiveBtn  = document.getElementById('add-archive');
+    const closeRunBtn    = document.getElementById('close-run');
+    const textHeadBar = document.getElementById('text-head');        // ビューアのヘッダ帯 (何も開いていない間は隠す)
+    // 初期の歓迎文 (HTML 直書き) を退避 — 「閉じる」/新規オープンで復元する
+    const WELCOME_BODY = textBodyEl.textContent;
 
     let loadedEntries  = [];   // { name(=/run 相対), data, mtime }  path は last-wins
-    let selectedEntry  = null; // 実行対象に選んだ行 (EXE/COM もしくは 起動 .bat)
+    let selectedEntry  = null; // ▶ Run の実行対象 (EXE/COM もしくは 起動 .bat) — 一覧ではアイコンチップで示す
     let selectedRecipe = null; // selectedEntry が .bat の時の解決結果 { targetEntry, args, recipe }
+    let focusedEntry   = null; // いまタップ/表示中のファイル — 一覧では行背景で示す (実行対象とは別概念)
     let loadedArchives = [];   // 表示用の投入書庫名
     let currentDir     = '';   // ファイラの現在フォルダ (/run 相対, '' = ルート, 末尾 '/' 付き)
     const crumbsEl     = document.getElementById('crumbs');
@@ -445,8 +452,15 @@ NP2KaiModule({
     }
 
     function renderFileList() {
-        arcNameEl.textContent = loadedArchives.length
-            ? `書庫: ${loadedArchives.join(' + ')}` : '書庫をドロップ';
+        // ヘッダは 2 状態 (タブ的メタファ):
+        //   空       = 左なし / 右「開く」のみ (開き方は歓迎文が説明)
+        //   ロード済 = 左「× 書庫名」(×=この書庫を閉じる) / 右「＋追加」のみ
+        //     — ロード中の「開く」は出さない: ドロップが常に新規だし、ピッカー派は ×→開く が直感的
+        const has = loadedArchives.length > 0;
+        arcNameEl.textContent = has ? loadedArchives.join(' + ') : '';
+        closeRunBtn.hidden = !has;
+        addArchiveBtn.hidden = !has;
+        openArchiveBtn.hidden = has;
         renderCrumbs();
 
         // currentDir 直下の「フォルダ」と「ファイル」に振り分ける
@@ -472,8 +486,9 @@ NP2KaiModule({
             const row = document.createElement('div');
             row.className = 'frow dir';
             row.innerHTML =
-                `<span class="fn">📁 ${escapeHtml(sjisName(fn))}/</span>` +
-                `<span class="fsz">${folders.get(fn)} 件</span>` +
+                `<span class="fi">▸</span>` +
+                `<span class="fn">${escapeHtml(sjisName(fn))}/</span>` +
+                `<span class="fsz">${folders.get(fn)} files</span>` +
                 `<span class="fdt"></span>`;
             row.addEventListener('click', () => { currentDir += fn + '/'; renderFileList(); });
             fileListEl.appendChild(row);
@@ -488,11 +503,20 @@ NP2KaiModule({
             const isBat = isBatName(nm);
             const runnable = isBat || isExecName(nm);
             const row = document.createElement('div');
+            // 行の状態は 2 軸を別の手段で示す (混ぜない):
+            //   .sel   = いまタップ/表示中 (focusedEntry) → 行背景
+            //   .armed = ▶ Run の実行対象 (selectedEntry) → アイコンチップ (Run ボタンと同系緑)
             row.className = 'frow' + (isBat ? ' bat' : isExecName(nm) ? ' exec' : isTextName(nm) ? ' text' : '') +
-                            (ent === selectedEntry ? ' sel' : '');
-            const tag = isBat ? '▷ ' : isExecName(nm) ? '▶ ' : isImageName(nm) ? '🖼 ' : isTextName(nm) ? '・' : '  ';
+                            (ent === focusedEntry ? ' sel' : '') +
+                            (ent === selectedEntry ? ' armed' : '');
+            // 種別アイコンは専用カラム (.fi)。絵文字でなく本文フォントの幾何学記号で統一:
+            // ▶=起動できるもの (EXE/COM/.bat 共通 — 種別は色と拡張子が示す) / ≡=テキスト /
+            // ▨=画像 / ▸=フォルダ
+            const icon = (isBat || isExecName(nm)) ? '▶'
+                       : isImageName(nm) ? '▨' : isTextName(nm) ? '≡' : '';
             row.innerHTML =
-                `<span class="fn">${tag}${escapeHtml(sjisName(nm))}</span>` +
+                `<span class="fi">${icon}</span>` +
+                `<span class="fn">${escapeHtml(sjisName(nm))}</span>` +
                 `<span class="fsz">${fmtSize(ent.data.length)}</span>` +
                 `<span class="fdt">${fmtTime(ent.mtime)}</span>`;
             row.addEventListener('click', () =>
@@ -510,7 +534,10 @@ NP2KaiModule({
     // テキスト (readme / .bat 等) を表示
     // (起動 .bat の「解釈した起動順」を見せる用)。
     function openText(ent) {
+        focusedEntry = ent;          // 「いま表示中」を一覧の行背景に反映
+        renderFileList();
         showTextMode();
+        textHeadBar.hidden = false;
         textHeadEl.textContent = sjisName(ent.name);
         // DOS EOF (Ctrl-Z=0x1A) 以降は本文ではない。生バイトで切る
         // (0x1A は SJIS の trail バイト範囲外なので常に単独制御＝安全。
@@ -541,6 +568,9 @@ NP2KaiModule({
 
     // .MAG 画像をプレビュー表示 (テキスト面と排他)。デコード失敗時はテキストにフォールバック。
     function openImage(ent) {
+        focusedEntry = ent;          // 「いま表示中」を一覧の行背景に反映
+        renderFileList();
+        textHeadBar.hidden = false;
         let img;
         try { img = QBMag.decode(ent.data); }
         catch (e) {
@@ -569,12 +599,13 @@ NP2KaiModule({
     }
 
     function selectEntry(ent) {
+        focusedEntry = ent;          // タップした行として背景を付ける (実行対象になれなくても)
         if (isBatName(ent.name)) {
             // .bat は「作者の起動レシピ」。主プログラム + 引数を解決して run 対象にする。
             const rec = resolveBat(ent);
             if (!rec) {
                 // 起動できなくても中身は読ませる (③敬意: 作者のレシピ)。
-                runStatusEl.textContent = `${sjisName(ent.name)}: 起動する実行ファイルが見つかりません`;
+                runStatusEl.textContent = `${sjisName(ent.name)}: launch target not found`;
                 openText(ent);
                 return;
             }
@@ -589,6 +620,10 @@ NP2KaiModule({
             selectedRecipe = null;
             runEntryEl.textContent = sjisName(ent.name);
         }
+        // Run 対象が切り替わったので、前の対象に関するメッセージ (exited 等) を流さない。
+        // テキスト閲覧タップでは消さない —「Multiple programs — select one」の誘導は
+        // プログラム未選択のあいだ表示され続けるべき情報のため (ここに来た時点で解消済み)。
+        runStatusEl.textContent = '';
         runButton.disabled = false;
         renderFileList();   // ハイライト更新
     }
@@ -597,9 +632,11 @@ NP2KaiModule({
     async function openDropped(file, append) {
         document.body.classList.remove('panel-hidden');   // 投入時はパネルを表示
         currentDir = '';                                  // 投入時はルート表示に戻す
-        runStatusEl.textContent = `読み込み中: ${file.name}…`;
         try {
-            if (!append) { clearRunDir(); loadedEntries = []; loadedArchives = []; selectedEntry = null; selectedRecipe = null; }
+            // 新規 = 前の束を完全に閉じてから (機械リセット込み — 前のゲームが左画面で
+            // 走り続けない)。追加 (＋追加ボタン経由のみ) は重ね展開で機械もそのまま。
+            if (!append) closeBundle();
+            runStatusEl.textContent = `Loading ${file.name}…`;
             if (/\.(lzh|zip)$/i.test(file.name)) {
                 mergeEntries(await extractArchiveToFs(file, true));   // /run/ クリアは上で実施済
             } else if (qbDiskImage.isDiskImageName(file.name)) {
@@ -618,25 +655,25 @@ NP2KaiModule({
                 mergeEntries([{ name: file.name, data, mtime: file.lastModified ? new Date(file.lastModified) : null }]);
             } else {
                 runStatusEl.textContent =
-                    `未対応のファイル: ${file.name} (.lzh / .zip / ディスクイメージ / .com / .exe)`;
+                    `Unsupported file: ${file.name} (.lzh / .zip / disk image / .com / .exe)`;
                 return;
             }
             loadedArchives.push(file.name);
-            // 既定エントリ自動選択。起動 .bat があれば最優先 (作者の意図した起動レシピ)。
-            // 複数 .bat = 起動方法 (音源モード/シナリオ/難易度等) の選択肢なのでユーザーに選ばせる。
-            // .bat 無しは従来どおり .exe > .com。
-            let multiBat = false;
+            // 既定エントリ自動選択 — 「一意なら選ぶ、曖昧なら選ばず一言だけ誘導」。
+            // 起動 .bat があれば最優先 (作者の意図した起動レシピ)。複数 .bat = 起動方法
+            // (音源モード/シナリオ等) の選択肢。 .bat 無しは .exe が一意ならそれ
+            // (.com は音源ドライバ等の脇役が多いので、.exe 1 本ならそれが本体とみなせる)。
+            // 旧実装は EXE 複数でも先頭を黙って選んでいたが、曖昧な推測はしない。
+            let needChoice = false;
             if (!selectedEntry) {
                 const bats = loadedEntries.filter((e) => isBatName(e.name) && resolveBat(e));
-                if (bats.length === 1) {
-                    selectEntry(bats[0]);
-                } else if (bats.length > 1) {
-                    multiBat = true;
-                } else {
-                    const def = loadedEntries.find((e) => /\.exe$/i.test(e.name))
-                             || loadedEntries.find((e) => /\.com$/i.test(e.name));
-                    if (def) selectEntry(def);
-                }
+                const exes = loadedEntries.filter((e) => /\.exe$/i.test(e.name));
+                const coms = loadedEntries.filter((e) => /\.com$/i.test(e.name));
+                if (bats.length === 1) selectEntry(bats[0]);
+                else if (bats.length > 1) needChoice = true;
+                else if (exes.length === 1) selectEntry(exes[0]);
+                else if (exes.length === 0 && coms.length === 1) selectEntry(coms[0]);
+                else if (exes.length + coms.length > 0) needChoice = true;
             }
             renderFileList();
             // readme 系を自動で開く (③敬意: 作者の声をまず見せる)
@@ -644,9 +681,9 @@ NP2KaiModule({
                         || loadedEntries.find((e) => /\.doc$/i.test(e.name))
                         || loadedEntries.find((e) => isTextName(e.name));
             if (readme) openText(readme);
-            // 複数 .bat (音源モード選択肢) の時だけ誘導を出す。それ以外は一覧自体が示すので無表示。
-            runStatusEl.textContent = multiBat
-                ? '起動 .bat が複数あります — 一覧から起動方法を選んでください'
+            // 曖昧 (起動候補が複数) の時だけ一言誘導 — Run が無効な理由を黙らせない。
+            runStatusEl.textContent = needChoice
+                ? 'Multiple programs — select one from the list to run'
                 : '';
         } catch (e) {
             runStatusEl.textContent = `ERROR: ${e.message}`;
@@ -679,6 +716,32 @@ NP2KaiModule({
             if (e === '.' || e === '..') continue;
             rmrf('/run/' + e);
         }
+    }
+
+    // 機械をページ読込直後と同じ待機状態 (自己起動 HELLO ディスク) に戻す。
+    // 直前まで走っていたゲーム/常駐 TSR はこのリセットで消える。staged image は
+    // loader-start フックが 1 ショット消費済み (g_stage.ready=0) なので再実行されない。
+    function resetToIdle() {
+        if (currentPoll && pollDosExit._stop) pollDosExit._stop();   // exit 監視を停止
+        insertFdd(handle, '/tmp/boot.d88', 0, 0);   // 失敗しても reset で BIOS 待機になるだけ
+        reset(handle);
+    }
+
+    // 開いている束を完全に閉じる: 機械リセット + /run クリア + UI を初期状態 (歓迎文) へ。
+    // 「✕ 閉じる」と新規オープンの前処理で共用する。
+    function closeBundle() {
+        resetToIdle();
+        clearRunDir();
+        loadedEntries = []; loadedArchives = []; selectedEntry = null; selectedRecipe = null;
+        focusedEntry = null;
+        currentDir = '';
+        runEntryEl.textContent = '—'; runButton.disabled = true; runCmdline.value = '';
+        showTextMode();
+        textHeadBar.hidden = true;   // 歓迎文の上にヘッダ帯は出さない
+        textHeadEl.textContent = '';
+        textBodyEl.textContent = WELCOME_BODY;
+        textPopoutBtn.hidden = true;
+        renderFileList();
     }
 
     // DOS パス区切り '\' を '/' に変換。ただし SJIS 2 バイト文字の trail バイト 0x5C
@@ -765,7 +828,7 @@ NP2KaiModule({
         if (midiLoadState === 'ready')  return true;
         if (midiLoadState === 'failed') return false;   // 同セッション内の再試行はしない
         try {
-            runStatusEl.textContent = 'MIDI: 初回のみ音色データ (約33MB) を取得します…';
+            runStatusEl.textContent = 'MIDI: fetching instrument data (~33 MB, first time only)…';
             // 各 fetch は res.ok を検査する。fetch は 404 等で reject しないので、未配備や欠損を
             // 見逃すと HTML エラーページの中身を .pat として書き込んでしまう (VERMOUTH は欠損 .pat を
             // 黙って飛ばす = inst_bankloadex が SUCCESS のままなので無音の原因が分かりにくい)。
@@ -788,7 +851,7 @@ NP2KaiModule({
             let done = 0, bytes = 0;
             const showProgress = () => {
                 const pct = Math.round(done / total * 100);
-                runStatusEl.textContent = `MIDI 音色データ取得中… ${done}/${total} (${pct}%, ${(bytes / 1048576).toFixed(1)}MB)`;
+                runStatusEl.textContent = `MIDI: downloading instruments… ${done}/${total} (${pct}%, ${(bytes / 1048576).toFixed(1)} MB)`;
             };
             showProgress();
             await Promise.all(idx.pats.map(async (rel) => {
@@ -799,7 +862,7 @@ NP2KaiModule({
                 done++; bytes += buf.byteLength;
                 showProgress();
             }));
-            runStatusEl.textContent = `MIDI 音色データ取得完了 (${(bytes / 1048576).toFixed(1)}MB) — 起動準備中…`;
+            runStatusEl.textContent = `MIDI: instruments ready (${(bytes / 1048576).toFixed(1)} MB) — preparing…`;
             const ok = enableMidiNow(handle);   // VERMOUTH 構築 (次の reset で結線)
             midiLoadState = ok ? 'ready' : 'failed';
             if (!ok) console.warn('[midi] VERMOUTH ロード失敗 (freepats 配置/timidity.cfg を確認)');
@@ -917,17 +980,17 @@ NP2KaiModule({
 
     // staging 後の共通処理: loader.d88 を A: に挿入してリセット → /run ライブ反映 → exit polling。
     async function runStaged(label) {
-        runStatusEl.textContent = `${label}: loader.d88 を A: に挿入してリセット中…`;
+        runStatusEl.textContent = `${label}: starting…`;
         await loadLoaderDisk();
-        runStatusEl.textContent = `${label}: 実行中 (exit を polling 中…)`;
+        runStatusEl.textContent = `${label}: running`;
         stopButton.hidden = false;
         startRunSync();                 // 実行中の /run 変化を一覧へライブ反映
         pollDosExit((code) => {
             stopRunSync();
             syncRunDir();               // 終了直前の書き込みを最終取り込み
             runStatusEl.textContent = code === -1
-                ? `${label}: 中断 (Stop)`
-                : `${label}: 終了 (exit code=${code})`;
+                ? `${label}: stopped`
+                : `${label}: exited (code ${code})`;
             runButton.disabled = false;
             stopButton.hidden = true;
         });
@@ -980,7 +1043,10 @@ NP2KaiModule({
     }
 
     stopButton.addEventListener('click', () => {
-        if (pollDosExit._stop) pollDosExit._stop();
+        // exit 監視の停止だけでなく機械もリセット — 「止まった」が見た目どおりになる
+        // (旧実装は監視停止のみで、ゲーム/TSR は左画面で走り続けていた)。
+        // /run のセーブ類は onExit の syncRunDir が取り込み済み。
+        resetToIdle();
         stopButton.blur();
     });
 
@@ -995,7 +1061,7 @@ NP2KaiModule({
             // 失敗しても続行 (= FM/BEEP 経路でそのまま起動、無音にはならない)。
             if (selectedRecipe && qbBatScript.usesMidi(selectedRecipe.recipe)) {
                 const ok = await ensureMidiLoaded();
-                if (!ok) runStatusEl.textContent = 'MIDI 準備に失敗 — 音源無しで起動します';
+                if (!ok) runStatusEl.textContent = 'MIDI setup failed — launching without MIDI';
             }
             // ②/③ .bat の逐次実行: 1 DOS セッション内で順次 EXEC する (音源ドライバ TSR が
             // 本体に効く)。if errorlevel/goto 入り (③) は C 側文インタプリタが分岐を実行時評価、
@@ -1009,7 +1075,7 @@ NP2KaiModule({
                         const ncmd = stmts.filter((s) => s.op === 'cmd').length;
                         const label = `${sjisName(selectedEntry.name)} `
                             + `(if/goto 分岐を実行時評価, ${ncmd} cmd)`;
-                        runStatusEl.textContent = `${label} を起動…`;
+                        runStatusEl.textContent = `Launching ${label}…`;
                         if (await stageAndRunBatch(stmts, label)) return;
                         // stage 失敗 (C 側上限超過) → 下の ① 単一起動へフォールスルー
                     }
@@ -1019,7 +1085,7 @@ NP2KaiModule({
                     if (seq && seq.length > 1) {
                         const label = `${sjisName(selectedEntry.name)} → `
                             + `${sjisName(baseName(selectedRecipe.targetEntry.name))} (+${seq.length - 1} cmd)`;
-                        runStatusEl.textContent = `${label} を起動…`;
+                        runStatusEl.textContent = `Launching ${label}…`;
                         await stageAndRunScript(seq, label);
                         return;
                     }
@@ -1038,7 +1104,7 @@ NP2KaiModule({
                 label   = sjisName(target.name);
             }
             const isExe = /\.exe$/i.test(target.name);
-            runStatusEl.textContent = `${label} を起動…`;
+            runStatusEl.textContent = `Launching ${label}…`;
             await stageAndRunImage(target.data, cmdline, label, isExe);
         } catch (e) {
             runStatusEl.textContent = `ERROR: ${e.message}`;
@@ -1058,24 +1124,23 @@ NP2KaiModule({
             fileInput.value = '';
         }
     });
-    document.getElementById('add-archive').addEventListener('click', () => {
-        pickerAppend = true; fileInput.click();      // 同じ /run/ に重ねて展開
+    openArchiveBtn.addEventListener('click', () => {
+        pickerAppend = false; fileInput.click();     // 新規 (前の束を閉じて展開)
     });
-    arcNameEl.addEventListener('click', () => {
-        pickerAppend = false; fileInput.click();      // 新規 (クリアして展開)
+    addArchiveBtn.addEventListener('click', () => {
+        pickerAppend = true; fileInput.click();      // 同じ /run/ に重ねて展開 (HD インストール)
     });
-    document.getElementById('clear-run').addEventListener('click', () => {
-        clearRunDir();
-        loadedEntries = []; loadedArchives = []; selectedEntry = null; selectedRecipe = null; currentDir = '';
-        runEntryEl.textContent = '—'; runButton.disabled = true;
-        showTextMode();
-        textHeadEl.textContent = 'readme / テキスト'; textBodyEl.textContent = '';
-        textPopoutBtn.hidden = true;
-        renderFileList();
-        runStatusEl.textContent = 'クリアしました';
+    closeRunBtn.addEventListener('click', () => {
+        // 破壊的 (ゲーム停止 + 取り出したファイル/セーブ消滅) なので確認を挟む。
+        // ドロップ新規はあえて確認なし: ファイルを選んで落とすのは十分意図的な操作で、
+        // 毎回ダイアログを挟むと「書庫→即プレイ」のお手軽さが削れる。
+        if (!confirm(`「${loadedArchives.join(' + ')}」を閉じます。\n実行中のゲームは停止し、取り出したファイル (セーブ含む) は消えます。`)) return;
+        closeBundle();
+        runStatusEl.textContent = 'Closed';
     });
 
-    // ドロップ受け: 右パネルと canvas エリア。中身があれば追記、無ければ新規。
+    // ドロップ受け: 右パネルと canvas エリア。常に「新規」(予測可能性優先 —
+    // 重ね展開したい時は ＋追加 ボタンから)。
     function wireDrop(el) {
         el.addEventListener('dragover', (e) => {
             e.preventDefault(); el.classList.add('dragover'); e.dataTransfer.dropEffect = 'copy';
@@ -1086,7 +1151,7 @@ NP2KaiModule({
         el.addEventListener('drop', (e) => {
             e.preventDefault(); el.classList.remove('dragover');
             const f = e.dataTransfer.files && e.dataTransfer.files[0];
-            if (f) openDropped(f, loadedEntries.length > 0);
+            if (f) openDropped(f, false);
         });
     }
     wireDrop(document.getElementById('panel'));

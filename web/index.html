@@ -57,7 +57,11 @@ body.panel-hidden #panel, body.panel-hidden #divider { display: none; }
     flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between;
     gap: 8px; padding: 6px 10px; background: #ece6d8; border-bottom: 1px solid #d8d1c0;
 }
-#arc-name { color: #176bb3; font-weight: bold; cursor: pointer;
+/* 左 = [× 書庫名] (タブ的メタファ: × はこの書庫を閉じる)。右 = 状態に応じたボタン */
+.ph-left { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 0 1 auto; }
+.ph-right { flex: 0 0 auto; }
+/* 書庫名は表示専用 (タップ不可) なので、リンクと誤認させない無彩色寄りの題字に */
+#arc-name { color: #5a5344; font-weight: bold;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #panel-head button {
     background: #fbf9f3; color: #5a5344; border: 1px solid #c8c0ae; border-radius: 3px;
@@ -84,12 +88,17 @@ body.panel-hidden #panel, body.panel-hidden #divider { display: none; }
     border-bottom: 1px solid #eee8da;
 }
 .frow:hover { background: #efeadd; }
-.frow.sel { background: #dfedcd; }
-.frow .fn  { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; color: #3a352c; }
-.frow.dir  .fn { color: #a96a14; }
-.frow.exec .fn { color: #2f7d1f; }
-.frow.bat  .fn { color: #9c6d00; font-weight: bold; }   /* 起動レシピ (作者の意図) を目立たせる */
-.frow.text .fn { color: #176bb3; }
+.frow.sel { background: #e2ecf7; }                 /* いまタップ/表示中の行 (中立な青系) */
+/* ▶ Run の実行対象はアイコンチップで示す (Run ボタンと同系の緑 = 「Run で走るのはこれ」) */
+.frow.armed .fi { background: #2f6614; color: #fff; border-radius: 3px; }
+/* 種別アイコン専用カラム。固定幅+中央寄せで、グリフ幅の個体差が行頭を揺らさない。
+ * 種別色は行 (.frow) に置き、アイコンと名前の両方に乗せる (サイズ/日時列は固有色で不変)。 */
+.frow .fi  { flex: 0 0 1.4em; text-align: center; }
+.frow .fn  { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; }
+.frow.dir  { color: #a96a14; }
+.frow.exec { color: #2f7d1f; }
+.frow.bat  { color: #9c6d00; }         /* 起動レシピ — 金茶の種別色のみで示す (太字は他種別と不揃い) */
+.frow.text { color: #176bb3; }
 .frow .fsz { flex: 0 0 auto; color: #97907e; min-width: 56px;  text-align: right; }
 .frow .fdt { flex: 0 0 auto; color: #97907e; min-width: 138px; text-align: right; }
 
@@ -98,7 +107,6 @@ body.panel-hidden #panel, body.panel-hidden #divider { display: none; }
     flex: 0 0 auto; display: flex; flex-direction: column; gap: 4px;
     padding: 6px 10px; background: #f1ecdf;
     border-top: 1px solid #ddd6c6; border-bottom: 1px solid #ddd6c6;
-    font-size: 13px;
 }
 .rb-line1 { display: flex; align-items: center; gap: 10px; }
 /* Entry 名は長くても省略 (…) し、Run/Stop ボタンを絶対に押し出さない */
@@ -127,9 +135,11 @@ body.panel-hidden #panel, body.panel-hidden #divider { display: none; }
 #text-view {
     flex: 1 1 55%; min-height: 60px; display: flex; flex-direction: column;
 }
+/* 何も開いていない間 (歓迎文表示中) はヘッダ帯ごと出さない */
+#text-head[hidden] { display: none; }
 #text-head {
     flex: 0 0 auto; padding: 3px 6px 3px 10px; background: #ece6d8; color: #5a5344;
-    font-size: 12px; border-bottom: 1px solid #d8d1c0;
+    border-bottom: 1px solid #d8d1c0;
     display: flex; align-items: center; gap: 6px;
 }
 #text-head-name { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -137,7 +147,7 @@ body.panel-hidden #panel, body.panel-hidden #divider { display: none; }
    将来 .MAG 画像ビューアもこのモーダルに相乗りさせる */
 #text-popout {
     flex: 0 0 auto; background: #fbf9f3; color: #176bb3; border: 1px solid #c8c0ae;
-    border-radius: 3px; padding: 1px 7px; font: inherit; font-size: 12px;
+    border-radius: 3px; padding: 1px 7px; font: inherit;
     cursor: pointer; opacity: .8;
 }
 #text-popout:hover { opacity: 1; background: #e9e3d3; }
@@ -158,19 +168,22 @@ body.panel-hidden #panel, body.panel-hidden #divider { display: none; }
 
 /* 別窓ビューア — readme/テキストを大きく読む (.MAG 画像も同じモーダルで大きく見る) */
 #viewer-modal {
-    position: fixed; inset: 0; z-index: 100; background: rgba(0,0,0,.66);
+    /* 暗幕はごく薄く + 背景ぼかしで分離 (濃い暗幕はポップアップが埋没する)。
+     * 黒いゲーム画面側ではドロップシャドウが効かないため、box の境界線で輪郭を出す。 */
+    position: fixed; inset: 0; z-index: 100; background: rgba(20, 16, 8, .2);
+    backdrop-filter: blur(2px);
     display: flex; align-items: center; justify-content: center;
 }
 #viewer-modal[hidden] { display: none; }
 #viewer-box {
     display: flex; flex-direction: column; width: min(900px, 92vw); height: min(80vh, 100%);
-    background: #161616; border: 1px solid #456; border-radius: 5px;
-    box-shadow: 0 8px 40px rgba(0,0,0,.6); overflow: hidden;
+    background: #161616; border: 1px solid #5b7390; border-radius: 5px;
+    box-shadow: 0 12px 48px rgba(0,0,0,.55); overflow: hidden;
 }
 #viewer-head {
     flex: 0 0 auto; display: flex; align-items: center; gap: 8px;
     padding: 5px 6px 5px 12px; background: #1c1c1c; color: #9cf;
-    font-size: 12px; border-bottom: 1px solid #2a2a2a;
+    font-size: 14px; border-bottom: 1px solid #2a2a2a;
 }
 #viewer-title { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #viewer-close {
@@ -207,14 +220,14 @@ body.panel-hidden #panel, body.panel-hidden #divider { display: none; }
     <div id="stage">
         <div id="canvas-wrap">
             <canvas id="screen" width="640" height="400"></canvas>
-            <button id="panel-toggle" title="パネルの表示/非表示">▦ パネル</button>
+            <button id="panel-toggle" title="パネルの表示/非表示">▦ Panel</button>
         </div>
     </div>
     <div id="divider" title="ドラッグで幅を調整"></div>
     <div id="panel">
         <div id="panel-head">
-            <span id="arc-name">書庫をドロップ</span>
-            <span><button id="add-archive">＋追加</button><button id="clear-run">クリア</button></span>
+            <span class="ph-left"><button id="close-run" title="書庫を閉じる" hidden>×</button><span id="arc-name"></span></span>
+            <span class="ph-right"><button id="open-archive">Open</button><button id="add-archive" hidden>＋Add</button></span>
         </div>
         <div id="crumbs" hidden></div>
         <div id="file-list"></div>
@@ -230,19 +243,20 @@ body.panel-hidden #panel, body.panel-hidden #divider { display: none; }
             <div id="run-status"></div>
         </div>
         <div id="text-view">
-            <div id="text-head">
-                <span id="text-head-name">readme / テキスト</span>
-                <button id="text-popout" title="別窓で大きく表示" hidden>⛶ 拡大</button>
+            <div id="text-head" hidden>
+                <span id="text-head-name"></span>
+                <button id="text-popout" title="別窓で大きく表示" hidden>View</button>
             </div>
             <pre id="text-body">QuuBee — PC-98 フリーソフトのブラウザプレイヤー
 
 フリーソフトの書庫 (.lzh / .zip) や ディスクイメージ (.d88 / .fdi / .hdm 等) を、
-右のパネルかゲーム画面にドロップしてください。
-（「書庫をドロップ」をクリックでファイル選択も可）
+このパネルかゲーム画面にドロップしてください。
+（[Open] でファイル選択も可）
 
   ・ファイル一覧から readme などを開いて読みながら、
   ・EXE / COM を選んで [▶ Run] で起動できます。
-  ・「＋追加」で別の書庫を同じ場所に重ねて展開（HD インストール風）。
+  ・ドロップはいつでも「新しく開く」。重ねて展開したいときは [＋Add]
+  　（HD インストール風・パッチ当てに）。
   ・ディスクイメージはブートせず、中のファイルだけを取り出します
   　（自己起動・非 FAT のイメージは対象外）。
   ・右上「▦ パネル」でこの欄を隠すと画面が広がります。
@@ -259,7 +273,7 @@ body.panel-hidden #panel, body.panel-hidden #divider { display: none; }
     <div id="viewer-box">
         <div id="viewer-head">
             <span id="viewer-title"></span>
-            <button id="viewer-close" title="閉じる (Esc)">✕ 閉じる</button>
+            <button id="viewer-close" title="閉じる (Esc)">×</button>
         </div>
         <pre id="viewer-body"></pre>
         <canvas id="viewer-canvas" hidden></canvas>
