@@ -37,8 +37,9 @@
 #define FX_STEREOSPREAD	23
 #define FX_REV_WET		0.40f		/* wet 加算量。全体(ドラム/ベース含む)に一律掛かるので per-part より控えめに。tunable */
 #define FX_REV_INGAIN	0.025f		/* comb 入力ゲイン */
-#define FX_REV_INLP		0.45f		/* リバーブ入力の 1-pole LPF 係数 (~4.5kHz相当)。共鳴しやすい高域を入口で削り、
-										 * 持続音での金属的なハウリング/ビビりを抑える (ドライ音は明るいまま)。1.0=無効 */
+#define FX_REV_HPF		0.05f		/* リバーブ入力の 1-pole HPF 係数 (~400Hz)。**低音をリバーブに入れない**ことで、
+										 * 低域の「ぼわんぼわん」ブーミー共鳴 / 重いビビり(低域がリバーブで溜まり共鳴+飽和)を
+										 * 根本的に抑える (リバーブの定番設計)。ドライの低音はそのまま。値↑で低域カットを強める */
 
 static const int fx_combtune[FX_NUMCOMBS] =
 				{ 1116, 1188, 1277, 1356, 1422, 1491, 1557, 1617 };
@@ -91,7 +92,7 @@ static void fx_alloc(QBHDL *h) {
 	int i, total = 0;
 	int sc[FX_NUMCOMBS], scr[FX_NUMCOMBS], sa[FX_NUMALLPASS], sar[FX_NUMALLPASS];
 	float *fp;
-	float room = 0.62f, damp = 0.40f;	/* 0.80/0.25→0.62/0.40: 残響を短め+暗めにして共鳴(ハウリング)を抑制 */
+	float room = 0.70f, damp = 0.30f;	/* 入力 HPF で低域ブームを断つ前提で、残響の豪華さは戻す (長め・やや明るめ) */
 
 	for (i = 0; i < FX_NUMCOMBS; i++) {
 		sc[i]  = fx_scale(fx_combtune[i], h->samprate);
@@ -127,9 +128,10 @@ static void fx_apply(QBHDL *h, float *fbuf, UINT n) {
 	for (i = 0; i < n; i++) {
 		float in = (fbuf[i*2] + fbuf[i*2+1]) * FX_REV_INGAIN;
 		float oL = 0.0f, oR = 0.0f;
-		/* 入力 pre-LPF: 共鳴しやすい高域を comb に入れる前に削る (ハウリング抑制) */
-		h->fx_inlp += FX_REV_INLP * (in - h->fx_inlp);
-		in = h->fx_inlp;
+		/* 入力 pre-HPF: 低音を comb に入れない (低域ブーミー共鳴 =「ぼわんぼわん」/重いビビり対策)。
+		 * fx_inlp は低域を追従する LPF 状態、in - fx_inlp で高域通過にする。 */
+		h->fx_inlp += FX_REV_HPF * (in - h->fx_inlp);
+		in = in - h->fx_inlp;
 		for (j = 0; j < FX_NUMCOMBS; j++) {
 			oL += fx_comb_run(&h->combL[j], in, h->comb_fb, h->damp1, h->damp2);
 			oR += fx_comb_run(&h->combR[j], in, h->comb_fb, h->damp1, h->damp2);
