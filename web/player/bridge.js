@@ -639,7 +639,7 @@ NP2KaiModule({
                 const res = qbDiskImage.extractDiskImage(
                     new Uint8Array(await file.arrayBuffer()), file.name);
                 if (!res.ok) {
-                    runStatusEl.textContent = `取り出せません: ${file.name} — ${res.reason}`;
+                    runStatusEl.textContent = `Cannot extract: ${file.name} — ${res.reason}`;
                     return;
                 }
                 mergeEntries(writeEntriesToRun(res.files));

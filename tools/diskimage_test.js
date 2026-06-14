@@ -143,7 +143,7 @@ console.log('\n[positive] FreeDOS boot.d88 is real FAT12 with deep subdirs');
 console.log('\n[unsupported ext]');
 for (const ext of ['nfd', 'fdd', 'ddb']) {
     const res = di.extractDiskImage(new Uint8Array(16), 'x.' + ext);
-    ok(!res.ok && /対応外/.test(res.reason), `.${ext} should be rejected as unsupported`);
+    ok(!res.ok && /Unsupported/.test(res.reason), `.${ext} should be rejected as unsupported`);
     console.log(`  .${ext}: ${res.reason}`);
 }
 

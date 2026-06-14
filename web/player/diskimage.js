@@ -131,11 +131,11 @@
 
     // 拡張子で恒久対応外を判定 (NFD=プロテクト保全 / BKDSK=BASIC / VFDD)。
     const UNSUPPORTED_EXT = {
-        nfd: 'NFD (T98-Next, セクタID保持=プロテクト保全用)',
-        hdb: 'BKDSK (BASIC ディスク)',
-        dd6: 'BKDSK (BASIC ディスク)',
-        ddb: 'BKDSK (BASIC ディスク)',
-        fdd: 'VFDD (仮想FDD)',
+        nfd: 'NFD (T98-Next, keeps sector IDs = for copy-protection preservation)',
+        hdb: 'BKDSK (BASIC disk)',
+        dd6: 'BKDSK (BASIC disk)',
+        ddb: 'BKDSK (BASIC disk)',
+        fdd: 'VFDD (virtual FDD)',
     };
 
     function deContainer(b, ext) {
@@ -313,13 +313,13 @@
     function extractDiskImage(bytes, filename) {
         const ext = (filename.split('.').pop() || '').toLowerCase();
         if (UNSUPPORTED_EXT[ext]) {
-            return { ok: false, reason: '対応外の形式です: ' + UNSUPPORTED_EXT[ext] };
+            return { ok: false, reason: 'Unsupported format: ' + UNSUPPORTED_EXT[ext] };
         }
         let flat;
         try {
             flat = deContainer(bytes, ext);
         } catch (e) {
-            return { ok: false, reason: 'イメージ解析に失敗: ' + e.message };
+            return { ok: false, reason: 'Image parse failed: ' + e.message };
         }
         const vols = imageToVolumes(flat);
         let files = [], info = null;
@@ -329,7 +329,7 @@
         }
         if (!files.length) {
             return { ok: false,
-                reason: 'FAT ファイルシステムが見つかりません (自己起動 / 非FAT イメージは中身取り出しに非対応)' };
+                reason: 'No FAT filesystem found (self-booting / non-FAT images are not supported for content extraction)' };
         }
         return { ok: true, files, info };
     }

@@ -1,5 +1,23 @@
 # CHANGELOG
 
+## [レビュー追従: テストハーネス堅牢化 + UI メッセージ英語化] — 2026-06-15
+
+現行コードのレビューで見つかった小修正をまとめて適用 (プロダクトのロジックは不変・Wasm 再ビルド不要)。
+
+- **lh5_test.js が SJIS 名の参照ファイルでテスト全体を巻き込んで落ちていた**: `lha xq` が展開する
+  Shift-JIS 名 (封魔録同梱 readme 等) は不正な UTF-8 なので、Node の `readdirSync` を string モードで
+  読むと名前が U+FFFD に潰れ、その壊れた名前では `readFileSync` が ENOENT で停止していた。`readdirSync` を
+  `encoding:'buffer'` で生バイト名として読み、終始 latin1 (= 生バイトの 1:1 写像) で扱うことで archive.js の
+  `e.name` (MEMFS 規約 = SJIS 生バイトの latin1 写像) と表現を揃え、SJIS 名エントリもバイト一致検証できる
+  ように修正 (fs 呼び出しには `Buffer.from(p,'latin1')` を渡し生バイトのまま OS へ届ける)。結果
+  575 entries byte-match・fail 0 (huma_ts2.lzh が 13/13 に復活)。
+- **MIDI テストの "VERMOUTH" 表記を "TinySoundFont" に修正**: 合成エンジンは 2026-06-14 に
+  VERMOUTH(GUS .pat) → TinySoundFont(SF2) へ載せ替え済みだが、`tools/{mpu_midi,midi_serial,midi_fx}_test.js`
+  のコメント/ログに旧名が残っていた (表記のみ・実害なし)。
+- **Run ボタン周辺のユーザー向けメッセージを英語化**: `web/player/bridge.js` の「取り出せません: …」と
+  `web/player/diskimage.js` の対応外/解析失敗/FAT 無し reason を英語へ (UI ラベル/ステータスは英語・散文は
+  日本語の i18n 方針に整合)。`tools/diskimage_test.js` の reason アサートも追従。
+
 ## [FindFirst の wildcard をフィールド照合に / 8.3 空白パディング open] — 2026-06-15
 
 みゅあっぷ98 (MUAP98) で「サンプル曲を選んで Enter しても開けない」というユーザー報告。filer の動きを

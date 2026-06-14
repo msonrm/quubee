@@ -25,17 +25,27 @@ function findLzh(dir, out) {
     return out;
 }
 
-// 抽出ツリーを再帰走査して {正規化相対パス -> Buffer} を作る (basename も別キーで持つ)
+// 抽出ツリーを再帰走査して {正規化相対パス -> Buffer} を作る (basename も別キーで持つ)。
+//
+// パス/名前は終始 latin1 文字列 (= 生バイトの 1:1 写像) で扱う。lha が展開する Shift-JIS 名
+// (例: 封魔録同梱の readme) は不正な UTF-8 なので、readdir を string モードで読むと Node が
+// U+FFFD に潰してしまい、その壊れた名前では readFileSync が ENOENT で落ちてテスト全体が
+// 中断していた。encoding:'buffer' で生バイト名を取り、latin1 で文字列化することで
+// archive.js の e.name (= SJIS 生バイトの latin1 写像、MEMFS 規約) と同じ表現に揃うので、
+// SJIS 名エントリもバイト一致検証できる。fs 呼び出しには Buffer.from(p,'latin1') を渡して
+// 生バイトのまま OS に届ける。
 function indexTree(dir, base, map) {
-    for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
-        const full = path.join(dir, ent.name);
-        if (ent.isDirectory()) indexTree(full, base, map);
-        else {
-            const rel = path.relative(base, full).replace(/\\/g, '/').toLowerCase();
-            const data = fs.readFileSync(full);
-            map.set(rel, data);
-            if (!map.has(ent.name.toLowerCase())) map.set(ent.name.toLowerCase(), data);
-        }
+    for (const nameBuf of fs.readdirSync(Buffer.from(dir, 'latin1'), { encoding: 'buffer' })) {
+        const name = nameBuf.toString('latin1');
+        const full = dir + '/' + name;
+        const fullBuf = Buffer.from(full, 'latin1');
+        if (fs.statSync(fullBuf).isDirectory()) { indexTree(full, base, map); continue; }
+        const rel = full.slice(base.length).replace(/^\/+/, '').replace(/\\/g, '/').toLowerCase();
+        let data;
+        try { data = fs.readFileSync(fullBuf); }
+        catch (e) { console.log(`  ⊘ 参照ファイル読込スキップ (${e.code}): ${rel}`); continue; }
+        map.set(rel, data);
+        if (!map.has(name.toLowerCase())) map.set(name.toLowerCase(), data);
     }
 }
 

@@ -1,15 +1,15 @@
 #!/usr/bin/env node
-// MPU-PC98 (MPU98II) → VERMOUTH 結線 (B, 2026-06-13) の headless 検証。
+// MPU-PC98 (MPU98II) → TinySoundFont 結線 (B, 2026-06-13) の headless 検証。
 //
 // 背景: huma_ts2 (東方封魔録) 等の「MIDI(MPU)」モードは、ゲームの MIDI ドライバ (KAJA MMD) が
 //   MPU-PC98 (I/O 0xE0D0) を直接叩く。RS-MIDI (シリアル 8251) 経路とは別系統。
 //   従来は np2cfg.mpuenable=0 で 0xE0D0 が未 attach のため MIDI モードが無音だった。
-//   修正で enable_midi_now() が MPU98II も限定有効化し、commng_create(MPU98II) が VERMOUTH に
+//   修正で enable_midi_now() が MPU98II も限定有効化し、commng_create(MPU98II) が TinySoundFont に
 //   結線されるようになった (qb_commng.c)。
 //
 // 何を確かめるか: MMD の代わりに MPU-401 UART へ直接書く極小 COM を 1 つ走らせ、
 //   1) MIDI 有効化前 (= boot 直後・mpuenable=0) は 0xE0D0 が無反応で無音、
-//   2) enable_midi_now + reset 後は MPU 経由の note-on が VERMOUTH で合成され audio peak > 0、
+//   2) enable_midi_now + reset 後は MPU 経由の note-on が TinySoundFont で合成され audio peak > 0、
 //   3) reset を跨いだ 2 サイクル目でも鳴り続ける (毎リセットで cmmidi を再登録する回帰)
 //   を確認する。
 //
@@ -103,11 +103,11 @@ const MPU_NOTEON_COM = new Uint8Array([
     // ---- ① MIDI 無効のまま (mpuenable=0): 0xE0D0 未 attach → 無音のはず ----
     const peakOff = runCycle('MIDI OFF (mpuenable=0)');
 
-    // ---- ② enable_midi_now (= bridge.js ensureMidiLoaded の C 呼び出し): VERMOUTH + MPU98II 有効化 ----
+    // ---- ② enable_midi_now (= bridge.js ensureMidiLoaded の C 呼び出し): TinySoundFont + MPU98II 有効化 ----
     const midiOk = M.ccall('np2kai_enable_midi_now', 'number', ['number'], [handle]);
-    console.log('enable_midi_now → VERMOUTH ロード =', !!midiOk);
+    console.log('enable_midi_now → TinySoundFont ロード =', !!midiOk);
 
-    const peakOn1 = runCycle('MIDI ON cycle1 (MPU→VERMOUTH)');
+    const peakOn1 = runCycle('MIDI ON cycle1 (MPU→TinySoundFont)');
     const peakOn2 = runCycle('MIDI ON cycle2 (reset 跨ぎ)');
     console.log('---');
 
@@ -124,13 +124,13 @@ const MPU_NOTEON_COM = new Uint8Array([
         && peakOn1 >= AUDIBLE && peakOn2 >= AUDIBLE
         && (peakOn1 - peakOff) >= DELTA_MIN && (peakOn2 - peakOff) >= DELTA_MIN;
     if (passOff && passOn) {
-        console.log('PASS — MPU-PC98 (0xE0D0) → VERMOUTH 結線成立: MIDI OFF=baseline 止まり (note 非合成) / '
+        console.log('PASS — MPU-PC98 (0xE0D0) → TinySoundFont 結線成立: MIDI OFF=baseline 止まり (note 非合成) / '
             + 'ON=note-on を合成 / reset 跨ぎでも継続');
         process.exit(0);
     }
     if (!passOff) console.log(`  ★ MIDI OFF で peak=${peakOff} > ${BASELINE_MAX} = 0xE0D0 が無効時にも note を合成? (限定有効化が崩れている)`);
     if (!midiOk)  console.log('  ★ enable_midi_now 失敗 (freepats 確認)');
-    if (midiOk && (peakOn1 < AUDIBLE || peakOn1 - peakOff < DELTA_MIN)) console.log(`  ★ cycle1 が baseline 止まり (peak=${peakOn1}) = MPU→VERMOUTH 未結線`);
+    if (midiOk && (peakOn1 < AUDIBLE || peakOn1 - peakOff < DELTA_MIN)) console.log(`  ★ cycle1 が baseline 止まり (peak=${peakOn1}) = MPU→TinySoundFont 未結線`);
     if (midiOk && (peakOn2 < AUDIBLE || peakOn2 - peakOff < DELTA_MIN)) console.log(`  ★ cycle2 が baseline 止まり (peak=${peakOn2}) = reset 跨ぎの再登録バグ`);
     console.log('FAIL', { peakOff, peakOn1, peakOn2 });
     process.exit(1);

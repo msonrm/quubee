@@ -1,12 +1,12 @@
 #!/usr/bin/env node
-// RS-MIDI (シリアル) → VERMOUTH 結線 (A, 2026-06-05) の headless 検証。
+// RS-MIDI (シリアル) → TinySoundFont 結線 (A, 2026-06-05) の headless 検証。
 //
 // 何を確かめるか:
 //   TW212 の TWMIDI.BAT (= `middrv -X1 -t3` / `twins2` / `middrv -r`) を、bridge.js と同じ
 //   「② ミニ COMMAND.COM で 1 セッション逐次 EXEC」経路で起動し、
 //     1) RS-MIDI ルーティングが生きているか (qb_serial_midi_active)
 //     2) MIDDRV が実際にシリアルへ MIDI バイトを送出し、我々が捕捉したか (qb_serial_midi_bytes > 0)
-//     3) その結果 VERMOUTH が非無音の PCM を出すか (audio RMS > 0)
+//     3) その結果 TinySoundFont が非無音の PCM を出すか (audio RMS > 0)
 //   を確認する。従来 (com_nc) は 1=false / 2=0 / 3=無音 だった。
 //
 // ローカル限定: ゲーム書庫 (TW212.LZH) と freepats は再配布不可でコミットしない (project 方針)。
@@ -92,7 +92,7 @@ const latin1 = (s) => { const u = new Uint8Array(s.length); for (let i = 0; i < 
 
     // ---- 遅延 MIDI 有効化 (= bridge.js ensureMidiLoaded の C 呼び出し)。冪等。 ----
     const midiOk = M.ccall('np2kai_enable_midi_now', 'number', ['number'], [handle]);
-    console.log('enable_midi_now → VERMOUTH ロード =', !!midiOk);
+    console.log('enable_midi_now → TinySoundFont ロード =', !!midiOk);
 
     const runFrame = M.cwrap('np2kai_run_frame', null, ['number']);
     const keyDown  = M.cwrap('np2kai_key_down', null, ['number', 'number']);
@@ -106,7 +106,7 @@ const latin1 = (s) => { const u = new Uint8Array(s.length); for (let i = 0; i < 
     function runCycle(label) {
         stageScript();
         M.ccall('np2kai_insert_fdd', 'number', ['number', 'string', 'number', 'number'], [handle, '/tmp/loader.d88', 0, 0]);
-        M.ccall('np2kai_reset', null, ['number'], [handle]);   // ← この reset で serial→VERMOUTH が結線される
+        M.ccall('np2kai_reset', null, ['number'], [handle]);   // ← この reset で serial→TinySoundFont が結線される
         const tapKey = (code) => { keyDown(handle, code); for (let i = 0; i < 2; i++) runFrame(handle); keyUp(handle, code); };
         const startBytes = bytes();
         let peak = 0;

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // GS システムエフェクト (reverb/chorus/delay) の headless 検証 (2026-06-13)。
 //
-// VERMOUTH に追加したセンドバス + Freeverb が効いているかを A/B で確認する。
+// TinySoundFont に追加したセンドバス + Freeverb が効いているかを A/B で確認する。
 // 手法: MPU-401 UART へメロディ音 1 つ (ch0, note64) を撃つ極小 COM を走らせ、音を保持する。
 // リバーブ ON ではセンドした残響が積み上がり、サステイン区間の出力レベルがドライより明確に高くなる。
 // 同一入力を np2kai_debug_midi_fx(0|1) で A/B し、ON のサステインが OFF を有意に上回ることを確認する。
@@ -55,8 +55,8 @@ const NOTE_COM = new Uint8Array([
     if (!handle) { console.error('np2kai_create failed'); process.exit(1); }
 
     const midiOk = M.ccall('np2kai_enable_midi_now', 'number', ['number'], [handle]);
-    console.log('enable_midi_now → VERMOUTH ロード =', !!midiOk);
-    if (!midiOk) skip('VERMOUTH ロード失敗');
+    console.log('enable_midi_now → TinySoundFont ロード =', !!midiOk);
+    if (!midiOk) skip('TinySoundFont ロード失敗');
 
     const runFrame = M.cwrap('np2kai_run_frame', null, ['number']);
     const fillFn   = M.cwrap('np2kai_audio_fill', null, ['number', 'number', 'number']);
