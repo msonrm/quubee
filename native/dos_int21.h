@@ -34,4 +34,9 @@ void     qb_dos_dta_set(uint16_t seg, uint16_t off);
 uint32_t qb_dos_fh_snapshot(void);
 void     qb_dos_fh_close_since(uint32_t snapshot);
 
+/* DOS パスで論理カレント (g_cwd) を変更する。.bat の cd と AH=3Bh CHDIR が共用。
+ * raw_dos = "\iv" / "..\x" / "A:\y" (バックスラッシュ/ドライブ接頭可)。
+ * 戻り値 0=成功 / 3=path not found。 */
+int qb_dos_chdir(const char *raw_dos);
+
 #endif /* QB_DOS_INT21_H */

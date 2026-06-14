@@ -692,6 +692,11 @@ static void read_dos_rel(uint16_t seg, uint16_t off, char *rel, size_t cap) {
     while (n + 1 < sizeof(raw)) {
         uint8_t c = peek8(base + i++);
         if (c == 0) break;
+        /* 8.3 フィールドのパディング空白を除去する。DOS の 8.3 名に空白は入らず (空白 = FCB の
+         * 埋め文字)、プログラムが FindFirst 結果を 11 byte FCB 形式で保持して "NAME    .EXT" の
+         * 形で再 open することがある (MUAP98 のファイラが選択曲を開く経路)。実 DOS の open は
+         * この空白を読み飛ばす。0x20 は SJIS のリード/トレイル範囲外なので DBCS を壊さない。 */
+        if (c == ' ') continue;
         /* DBCS ペアは素通し: SJIS トレイルバイトには 0x5C ("表"=95 5C 等) があり得るので、
          * リードバイトの次の 1 バイトをパス区切りと解釈してはならない (実 DOS と同じ)。 */
         if (sjis_is_lead(c) && n + 2 < sizeof(raw)) {
@@ -871,22 +876,52 @@ static struct {
 } g_find;
 
 /* DOS wildcard match: '?' は任意 1 文字、'*' は 0 文字以上。大小無視。 */
-static int dos_wildcard_match(const char *pat, const char *name) {
-    /* "8.3" に正規化せず、生 pattern と name を直接比較。
-     * 単純な再帰実装で十分 (パターンは短い)。 */
+/* 1 フィールド (name or ext、'.' を含まない) 内の glob 照合。'*' = 0 文字以上、'?' = 1 文字、
+ * その他は大小無視で一致。SJIS バイトも byte 単位で対称に tolower するので照合は安定。 */
+static int glob_field(const char *pat, const char *name) {
     if (*pat == '\0') return *name == '\0';
     if (*pat == '*') {
         while (*pat == '*') pat++;
         if (*pat == '\0') return 1;  /* 末尾 * は何でも OK */
         for (; *name; name++) {
-            if (dos_wildcard_match(pat, name)) return 1;
+            if (glob_field(pat, name)) return 1;
         }
-        return dos_wildcard_match(pat, name);
+        return glob_field(pat, name);
     }
     if (*name == '\0') return 0;
     if (*pat != '?' &&
         tolower((unsigned char)*pat) != tolower((unsigned char)*name)) return 0;
-    return dos_wildcard_match(pat + 1, name + 1);
+    return glob_field(pat + 1, name + 1);
+}
+
+/* DOS の FindFirst/Next wildcard 照合。
+ * pattern に '.' がある場合のみ実 DOS どおり「name.ext」のフィールドに分けて別々に照合する。
+ * これで "*.*" が拡張子の無い名前 (ディレクトリ NORM 等) にも一致する (ext フィールドが空 ⇔ "*")
+ * ―― 文字単位の素朴な照合では '.' が 'N' に一致せず取りこぼしていた (MUAP98 のファイラが \MUSIC の
+ * サブディレクトリを見つけられない真因)。
+ * pattern に '.' が無い場合は名前全体に対して従来の char glob を使う ―― 末尾 '*' は '.' を跨いで
+ * 全部を飲み込む ("FOO*"→"FOO.BAR" 可) が、ワイルドカード無しの "HTJL" は "HTJL.COM" に一致しない
+ * (実 DOS で pattern "HTJL" は ext=空にだけ一致 = 拡張子なしファイルのみ)。"HTJL" を "HTJL.COM" に
+ * 一致させると、まず素の名前で FindFirst して無ければ .COM/.EXE を補完するソフト (GS100=gsnake の
+ * 音源ドライバ起動) が誤った分岐に入り壊れる。
+ * 先頭の '.' は SJIS トレイル (0x40-0xFC) に出ないので区切り判定は SJIS 安全。 */
+static int dos_wildcard_match(const char *pat, const char *name) {
+    const char *pdot = strchr(pat, '.');
+    if (!pdot) return glob_field(pat, name);   /* '.' 無し pattern → 名前全体に char glob (従来挙動) */
+
+    char pbase[260], pext[260], nbase[260], next[260];
+    size_t n = (size_t)(pdot - pat);
+    if (n >= sizeof(pbase)) n = sizeof(pbase) - 1;
+    memcpy(pbase, pat, n); pbase[n] = '\0';
+    snprintf(pext, sizeof(pext), "%s", pdot + 1);
+
+    const char *ndot = strchr(name, '.');
+    n = ndot ? (size_t)(ndot - name) : strlen(name);
+    if (n >= sizeof(nbase)) n = sizeof(nbase) - 1;
+    memcpy(nbase, name, n); nbase[n] = '\0';
+    snprintf(next, sizeof(next), "%s", ndot ? ndot + 1 : "");
+
+    return glob_field(pbase, nbase) && glob_field(pext, next);
 }
 
 /* DTA に find 結果を書く。filename は "8.3" + 末尾 NUL を 13 byte 領域に詰める。
@@ -1855,21 +1890,23 @@ static void int21_3a_rmdir(void) {
     CPU_FLAG &= ~C_FLAG;
 }
 
-/* AH=3Bh CHDIR。DS:DX = 目標パス。論理カレント g_cwd (/run 相対) を更新する。
- * '.'/'..' を解決し、実在ディレクトリでなければ path not found(3)。 */
-static void int21_3b_chdir(void) {
-    /* 絶対 ("\\..." / "X:\\...") か相対かを判定するため raw を別途読む (CWD 前置前)。 */
-    uint32_t base = lin(CPU_DS, CPU_DX);
-    char c0 = (char)peek8(base), c1 = (char)peek8(base + 1);
-    uint32_t i = (c0 && c1 == ':') ? 2u : 0u;
+/* DOS パス文字列で論理カレント g_cwd (/run 相対) を変更する。
+ * raw_dos = "\iv" / "..\foo" / "A:\bar" 等 (バックスラッシュ・ドライブ接頭可)。
+ * '.'/'..' を解決し、実在ディレクトリでなければ path not found(3)。
+ * 戻り値 0=成功 / 3=path not found。AH=3Bh CHDIR と .bat の cd が共用する
+ * (int21_3b_chdir はこれを DS:DX 経由で呼ぶ / dos_loader.c の batch インタプリタは
+ *  cd 文の生パスで呼ぶ)。 */
+int qb_dos_chdir(const char *raw_dos) {
+    if (!raw_dos) return 3;
+    /* ドライブ接頭 "X:" を飛ばし '\' を '/' に直して raw[] へ (DBCS トレイル素通し:
+     * read_dos_rel と同じく 0x5C を含む trail を区切り扱いしない)。 */
+    const unsigned char *src = (const unsigned char *)raw_dos;
+    uint32_t i = (src[0] && src[1] == ':') ? 2u : 0u;
     char raw[256]; size_t n = 0;
-    while (n + 1 < sizeof(raw)) {
-        uint8_t c = peek8(base + i++);
-        if (!c) break;
-        /* DBCS ペア素通し (read_dos_rel と同じ: トレイル 0x5C を区切り扱いしない) */
-        if (sjis_is_lead(c) && n + 2 < sizeof(raw)) {
-            uint8_t c2 = peek8(base + i);
-            if (c2 != 0) { i++; raw[n++] = (char)c; raw[n++] = (char)c2; continue; }
+    while (src[i] && n + 1 < sizeof(raw)) {
+        unsigned char c = src[i++];
+        if (sjis_is_lead(c) && src[i] && n + 2 < sizeof(raw)) {
+            raw[n++] = (char)c; raw[n++] = (char)src[i++]; continue;
         }
         raw[n++] = (c == '\\') ? '/' : (char)c;
     }
@@ -1902,13 +1939,27 @@ static void int21_3b_chdir(void) {
     char host[256];
     resolve_dir(cand, host, sizeof(host));
     DIR *d = fs_opendir(host);
-    if (!d) { CPU_AX = 3; CPU_FLAG |= C_FLAG; return; }   /* path not found */
+    if (!d) return 3;                                     /* path not found */
     closedir(d);
 
     strncpy(g_cwd, cand, sizeof(g_cwd) - 1);
     g_cwd[sizeof(g_cwd) - 1] = '\0';
-    fprintf(stderr, "[int21h/3B] chdir → \"%s\"\n", g_cwd);
-    CPU_FLAG &= ~C_FLAG;
+    return 0;
+}
+
+/* AH=3Bh CHDIR。DS:DX = 目標パス (ASCIZ)。生バイトを読んで qb_dos_chdir に委譲する。 */
+static void int21_3b_chdir(void) {
+    uint32_t base = lin(CPU_DS, CPU_DX);
+    char dos[256]; size_t n = 0;
+    while (n + 1 < sizeof(dos)) {
+        uint8_t c = peek8(base + n);   /* DBCS trail は 0x00 にならないので NUL まで素直に読む */
+        if (!c) break;
+        dos[n++] = (char)c;
+    }
+    dos[n] = '\0';
+    if (qb_dos_chdir(dos) == 0) { CPU_FLAG &= ~C_FLAG; }
+    else                        { CPU_AX = 3; CPU_FLAG |= C_FLAG; }
+    fprintf(stderr, "[int21h/3B] chdir \"%s\" → \"%s\"\n", dos, g_cwd);
 }
 
 /* AH=29h: Parse Filename。DS:SI の文字列を 8.3 名に解析して ES:DI の (未オープン) FCB へ格納。

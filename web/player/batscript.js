@@ -38,10 +38,22 @@
         if (t[0] === '@') t = t.slice(1).trim();      // @ (echo 抑止) は捨てて中身を再評価
         if (!t) return null;
         const lc = t.toLowerCase();
+        // set VAR=VALUE → 環境変数。cd/chdir PATH → カレント移動。どちらも C 側インタプリタが
+        // 実行する (ドライバ TSR と同じ 1 セッション内)。環境変数でデータディレクトリを知る
+        // ソフト (MUAP98 等) や、本体ディレクトリへ cd してから起動するレシピのため。
+        if (/^set\s+\S/i.test(t)) {
+            return { kind: 'set', text: t.replace(/^set\s+/i, '') };   // "VAR=VALUE" (値の大小は保持)
+        }
+        // cd/chdir: "cd \dir" (空白) も "cd\dir"/"cd.." (グルー) も拾う。"cdplayer" 等は除外
+        // (cd/chdir の直後が空白か区切り [\ / .] か行末のときだけ)。引数無し cd (cwd 表示) は無視。
+        const mCd = t.match(/^(?:cd|chdir)(?:\s+|(?=[\\/.]))(\S.*)$/i);
+        if (mCd) return { kind: 'cd', path: mCd[1].trim() };
+        if (/^(?:cd|chdir)\s*$/i.test(t)) return null;
+
         // ディレクティブ / 制御フロー (MVP ① では無視。制御フロー有無だけ記録する)
         if (lc === 'echo' || lc.startsWith('echo ') || lc.startsWith('echo.') ||  /* echo / echo X / echo. / echo.X */
             lc === 'rem' || lc.startsWith('rem ') ||
-            lc === 'cls' || lc.startsWith('pause') || lc.startsWith('set ') ||
+            lc === 'cls' || lc.startsWith('pause') ||
             t[0] === ':' || /^goto(\s|$)/.test(lc) || lc.startsWith('if ')) {
             const ctrl = (t[0] === ':' || /^goto(\s|$)/.test(lc) || lc.startsWith('if '));
             return { kind: 'directive', ctrl, text: t };
@@ -73,13 +85,14 @@
         }
         const lines = s.split(/\r\n|\r|\n/).map(parseLine).filter(Boolean);
         const drivers = [], mains = [];
-        let hasControlFlow = false;
+        let hasControlFlow = false, hasEnvOps = false;
         for (const l of lines) {
             if (l.kind === 'directive') { if (l.ctrl) hasControlFlow = true; continue; }
+            if (l.kind === 'set' || l.kind === 'cd') { hasEnvOps = true; continue; }
             const key = l.base.toLowerCase().replace(/\.(com|exe|bat)$/, '');
             if (DRIVER_NAMES.has(key)) drivers.push(l); else mains.push(l);
         }
-        return { mains, drivers, hasControlFlow, lines };
+        return { mains, drivers, hasControlFlow, hasEnvOps, lines };
     }
 
     // 末尾要素を小文字 basename で取る (照合用)。
@@ -163,6 +176,8 @@
                 stmts.push({ op: 'cmd', name: hit, args: buildCmdline(l.args, userArgs) });
                 continue;
             }
+            if (l.kind === 'set') { stmts.push({ op: 'set', text: l.text }); continue; }
+            if (l.kind === 'cd')  { stmts.push({ op: 'cd',  path: l.path }); continue; }
             const t = l.text;
             const lc = t.toLowerCase();
             if (t[0] === ':') {                               // :label
@@ -258,11 +273,14 @@
 
     // buildStatements の文列 → C (qb_dos_stage_batch) へ渡す直列化文字列。1 文 1 行、
     // フィールドは \t 区切り (SJIS の lead/trail に \t \n は現れないので生バイトと衝突しない):
-    //   C \t PATH \t ARGS   /   E \t TEXT   /   G \t TARGET   /   I \t N \t NEG \t TARGET
+    //   C \t PATH \t ARGS   /   E \t TEXT   /   S \t VAR=VALUE   /   D \t PATH
+    //   G \t TARGET         /   I \t N \t NEG \t TARGET
     function serializeStatements(stmts) {
         return stmts.map((s) => {
             if (s.op === 'cmd')  return 'C\t' + s.name + '\t' + (s.args || '');
             if (s.op === 'echo') return 'E\t' + s.text;
+            if (s.op === 'set')  return 'S\t' + s.text;
+            if (s.op === 'cd')   return 'D\t' + s.path;
             if (s.op === 'goto') return 'G\t' + s.target;
             return 'I\t' + s.n + '\t' + (s.neg ? 1 : 0) + '\t' + s.target;   // iferr
         }).join('\n') + '\n';

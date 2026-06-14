@@ -228,6 +228,60 @@ const FLIP = [
             `(実測 "${sftNm}" ${sftSz})`);
     }
 
+    // ---- サイクル 4: set (環境変数) + cd (カレント移動) (MUAP98 型) ----
+    // `cd \sub` でカレントをサブディレクトリへ移し、相対 open が通ることで cd を検証する
+    // (/run/MARK.DAT は無く /run/SUB/MARK.DAT だけ置く → cd 無しなら open 失敗 = 区別がつく)。
+    // `set FOO=BAR` がマスタ env (QB_DOS_ENV_SEG=0x00F0, linear 0xF00) に入ることも確認する。
+    console.log('cycle 4: set (env) + cd (chdir)');
+    {
+        // OPENREL.COM: 相対 "MARK.DAT" を open、成功で exit 0 / 失敗で exit 1。
+        const OPENREL = [
+            0xB8, 0x00, 0x3D,    // 0100 mov ax,3D00h   (open read)
+            0xBA, 0x12, 0x01,    // 0103 mov dx,0112h   (fname)
+            0xCD, 0x21,          // 0106 int 21h
+            0xB0, 0x00,          // 0108 mov al,0
+            0x73, 0x02,          // 010A jnc 010E       (成功なら al=0 のまま)
+            0xB0, 0x01,          // 010C mov al,1        (失敗)
+            0xB4, 0x4C,          // 010E mov ah,4Ch
+            0xCD, 0x21,          // 0110 int 21h
+            ...Array.from('MARK.DAT\0', (c) => c.charCodeAt(0)),  // 0112 fname
+        ];
+        M.FS.writeFile('/run/OPENREL.COM', new Uint8Array(OPENREL));
+        try { M.FS.mkdir('/run/SUB'); } catch (_) {}
+        M.FS.writeFile('/run/SUB/MARK.DAT', new Uint8Array([0x4f, 0x4b]));   // "OK"
+        r = stageBat([
+            '@echo off',
+            'cd \\sub',
+            'set FOO=BAR',
+            'openrel',
+            'if errorlevel 1 goto bad',
+            'echo CD-OK',
+            'win',
+            'goto end',
+            ':bad',
+            'lose',
+            ':end',
+            'echo DONE4',
+        ], ['OPENREL.COM', 'WIN.COM', 'LOSE.COM'], '');
+        chk(r === 0, `stage_batch r=${r} (4)`);
+        const mark4 = logs.length;
+        M.ccall('np2kai_reset', null, ['number'], [handle]);
+        for (let i = 0; i < 2200; i++) runFrame(handle);
+        const ex4 = execsIn(logs.slice(mark4));
+        chk(ex4.join(',') === 'OPENREL.COM,WIN.COM',
+            `EXEC 列 = OPENREL→WIN (cd \\sub で相対 open 成功・LOSE 不実行): [${ex4.join(',')}]`);
+        chk(vramText().includes('CD-OK') && vramText().includes('DONE4'),
+            'echo "CD-OK"/"DONE4" が text VRAM に表示');
+        // マスタ env (0xF00) に "FOO=BAR" が入っているか (build_child_env が子へ verbatim コピー)
+        let env = '';
+        for (let a = 0xF00; a < 0xF00 + 256; a++) {
+            const c = peek8(handle, a) & 0xff;
+            env += (c === 0) ? '\n' : String.fromCharCode(c);
+        }
+        chk(/(^|\n)FOO=BAR(\n|$)/.test(env), `set FOO=BAR がマスタ env に反映 (env=${JSON.stringify(env.replace(/\n+/g, '|'))})`);
+        chk(logs.slice(mark4).some((l) => /cd "\\sub" -> ok/.test(l)), '[batch] cd \\sub が ok ログ');
+    }
+
     console.log(`\nbatch_test: pass=${pass} fail=${fail}`);
     if (fail) {
         console.log('---- 末尾ログ ----');

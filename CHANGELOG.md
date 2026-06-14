@@ -1,5 +1,93 @@
 # CHANGELOG
 
+## [FindFirst の wildcard をフィールド照合に / 8.3 空白パディング open] — 2026-06-15
+
+みゅあっぷ98 (MUAP98) で「サンプル曲を選んで Enter しても開けない」というユーザー報告。filer の動きを
+headless で再現 (キー注入 + INT 21h ログ) して 2 つの素直なバグを根治 (JS なし・C のみ・Wasm 再ビルド)。
+
+- **`*.*` が拡張子の無い名前 (ディレクトリ) に一致しなかった**: `dos_wildcard_match` が文字単位の
+  素朴な再帰で、`*.*` の `.` が `NORM` の `N` に一致せず → ファイラの `FindFirst("\MUSIC\*.*", attr=0x10)`
+  がサブディレクトリ `NORM`/`SPB` を取りこぼし、データ置き場に潜れなかった。実 DOS は名前を `name.ext` の
+  フィールドに分けて別々に照合し、`*.*` は ext 空 (= 拡張子なし) にも一致する。**pattern に `.` がある時だけ**
+  フィールド分割照合に修正。**`.` の無い pattern は名前全体に従来の char glob を残す** ―― 末尾 `*` は `.` を
+  跨いで飲み込む (`FOO*`→`FOO.BAR` 可) が、ワイルドカード無しの `HTJL` は `HTJL.COM` に一致しない
+  (実 DOS で pattern `HTJL` は ext=空にだけ一致)。**当初フィールド分割を全 pattern に適用したら GS100
+  (gsnake) が壊れた**: gsnake は `FindFirst("HTJL")` で素の名前を探し、無ければ自分で `.COM` を補完して音源
+  ドライバ HTJL.COM を EXEC するが、`HTJL`→`HTJL.COM` を誤一致させると別分岐に入り壊れた EXEC パス
+  (`A:\HTJL ` 末尾空白) を作って音源が鳴らなくなった (triage で ALIVE→BUSY を検知し `.` 無し pattern を
+  従来挙動へ戻して根治)。
+- **8.3 の空白パディング名で open できなかった**: プログラムが FindFirst 結果を 11 byte FCB 形式で保持し、
+  選択ファイルを `"SSG00   .MUS"` のように 8 字へ空白で詰めて再 open することがある。実 DOS の open は
+  この空白を読み飛ばすが、我々は生パスで lookup して不一致。`read_dos_rel` で `0x20` を除去
+  (DOS 8.3 名に空白は入らない = 必ず FCB パディング。`0x20` は SJIS リード/トレイル範囲外で DBCS 安全)。
+- 検証: MUAP641.zip を headless 実起動 → ファイラが `\MUSIC` → `NORM` サブディレクトリへ潜り `.MUS` を列挙し、
+  選択した `SSG00.MUS` を open 成功するのを確認。回帰 = `tools/wildcard_find_test.js` 新設 (合成 COM で
+  `*.*` がディレクトリに一致 + `"\SUB\INSIDE  .DAT"` の空白パディング open が通る、両方修正前 FAIL/修正後 PASS)。
+  **find_sjis/batch/touhou/exec_env/zip/sft/sgr/batscript 全 PASS・bio100 triage 回帰ゼロ**。
+
+## [起動 .bat の set (環境変数) / cd (カレント移動) 対応] — 2026-06-14
+
+みゅあっぷ98 (MUAP98, Packen Software, 修正BSD フリーソフト) を動かしたところ、ソフト内ファイラが
+サブディレクトリ (MUSIC/PLAY/PCM) を見つけられなかった。真因は **起動 .bat の `set` と `cd` を
+我々のインタプリタが捨てていたこと**。MUAP.BAT は `cd \iv` の後 `set mus=\MUSIC` 等で環境変数に
+データディレクトリの場所を書き、MUAP98 はそれを読んで探す作りだった。これまで `set`/`cd` を使う
+ソフトが corpus に無かっただけで、将来の大規模ソフトでは普通に使う想定 (JS + C、Wasm 再ビルド)。
+
+- **`set VAR=VALUE`**: DOS 環境変数として保持し、その後 EXEC される全プログラムに継承させる。実 DOS
+  同様に変数名は大文字化 (値はそのまま)、値が空の `set VAR=` は削除、重複名は置換。マスタ env
+  (`QB_DOS_ENV_SEG`) を更新するので、既存の `build_child_env` が子へ verbatim コピーして継承が成立。
+  env ブロックは 256 byte 固定なので、収まらない set は honest に捨ててログ (嘘成功で env を壊さない)。
+  Run ごとに `qb_dos_env_reset` で既定 (COMSPEC/PATH) に戻し、前 Run の set を持ち越さない。
+- **`cd PATH` / `chdir PATH`**: 論理カレント `g_cwd` を移動する。`int21_3b_chdir` (AH=3Bh) の解決ロジックを
+  `qb_dos_chdir(path)` に切り出して .bat の cd と共用 (`native/dos_int21.c`)。`cd \iv` も `cd\iv` (グルー)・
+  `cd..` も拾う。
+- **プログラム本体の探索を cd から切り離した**: シェルが EXEC するプログラムのパスを root-absolute
+  (先頭 `\`) で渡すよう変更 (`stage_shell_image`)。これで `cd` でカレントが変わってもプログラム本体は
+  /run ルート基準で見つかり (entry 名は我々が展開時に確定済)、**cd はプログラム起動後の自身のデータ
+  アクセスにだけ効く**。cd の無い従来 .bat は cwd=ルートで結果不変 (回帰なし)。
+- **経路**: `batscript.js` が `set`/`cd`/`chdir` を新 kind に分類し `hasEnvOps` を立てる → buildStatements が
+  `set`/`cd` 文を生成 → serializeStatements が `S`/`D` 行に直列化 → C 側 `qb_dos_stage_batch` が
+  `QB_BATCH_SET`/`QB_BATCH_CD` として取り込み → `qb_dos_batch_next_hook` が EXEC を挟まず逐次消化
+  (echo/goto と同じ)。bridge.js は `hasControlFlow || hasEnvOps` で ③ 文インタプリタへ振る。
+- **副産物で env ブロックのバッファオーバーフロー (潜在バグ) を根治**: env ブロックは `QB_DOS_ENV_SEG`
+  (0xF0) から 15 パラグラフ (240 byte) で、末尾パラグラフ (0xFF = `LOAD_SEG-1`) は `qb_dos_alloc_reset` が
+  プログラム本体の MCB に使う。だが `build_env` は `memset(..., 256)` で 256 byte 書いており、16 byte
+  はみ出して **program MCB (0xFF0) を破壊**していた。loader-start で 1 回だけ呼ぶ間は MCB を後から
+  書くので隠れていたが、**`set` で build_env を再呼びすると、シェルの self-shrink 後に置かれた program
+  MCB を壊し → MCB チェーン断裂 → EXEC が「空きブロック無し」(`free_sz=0`) で `-10` → MUAP98/CAL が
+  ロードできず即終了**、が「途中で止まる」の真因だった。`build_env` を env ブロックの実サイズ
+  (`QB_DOS_ENV_BYTES` = 240) に収めて根治。
+- 検証: MUAP641.zip を headless で実起動 → **MUAP98.COM が TSR 常駐・CAL.COM (エディタ) が起動して
+  PLAY/IV/PCM のデータディレクトリを env 変数経由で開く** (`/run/PLAY/INIT.O` ほか) のを確認。
+- 回帰: `tools/batch_test.js` にサイクル 4 (set+cd) を新設 — `cd \sub` で相対 open が通ること
+  (/run/MARK.DAT は無く /run/SUB/MARK.DAT のみ → cd 無しなら失敗で区別)・`set FOO=BAR` がマスタ env に
+  入ることを headless 検証。**batch_test 19/19・batscript 51/51・touhou 4/4 (実 GAME.BAT 分岐)・
+  exec_env/find_sjis/sft/sgr/zip/xms 全 PASS・bio100 triage 回帰ゼロ** (`\` プレフィックスと env 240 byte 化が
+  既存 EXEC/env を壊さない)。
+
+## [ZIP の data descriptor / UTF-8 名対応 (MUAP641.zip が開けない件)] — 2026-06-14
+
+ユーザー報告: `MUAP641.zip` (MUSIC ASSEMBLER for PC-98) が QuuBee サイトで開けない。真因は ZIP の
+**data descriptor (General Purpose bit 3)** — Info-ZIP 系ツールが書く形式で、Local File Header の
+compSize/origSize が 0 になり真の長さは圧縮データ後ろの descriptor と中央ディレクトリにしか無い。旧
+`parseZip` は LFH チェーンだけを辿り bit 3 で `throw` していたため、書庫全体が開けなかった (JS のみ・Wasm 不変)。
+
+- **根治 = 中央ディレクトリ (EOCD → Central Directory) を正典に読む**。CD には常に正しいサイズと位置が
+  入るので、data descriptor 付き zip でも各エントリを確定できる。CD が見つからない (ストリーム生成 zip 等)
+  ときだけ従来の LFH チェーン走査にフォールバック (`web/player/archive.js`)。実 unzip と同じ「真の長さの
+  所在地は中央ディレクトリ」という設計に寄せた。ZIP64 は範囲外で LFH へ落とす。
+- **同書庫は一部の日本語名に bit 11 (UTF-8 名フラグ) を立てていた** (半角カナ「ｵﾘｼﾞﾅﾙ」+ 漢字「君ヶ代」)。
+  MEMFS の規約は「名前 = 生 SJIS バイトの latin1 写像」なので、UTF-8 名は一度 Unicode に直してから SJIS
+  バイト列へ再符号化してネイティブ SJIS 名の zip と同じ表現に揃える。SJIS エンコード表はブラウザ/Node
+  共通の `TextDecoder('shift_jis')` を全 SJIS バイト空間に通して逆引き Map を作る (自己完結・追加データ不要・
+  CP932 と同写像、`sjisEncoder`)。
+- ディレクトリエントリ (名前が `/` で終わる) は skip し、書き出し側が親ディレクトリを作る方針に統一
+  (旧 LFH 経路で dir マーカを `FS.writeFile` しようとする地雷も解消)。
+- 検証: 実 `MUAP641.zip` = 97 CD エントリ → 88 ファイル全てが CD の原サイズに完全一致で展開、起動 `MUAP.BAT`
+  と日本語名 8 件 (表示復元 OK) を確認。回帰 = `tools/zip_test.js` 新設 (合成 zip で CD 経由 / data
+  descriptor / bit11 UTF-8→SJIS / dir skip+ネスト / EOCD 無し LFH フォールバックの 5 経路、全 PASS)。
+  `games/` は再配布不可でコミットできないため、これらの経路は自己完結の合成 zip で守る。
+
 ## [本番デプロイ後のホットフィックス 2 件 (無限DL / リバーブ低域ビビり)] — 2026-06-14
 
 SF2/TSF を本番 (quubee.pages.dev) に出した後、ユーザー実機で見つかった 2 件を修正 (いずれもデプロイ済・確認済)。

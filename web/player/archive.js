@@ -325,21 +325,122 @@
 
     // ---- ZIP パーサ + deflate 解凍 (DecompressionStream) ----
     //
-    // ZIP 構造を Local File Header チェーンで読む簡略版。
-    // 各エントリの先頭 4 byte = 0x04034b50 ("PK\x03\x04") を目印に走査。
+    // 中央ディレクトリ (End of Central Directory → Central Directory) を正典に読む。
+    // これにより data descriptor (bit 3) 付き zip でも各エントリの圧縮/原サイズと
+    // 位置が確定する (LFH のサイズ欄が 0 でも CD には正しい値が入る = 真の長さの所在地)。
+    // 中央ディレクトリが見つからない (ストリーム生成 zip 等) ときだけ LFH チェーン走査に
+    // フォールバックする。
     // 対応: method 0 (stored), method 8 (deflate-raw)
-    // 非対応: encrypted, ZIP64 (圧縮/原サイズが 4GB 超), data descriptor (bit 3)
+    // 非対応: encrypted (skip), ZIP64 (LFH フォールバックへ)
     //
-    // API: async parseZip(bytes: Uint8Array) -> [{name, data: Uint8Array}, ...]
+    // API: async parseZip(bytes: Uint8Array) -> [{name, data: Uint8Array, mtime}, ...]
 
     const ZIP_LFH_SIG = 0x04034b50;
+    const ZIP_CDH_SIG = 0x02014b50;   // central directory file header
+    const ZIP_EOCD_SIG = 0x06054b50;  // end of central directory
+
+    // ZIP General Purpose bit 11 (0x0800) が立つとファイル名は UTF-8。だが MEMFS の規約は
+    // 「名前 = 生 SJIS バイトの latin1 写像」(docs/dos_hle_gaps.md §2-13) なので、UTF-8 名は
+    // 一度 Unicode に直してから SJIS バイト列へ再符号化し、ネイティブ SJIS 名の zip と同じ
+    // latin1 表現に揃える。エンコード表はブラウザ/Node 共通の TextDecoder('shift_jis') を
+    // 全 SJIS バイト空間に通して逆引き Map を作る (自己完結・追加データ不要・CP932 と同写像)。
+    let SJIS_ENCODER = null;
+    function sjisEncoder() {
+        if (SJIS_ENCODER) return SJIS_ENCODER;
+        const dec = new TextDecoder('shift_jis');
+        const map = new Map();   // Unicode 1 文字 → [byte, ...]
+        for (let b = 0; b <= 0xff; b++) {
+            if ((b >= 0x81 && b <= 0x9f) || (b >= 0xe0 && b <= 0xfc)) continue;  // 単独不可なリードバイト
+            const ch = dec.decode(Uint8Array.from([b]));
+            if (ch.length === 1 && ch !== '�' && !map.has(ch)) map.set(ch, [b]);
+        }
+        for (let lead = 0x81; lead <= 0xfc; lead++) {
+            if (lead > 0x9f && lead < 0xe0) continue;
+            for (let trail = 0x40; trail <= 0xfc; trail++) {
+                if (trail === 0x7f) continue;
+                const ch = dec.decode(Uint8Array.from([lead, trail]));
+                if (ch.length === 1 && ch !== '�' && !map.has(ch)) map.set(ch, [lead, trail]);
+            }
+        }
+        SJIS_ENCODER = map;
+        return map;
+    }
+
+    // UTF-8 名 (bit 11) → 生 SJIS バイトの latin1 文字列。SJIS で表せない文字は '?' 1 byte に
+    // 落とす (実害なし; PC-98 名はそもそも SJIS 由来)。
+    function utf8NameToSjisLatin1(buf, off, len) {
+        const uni = new TextDecoder('utf-8').decode(buf.subarray(off, off + len));
+        const enc = sjisEncoder();
+        let s = '';
+        for (const ch of uni) {
+            const bytes = enc.get(ch);
+            if (bytes) for (const b of bytes) s += String.fromCharCode(b);
+            else s += '?';
+        }
+        return s;
+    }
+
+    function zipEntryName(buf, off, len, flags) {
+        return (flags & 0x0800) ? utf8NameToSjisLatin1(buf, off, len) : decodeName(buf, off, len);
+    }
 
     async function parseZip(buf) {
+        const eocd = findEocd(buf);
+        if (eocd >= 0) {
+            const entries = await parseZipViaCentralDir(buf, eocd);
+            if (entries) return entries;
+        }
+        return parseZipViaLocalHeaders(buf);
+    }
+
+    // 末尾から EOCD シグネチャを後方走査 (ZIP コメント最大 65535 byte + EOCD 22 byte を考慮)。
+    function findEocd(buf) {
+        const min = Math.max(0, buf.length - 0x10016);
+        for (let p = buf.length - 22; p >= min; p--) {
+            if (readU32(buf, p) === ZIP_EOCD_SIG) return p;
+        }
+        return -1;
+    }
+
+    // 中央ディレクトリ経由 (正典)。ZIP64 は範囲外なので null を返して LFH フォールバックへ。
+    async function parseZipViaCentralDir(buf, eocd) {
+        const cdCount  = buf[eocd + 10] | (buf[eocd + 11] << 8);
+        const cdOffset = readU32(buf, eocd + 16);
+        if (cdOffset === 0xffffffff || cdCount === 0xffff) return null;   // ZIP64
+        const out = [];
+        let p = cdOffset;
+        for (let n = 0; n < cdCount && p + 46 <= buf.length; n++) {
+            if (readU32(buf, p) !== ZIP_CDH_SIG) break;
+            const flags    = buf[p + 8]  | (buf[p + 9]  << 8);
+            const method   = buf[p + 10] | (buf[p + 11] << 8);
+            const mtime    = dosDateTime(buf[p + 12] | (buf[p + 13] << 8),
+                                         buf[p + 14] | (buf[p + 15] << 8));
+            const compSize = readU32(buf, p + 20);
+            const origSize = readU32(buf, p + 24);
+            const nameLen  = buf[p + 28] | (buf[p + 29] << 8);
+            const extraLen = buf[p + 30] | (buf[p + 31] << 8);
+            const cmntLen  = buf[p + 32] | (buf[p + 33] << 8);
+            const lfhOff   = readU32(buf, p + 42);
+            const name = zipEntryName(buf, p + 46, nameLen, flags);
+            p += 46 + nameLen + extraLen + cmntLen;
+            // データ開始位置は LFH 側の name/extra 長で決まる (CD の extra 長とは別物のことがある)。
+            if (lfhOff + 30 > buf.length || readU32(buf, lfhOff) !== ZIP_LFH_SIG) continue;
+            const lNameLen  = buf[lfhOff + 26] | (buf[lfhOff + 27] << 8);
+            const lExtraLen = buf[lfhOff + 28] | (buf[lfhOff + 29] << 8);
+            const dataStart = lfhOff + 30 + lNameLen + lExtraLen;
+            const ent = await decodeZipData(buf, name, flags, method, compSize, origSize, dataStart, mtime);
+            if (ent) out.push(ent);
+        }
+        return out;
+    }
+
+    // 中央ディレクトリ無し (EOCD 不在) のフォールバック: LFH チェーンを順に走査する。
+    // この経路では data descriptor (bit 3) のサイズを復元できないため、その場合は未対応。
+    async function parseZipViaLocalHeaders(buf) {
         const out = [];
         let pos = 0;
         while (pos + 30 <= buf.length) {
-            const sig = readU32(buf, pos);
-            if (sig !== ZIP_LFH_SIG) break;  // central directory に到達 (or 終端)
+            if (readU32(buf, pos) !== ZIP_LFH_SIG) break;   // central directory に到達 (or 終端)
             const flags    = buf[pos + 6] | (buf[pos + 7] << 8);
             const method   = buf[pos + 8] | (buf[pos + 9] << 8);
             const mtime    = dosDateTime(buf[pos + 10] | (buf[pos + 11] << 8),
@@ -348,32 +449,38 @@
             const origSize = readU32(buf, pos + 22);
             const nameLen  = buf[pos + 26] | (buf[pos + 27] << 8);
             const extraLen = buf[pos + 28] | (buf[pos + 29] << 8);
-            const name = decodeName(buf, pos + 30, nameLen);
+            const name = zipEntryName(buf, pos + 30, nameLen, flags);
             const dataStart = pos + 30 + nameLen + extraLen;
-
             if (flags & 0x08) {
-                // data descriptor: LFH の compSize が 0/不定で次エントリ位置を復元できない。
-                // central directory 解析が要るため未対応 (この書庫だけ中断)。
-                throw new Error('ZIP data descriptor (bit 3) は未対応: ' + name);
+                // data descriptor: LFH の compSize が 0/不定。中央ディレクトリがあれば
+                // parseZip がそちら経由で解決済 (= ここには来ない)。EOCD 不在の生ストリーム
+                // zip でだけ到達し、descriptor 走査が要るため未対応。
+                throw new Error('ZIP data descriptor (bit 3, 中央ディレクトリ無し) は未対応: ' + name);
             }
-            // 以降は bit3 クリア = LFH の compSize が有効 → 未対応 1 エントリで書庫全体を
-            // 巻き添えにせず、pos を進めて次エントリへ skip する (LZH 側と同じ方針)。
-            if (flags & 0x01) { pos = dataStart + compSize; continue; }   // 暗号化: skip
-
-            const comp = buf.subarray(dataStart, dataStart + compSize);
-            let data;
-            if (method === 0) {
-                data = new Uint8Array(comp);  // stored: そのままコピー
-            } else if (method === 8) {
-                try { data = await inflateRaw(comp, origSize); }
-                catch (_) { pos = dataStart + compSize; continue; }      // 破損/サイズ不一致: skip
-            } else {
-                pos = dataStart + compSize; continue;                    // 未対応 method: skip
-            }
-            out.push({ name, data, mtime });
+            const ent = await decodeZipData(buf, name, flags, method, compSize, origSize, dataStart, mtime);
+            if (ent) out.push(ent);
             pos = dataStart + compSize;
         }
         return out;
+    }
+
+    // 1 エントリの圧縮データを展開して {name, data, mtime} を返す。未対応/暗号化/ディレクトリ/
+    // 破損は null を返し、呼び出し側が skip する (書庫全体を巻き添えにしない)。
+    async function decodeZipData(buf, name, flags, method, compSize, origSize, dataStart, mtime) {
+        if (name.endsWith('/')) return null;                  // ディレクトリエントリ (書き出し側が親を作る)
+        if (flags & 0x01) return null;                        // 暗号化: skip
+        if (dataStart < 0 || dataStart + compSize > buf.length) return null;   // 範囲外: skip
+        const comp = buf.subarray(dataStart, dataStart + compSize);
+        let data;
+        if (method === 0) {
+            data = new Uint8Array(comp);                      // stored: そのままコピー
+        } else if (method === 8) {
+            try { data = await inflateRaw(comp, origSize); }
+            catch (_) { return null; }                        // 破損/サイズ不一致: skip
+        } else {
+            return null;                                      // 未対応 method: skip
+        }
+        return { name, data, mtime };
     }
 
     async function inflateRaw(comp, expectedSize) {

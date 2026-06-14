@@ -1117,13 +1117,18 @@ NP2KaiModule({
             // 制御フロー無し (②) は従来の線形列。どちらも未対応構文等で null なら ① 単一起動へ。
             if (selectedRecipe) {
                 const names = loadedEntries.map((e) => e.name);
-                if (selectedRecipe.recipe.hasControlFlow) {
+                // 制御フロー (if/goto) か環境操作 (set/cd) を含む .bat は C 側文インタプリタ (③) で
+                // 実行する。set は env を更新し以降の EXEC 子へ継承、cd はカレントを移動する
+                // (環境変数でデータ位置を知るソフト / 本体ディレクトリへ cd するレシピのため)。
+                if (selectedRecipe.recipe.hasControlFlow || selectedRecipe.recipe.hasEnvOps) {
                     const stmts = qbBatScript.buildStatements(
                         selectedRecipe.recipe, names, userArgs);
                     if (stmts) {
                         const ncmd = stmts.filter((s) => s.op === 'cmd').length;
-                        const label = `${sjisName(selectedEntry.name)} `
-                            + `(if/goto 分岐を実行時評価, ${ncmd} cmd)`;
+                        const how = selectedRecipe.recipe.hasControlFlow
+                            ? `if/goto 分岐を実行時評価, ${ncmd} cmd`
+                            : `set/cd を逐次実行, ${ncmd} cmd`;
+                        const label = `${sjisName(selectedEntry.name)} (${how})`;
                         runStatusEl.textContent = `Launching ${label}…`;
                         if (await stageAndRunBatch(stmts, label)) return;
                         // stage 失敗 (C 側上限超過) → 下の ① 単一起動へフォールスルー

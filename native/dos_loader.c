@@ -545,6 +545,8 @@ int qb_dos_stage_exe(const uint8_t *image, size_t size, const char *cmdline,
 #define QB_BATCH_ECHO  1   /* 作者メッセージ → tty */
 #define QB_BATCH_GOTO  2   /* 無条件ジャンプ (target = 文 index、nstmts = 終了) */
 #define QB_BATCH_IFERR 3   /* if [not] errorlevel n goto target */
+#define QB_BATCH_SET   4   /* set VAR=VALUE (echo_off/len = "VAR=VALUE" 生バイト) */
+#define QB_BATCH_CD    5   /* cd PATH (echo_off/len = 生 DOS パス、バックスラッシュ可) */
 
 #define QB_BATCH_MAX_STMTS 96
 #define QB_BATCH_ECHO_POOL 2048
@@ -563,6 +565,10 @@ static int  g_batch_pc     = 0;
 static int  g_batch_active = 0;    /* シェル stage 済 (qb_dos_reset_state でクリア) */
 static char g_batch_echo[QB_BATCH_ECHO_POOL];
 
+/* batch インタプリタ (set/cd 文) が使う env/build_env は後方定義なので前方宣言する。 */
+static void qb_env_set(const char *assign, size_t len);
+static void build_env(uint16_t seg);
+
 typedef struct { const char *path; size_t plen; const char *args; size_t alen; } shell_cmd_t;
 
 /* シェル blob + 文字列プールを COM image に組んで stage する (②/③ 共用)。
@@ -576,9 +582,13 @@ static int stage_shell_image(const shell_cmd_t *cmds, int n, const char *name,
     memcpy(img, qb_dos_shell_blob, blob);
 
     for (int i = 0; i < n; i++) {
-        /* path ASCIZ */
-        if (pos + cmds[i].plen + 1 > sizeof(img)) return -11;
+        /* path ASCIZ — 先頭に '\' を付けて root-absolute にする。entry 名は /run 相対で
+         * 先頭 '\' を含まないので、cd でカレントが変わっていてもプログラム本体は /run ルート
+         * 基準で見つかる (cd は本体の探索ではなく、起動後のプログラム自身のデータアクセスに
+         * だけ効かせる)。cd が無い従来 .bat も cwd=ルートなので結果は不変。 */
+        if (pos + 1 + cmds[i].plen + 1 > sizeof(img)) return -11;
         path_offs[i] = (uint16_t)(0x100 + pos);
+        img[pos++] = '\\';
         memcpy(&img[pos], cmds[i].path, cmds[i].plen); pos += cmds[i].plen;
         img[pos++] = 0x00;
         /* DOS cmdtail: [len][bytes][0x0D] */
@@ -682,11 +692,11 @@ int qb_dos_stage_batch(const char *prog, size_t len, const char *name) {
             cmds[ncmd].alen = (size_t)(lend - cmds[ncmd].args);
             s->op = QB_BATCH_CMD;
             cmd_of_stmt[nst] = ncmd++;
-        } else if (op == 'E') {                /* E \t text (生バイト、SJIS 可) */
+        } else if (op == 'E' || op == 'S' || op == 'D') {  /* E=echo / S=set / D=cd: text を echo プールへ */
             size_t tl = (size_t)(lend - f1);
             if (echo_used + tl > sizeof(echo_pool)) return -14;
             memcpy(echo_pool + echo_used, f1, tl);
-            s->op = QB_BATCH_ECHO;
+            s->op = (op == 'E') ? QB_BATCH_ECHO : (op == 'S') ? QB_BATCH_SET : QB_BATCH_CD;
             s->echo_off = (uint16_t)echo_used;
             s->echo_len = (uint16_t)tl;
             echo_used += tl;
@@ -777,6 +787,22 @@ int qb_dos_batch_next_hook(void) {
             qb_dos_tty_write((const uint8_t *)"\r\n", 2);
             g_batch_pc++;
             break;
+        case QB_BATCH_SET:
+            /* マスタ env (QB_DOS_ENV_SEG) を更新 → 以降 EXEC される子が build_child_env で継承。
+             * EXEC を挟まずここで消化する (cd/echo と同じ) ので、次の CMD には反映済み。 */
+            qb_env_set(g_batch_echo + s->echo_off, s->echo_len);
+            build_env(QB_DOS_ENV_SEG);
+            g_batch_pc++;
+            break;
+        case QB_BATCH_CD: {
+            char path[200];
+            size_t l = s->echo_len; if (l >= sizeof(path)) l = sizeof(path) - 1;
+            memcpy(path, g_batch_echo + s->echo_off, l); path[l] = '\0';
+            int r = qb_dos_chdir(path);   /* g_cwd を更新 (子は global g_cwd を継承) */
+            fprintf(stderr, "[batch] cd \"%s\" -> %s\n", path, r == 0 ? "ok" : "not found");
+            g_batch_pc++;
+            break;
+        }
         case QB_BATCH_GOTO:
             g_batch_pc = s->target;
             break;
@@ -1028,29 +1054,114 @@ void qb_dos_install_trampolines(void) {
  * '\' でディレクトリを切り出す) が破綻し、ファイル名バッファが strcat で累積する。
  * ダミー変数を 1 つ置いて末尾を必ず "var\0\0" の二重 NUL にすると、二重 NUL 検出式・
  * 空文字列検出式どちらの cstartup でも argv[0] を正しく読める。 */
+/* ---- DOS 環境変数 (起動 .bat の `set` + 既定 COMSPEC/PATH) ----
+ * 起動 .bat の `set VAR=VALUE` を保持し、その後 EXEC される全プログラムに継承させる
+ * (MUAP98 等は環境変数でデータディレクトリの場所を知る)。実 DOS と同じく変数名は大文字化し
+ * (値はそのまま)、値が空の `set VAR=` は変数削除、重複名は置換。env ブロックは 256 byte 固定
+ * (QB_DOS_ENV_SEG..QB_DOS_LOAD_SEG = 0x10 para) なので、収まらない set は honest に捨てて
+ * ログする (嘘の成功で env を壊さない)。
+ * g_env_buf = "NAME=VAL\0NAME=VAL\0..." (各エントリ NUL 終端)。g_env_len = 使用バイト (NUL 込み)。 */
+#define QB_ENV_VAR_CAP 208
+static char   g_env_buf[QB_ENV_VAR_CAP];
+static size_t g_env_len = 0;
+
+/* エントリ e ("NAME=VAL") の名前部 ('=' まで) の長さ。'=' 無しなら全体。 */
+static size_t env_name_len(const char *e) {
+    const char *q = strchr(e, '=');
+    return q ? (size_t)(q - e) : strlen(e);
+}
+
+/* g_env_buf から名前 uname (大文字, nlen) のエントリを 1 件削除する (無ければ無操作)。 */
+static void env_remove(const char *uname, size_t nlen) {
+    size_t i = 0;
+    while (i < g_env_len) {
+        const char *e = g_env_buf + i;
+        size_t elen = strlen(e);
+        if (env_name_len(e) == nlen && memcmp(e, uname, nlen) == 0) {
+            size_t rm = elen + 1;                         /* エントリ + NUL */
+            memmove(g_env_buf + i, g_env_buf + i + rm, g_env_len - i - rm);
+            g_env_len -= rm;
+            return;
+        }
+        i += elen + 1;
+    }
+}
+
+/* `set` 1 件を反映する。assign = "VAR=VALUE" (ptr+len, NUL 終端不要)。VAR を大文字化、
+ * VALUE 空なら削除、重複名は置換。 */
+static void qb_env_set(const char *assign, size_t len) {
+    char tmp[QB_ENV_VAR_CAP];
+    if (len >= sizeof(tmp)) len = sizeof(tmp) - 1;
+    size_t nl = 0;
+    while (nl < len && assign[nl] != '=') nl++;           /* 名前部の長さ */
+    if (nl == 0) return;                                  /* '=' 始まり = 無効 */
+    int has_eq = (nl < len);
+    size_t vstart = has_eq ? nl + 1 : len;
+
+    /* "NAME(大文字)=VALUE" を tmp に組む。 */
+    size_t t = 0;
+    for (size_t i = 0; i < nl; i++) {
+        char c = assign[i];
+        tmp[t++] = (c >= 'a' && c <= 'z') ? (char)(c - 32) : c;
+    }
+    char uname[QB_ENV_VAR_CAP];
+    memcpy(uname, tmp, nl); uname[nl] = '\0';
+    tmp[t++] = '=';
+    for (size_t i = vstart; i < len && t + 1 < sizeof(tmp); i++) tmp[t++] = assign[i];
+    tmp[t] = '\0';
+
+    env_remove(uname, nl);                                /* 既存を消してから (置換 / 削除) */
+    if (vstart >= len) {                                  /* 値が空 = 削除のみ */
+        fprintf(stderr, "[batch] set %s= (削除)\n", uname);
+        return;
+    }
+    if (g_env_len + t + 1 > QB_ENV_VAR_CAP) {             /* 256 byte env に収まらない → 正直に捨てる */
+        fprintf(stderr, "[batch] set \"%s\": env 領域満杯 (%u byte) — 無視\n",
+                tmp, (unsigned)g_env_len);
+        return;
+    }
+    memcpy(g_env_buf + g_env_len, tmp, t);
+    g_env_len += t;
+    g_env_buf[g_env_len++] = '\0';
+    fprintf(stderr, "[batch] set \"%s\"\n", tmp);
+}
+
+static void qb_env_set_cstr(const char *s) { qb_env_set(s, strlen(s)); }
+
+/* env を既定 (COMSPEC/PATH のみ) に戻す。Run ごとに loader-start で呼び、前 Run の set を
+ * 持ち越さない。COMSPEC は外部プログラム起動の起点として存在チェックするソフトがある
+ * (Canvas-98 は無いと exit 5)。実ファイル A:\COMMAND.COM は置かない (EXEC は正直に失敗)。 */
+static void qb_dos_env_reset(void) {
+    g_env_len = 0;
+    g_env_buf[0] = '\0';
+    qb_env_set_cstr("COMSPEC=A:\\COMMAND.COM");
+    qb_env_set_cstr("PATH=A:\\");
+}
+
+/* env ブロックの使用可能バイト数。env は QB_DOS_ENV_SEG から QB_DOS_LOAD_SEG-1 の手前までで、
+ * 末尾パラグラフ (LOAD_SEG-1) は qb_dos_alloc_reset がプログラム本体の MCB に使う (=書いてはいけない)。
+ * = (0x100-1 - 0xF0) * 16 = 240 byte。256 を書くと program MCB を壊して MCB チェーンが崩れる
+ * (set で build_env を再呼びすると顕在化した実バグ。loader-start の 1 回だけなら MCB 後追いで隠れていた)。 */
+#define QB_DOS_ENV_BYTES ((uint32_t)(QB_DOS_LOAD_SEG - 1 - QB_DOS_ENV_SEG) * 16u)
+
+/* 環境セグメントを実機 DOS 互換レイアウトで書く: [変数部][\0 終端][WORD=後続文字列数 1][argv0\0]。
+ * 変数部は g_env_buf (set で更新される)。set のたびに呼び直してマスタ env を最新化する。
+ * 書き込みは必ず env ブロック内 (QB_DOS_ENV_BYTES) に収める (末尾 = program MCB を侵さない)。 */
 static void build_env(uint16_t seg) {
     uint32_t base = (uint32_t)seg << 4;
-    memset(&mem[base], 0, 256);
+    const uint32_t cap = QB_DOS_ENV_BYTES;
+    memset(&mem[base], 0, cap);
     uint32_t p = 0;
-    /* env vars (各 NUL 終端)。COMSPEC は実 DOS が必ず設定する変数で、外部プログラム起動の
-     * 起点として存在チェックするソフトがある (Canvas-98 は無いと exit 5 で起動拒否)。
-     * 実ファイル A:\COMMAND.COM は置かない — シェルアウトを試みたソフトには EXEC が
-     * file not found を正直に返す (起動ゲートだけ実 DOS と同じ景色にする)。 */
-    static const char *const vars[] = { "COMSPEC=A:\\COMMAND.COM", "PATH=A:\\" };
-    for (size_t v = 0; v < sizeof(vars) / sizeof(vars[0]); v++) {
-        for (size_t i = 0; vars[v][i]; i++) poke8(base + p++, (uint8_t)vars[v][i]);
-        poke8(base + p++, 0x00);      /* var 終端 NUL */
-    }
-    poke8(base + p++, 0x00);          /* 空文字列 = env vars 末端 → ここで "00 00" 成立 */
+    for (size_t i = 0; i < g_env_len && p < cap - 24; i++) poke8(base + p++, (uint8_t)g_env_buf[i]);
+    poke8(base + p++, 0x00);          /* 変数部末端 (空文字列) → 直前 NUL と合わせ "00 00" 成立 */
     poke8(base + p++, 0x01);          /* WORD: 後続文字列数 = 1 (LE) */
     poke8(base + p++, 0x00);
     /* argv[0]: ステージした実 image 名から "A:\NAME.EXT" を作る (無ければ既定)。
-     * '\' を含むので、argv[0] からデータディレクトリを切り出すゲームも正常化する。
-     * 実名にすることで、argv[0] の basename を設定/ログ名に使うゲームも正しく動く。 */
+     * '\' を含むので、argv[0] からデータディレクトリを切り出すゲームも正常化する。 */
     char path[32];
     if (g_stage.name[0]) snprintf(path, sizeof(path), "A:\\%s", g_stage.name);
     else                 snprintf(path, sizeof(path), "A:\\PROG.EXE");
-    for (size_t i = 0; path[i]; i++) poke8(base + p++, (uint8_t)path[i]);
+    for (size_t i = 0; path[i] && p < cap - 1; i++) poke8(base + p++, (uint8_t)path[i]);
     poke8(base + p++, 0x00);          /* argv[0] 終端 (以降は memset 0) */
 }
 
@@ -1195,7 +1306,9 @@ int qb_dos_loader_start_hook(void) {
     g_probe_xms = g_probe_ems = g_probe_emm_open = 0;  /* この Run の計測をリセット */
     qb_xms_reset();   /* XMS ハンドル表を Run 毎にクリア + プールを CPU_EXTMEM から再計算 */
 
-    /* 環境セグメント (PSP[0x2C] で指される) を先に作っておく */
+    /* 環境セグメント (PSP[0x2C] で指される) を先に作っておく。env は Run ごとに既定へ戻し
+     * (前 Run の `set` を持ち越さない)、その後の起動 .bat の set が build_env を呼び直して更新する。 */
+    qb_dos_env_reset();
     build_env(QB_DOS_ENV_SEG);
 
     /* PSP を 0x0100 セグメントに構築 */
