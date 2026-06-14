@@ -34,8 +34,11 @@ TinySoundFont (TSF, MIT, 単一ヘッダ) に差し替え、SF2 (GeneralUser GS)
   ユーザー了承済み (「全体リバーブで可、音質の底上げが効く」)。
 - **乖離が減る**: VERMOUTH 用の `04_vermouth_gs_effects.patch` (コア +437 行) を **revert** — NP2kai コア改変は
   01〜03 (bios/calendar/pccore の小修正) のみに戻った。合成エンジン置換は native/ 側 (自前 MIT コード) で完結。
-- **アセット**: SF2 はリポジトリ非同梱 (`.gitignore`)、`tools/setup_soundfont.sh` で取得、deploy.sh が dist へ同梱、
-  ブラウザは遅延 on-demand fetch (`ensureMidiLoaded` を単一 SF2 取得+進捗表示に書き換え)。CREDITS に TSF(MIT)/
+- **アセット**: SF2 はリポジトリ非同梱 (`.gitignore`)、`tools/setup_soundfont.sh` で取得、deploy.sh が dist へ同梱
+  (Cloudflare Pages は 1 ファイル 25MiB 上限のため 16MiB 分割し、パート名一覧を `soundfont.json` マニフェストに出力)。
+  ブラウザは遅延 on-demand fetch: 単一 SF2 (ローカル) → 無ければマニフェストのパートを連結 (いずれも RIFF 検査つき)。
+  **重要: Pages は存在しないパスにも 200+HTML を返すため「404 まで連番取得」は無限ループになる → マニフェストで
+  パート数を確定する** (2026-06-14 のホットフィックス。当初の連番 404 終端版は本番で無限 DL になった)。CREDITS に TSF(MIT)/
   GeneralUser GS を明記 (作者注記のサンプル出自留保も正直に記載)。別 SF2 への差し替えはファイル置換だけで可。
 - **検証**: 既存 MIDI テストを SF2 経路に移行 (mpu_midi=note 発音・reset 跨ぎ / midi_fx=リバーブ ON が OFF の
   1.39x / midi_serial=RS-MIDI 2 サイクル peak 28524 未クリップ)。touhou FM 4/4・batch/batscript/xms/sgr 回帰ゼロ。

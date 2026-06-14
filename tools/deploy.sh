@@ -33,7 +33,18 @@ if [ -f "$SF2" ] && [ "$(stat -c%s "$SF2")" -gt 26214400 ]; then
     echo "soundfont.sf2 を 16MiB 分割 (Pages 25MiB 上限対応)..."
     split -d -b 16m "$SF2" "$SF2."           # → soundfont.sf2.00, soundfont.sf2.01, ...
     rm -f "$SF2"
-    echo "  分割: $(cd "$DIST/assets" && ls soundfont.sf2.* | tr '\n' ' ')"
+    # マニフェスト soundfont.json にパート名一覧を書く。重要: Pages は存在しないパスにも 200+HTML を
+    # 返すため、ブラウザは「404 まで連番取得」では終端判定できず無限ループになる。マニフェストで個数を確定する。
+    {
+        echo -n '{"parts":['
+        first=1
+        for p in $(cd "$DIST/assets" && ls soundfont.sf2.* | sort); do
+            [ "$first" = 1 ] && first=0 || echo -n ','
+            echo -n "\"$p\""
+        done
+        echo ']}'
+    } > "$DIST/assets/soundfont.json"
+    echo "  分割: $(cd "$DIST/assets" && ls soundfont.sf2.* | tr '\n' ' ') / manifest: $(cat "$DIST/assets/soundfont.json")"
 fi
 
 echo "dist 生成: $DIST ($(du -sh "$DIST" | cut -f1))"

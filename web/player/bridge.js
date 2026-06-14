@@ -879,20 +879,30 @@ NP2KaiModule({
                 if (looksLikeSf2(u)) buf = u;     // 偽物 (HTML 等) なら下のパート連結へ
             }
             if (!buf) {
-                // 連番パート (soundfont.sf2.00, .01, …) を 404 まで連結
-                const chunks = []; let n = 0;
-                for (let i = 0; ; i++) {
-                    const r = await fetch(`assets/soundfont.sf2.${String(i).padStart(2, '0')}`);
-                    if (!r.ok) break;
-                    const part = new Uint8Array(await r.arrayBuffer());
-                    chunks.push(part); n += part.length; showMB(n);
-                }
-                if (chunks.length) {
+                // 本番 (Cloudflare Pages、25MiB/ファイル上限) は deploy.sh が SF2 を分割し、
+                // パート名一覧を assets/soundfont.json (マニフェスト) に書く。**Pages は存在しないパスにも
+                // 200+HTML を返す**ので「404 まで連番取得」だと無限ループになる → マニフェストで個数を確定する。
+                let parts = null;
+                try {
+                    const mr = await fetch('assets/soundfont.json');
+                    if (mr.ok) {
+                        const j = JSON.parse(await mr.text());   // HTML フォールバックなら parse 失敗 → catch
+                        if (Array.isArray(j.parts) && j.parts.length) parts = j.parts;
+                    }
+                } catch (_) { parts = null; }
+                if (parts) {
+                    const chunks = []; let n = 0;
+                    for (const name of parts) {
+                        const r = await fetch('assets/' + name);
+                        if (!r.ok) throw new Error(`soundfont part ${name} (HTTP ${r.status})`);
+                        const part = new Uint8Array(await r.arrayBuffer());
+                        chunks.push(part); n += part.length; showMB(n);
+                    }
                     buf = new Uint8Array(n); let o = 0;
                     for (const c of chunks) { buf.set(c, o); o += c.length; }
                 }
             }
-            if (!looksLikeSf2(buf)) throw new Error('soundfont.sf2 取得失敗 (単一/パートとも不在 or RIFF 不正)');
+            if (!looksLikeSf2(buf)) throw new Error('soundfont 取得失敗 (単一/manifest とも不在 or RIFF 不正)');
             runStatusEl.textContent = `MIDI: soundfont ready (${(buf.length / 1048576).toFixed(1)} MB) — preparing…`;
             // CWD (= data dir /tmp) 直下に soundfont.sf2 を置く。C 側 midimod_create (qb_tsf.c) が
             // tsf_load_filename("soundfont.sf2") で読む。
