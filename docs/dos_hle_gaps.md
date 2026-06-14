@@ -33,8 +33,11 @@
    - ~~**EXEC 子の終了時にハンドルを閉じない**＋ハンドル表 `g_fh` がプロセス間共有 → ランチャ往復でハンドル枯渇~~ → ✅ 2026-06-02 修正（子が開いたハンドルだけ子終了で close。TSR は常駐なので閉じない）。
 
 2. **カレントドライブ/ディレクトリ** — 19h は常に A:(=0)。ドライブレターは剥がして `/run` に集約するので、**A:/B: を別ボリュームとして使う2枚組ゲームは両者が混ざる**。CHDIR は ✅ 実装したが「ドライブ」は依然 1 つ（`g_cwd` で論理カレントを保持）。
+   - **パス解決（`read_dos_rel`）は 8.3 フィールドのパディング空白を除去**（2026-06-15）。DOS の 8.3 名に空白は入らない（空白＝FCB の埋め文字）ので、プログラムが FindFirst 結果を 11 byte FCB 形式で持ち `"NAME    .EXT"` の形で再 open するケース（MUAP98 が選択曲を開く経路）でも実 DOS 同様に開ける。`0x20` は SJIS リード/トレイル範囲外なので DBCS を壊さない。
+   - **起動 .bat の `cd` / `set`**（2026-06-15）— ミニ COMMAND.COM（`shell.asm` + C 文インタプリタ）が `cd PATH` で `g_cwd` を移動し（`qb_dos_chdir`）、`set VAR=VALUE` を DOS env に反映して以降 EXEC される子へ継承させる（環境変数でデータディレクトリを知る MUAP98 等のため）。env ブロックは 256 byte 固定なので収まらない set は honest に捨てる。
 
 3. **FindFirst/Next がグローバル1本（`g_find`）** — 実 DOS は検索状態を DTA に持つので入れ子・並行検索が可能。2 つ目の FindFirst が 1 つ目を破壊。DTA の reserved 検索状態も書かない。
+   - **wildcard 照合（`dos_wildcard_match`）は実 DOS 流の `name.ext` フィールド分割**（2026-06-15）。`.` を含む pattern は base/ext を別々に glob するので `*.*` は拡張子の無い名前（ディレクトリ `NORM` 等）にも一致する（MUAP98 のファイラがサブディレクトリを巡回できる）。`.` を含まない pattern は名前全体に char glob（末尾 `*` は `.` を跨ぐので `FOO*`→`FOO.BAR` 可、ただしワイルドカード無しの `HTJL` は `HTJL.COM` に**一致しない**＝実 DOS で ext 空のみ。緩めると「素の名前で FindFirst→無ければ `.COM` 補完」型のソフト＝GS100=gsnake が誤分岐で壊れる）。
 
 4. **ファイル属性 43h** — Get は常に 0x20(archive)、Set は無視。read-only/hidden を区別しない。
 
