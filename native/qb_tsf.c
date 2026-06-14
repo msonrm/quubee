@@ -26,14 +26,17 @@
 #define QB_SF2_FILENAME		"soundfont.sf2"
 
 /* float 出力 (±1 付近) → NP2kai ストリーム SINT32 への変換ゲイン (VERMOUTH 時代の音量に合わせて実測)。 */
-#define QB_OUT_SCALE		11000.0f
+#define QB_OUT_SCALE		7000.0f		/* float(±1付近)→SINT32。soft-clip の KNEE(24576) 以下に収め、
+										 * 密度の高い曲(同時発音多)+FM SFX でも飽和(ビビり/ハウリング)しない
+										 * よう headroom を取る (11000→7000、2026-06-14 実測調整)。tunable */
 #define QB_MAXBLOCK			4096		/* midiout_get 1 回で処理する最大フレーム数 */
 
 /* ---- 全体リバーブ (Freeverb, stereo) ---- */
 #define FX_NUMCOMBS		8
 #define FX_NUMALLPASS	4
 #define FX_STEREOSPREAD	23
-#define FX_REV_WET		0.50f		/* wet 加算量。全体(ドラム/ベース含む)に一律掛かるので per-part より控えめに。tunable */
+#define FX_REV_WET		0.40f		/* wet 加算量。全体(ドラム/ベース含む)に一律掛かるので per-part より控えめに。
+										 * 0.50→0.40 (2026-06-14): リバーブ強め+激しい曲のハウリング感を緩和。tunable */
 #define FX_REV_INGAIN	0.025f		/* comb 入力ゲイン */
 
 static const int fx_combtune[FX_NUMCOMBS] =
