@@ -26,18 +26,19 @@
 #define QB_SF2_FILENAME		"soundfont.sf2"
 
 /* float 出力 (±1 付近) → NP2kai ストリーム SINT32 への変換ゲイン (VERMOUTH 時代の音量に合わせて実測)。 */
-#define QB_OUT_SCALE		7000.0f		/* float(±1付近)→SINT32。soft-clip の KNEE(24576) 以下に収め、
-										 * 密度の高い曲(同時発音多)+FM SFX でも飽和(ビビり/ハウリング)しない
-										 * よう headroom を取る (11000→7000、2026-06-14 実測調整)。tunable */
+#define QB_OUT_SCALE		8000.0f		/* float(±1付近)→SINT32。soft-clip の KNEE(24576) 以下に収め、
+										 * 密度の高い曲(同時発音多)+FM SFX でも飽和しないよう headroom を取る。
+										 * 11000→7000→8000 (リバーブ共鳴を別途抑えた分、少し戻して FM との音量差を縮小)。tunable */
 #define QB_MAXBLOCK			4096		/* midiout_get 1 回で処理する最大フレーム数 */
 
 /* ---- 全体リバーブ (Freeverb, stereo) ---- */
 #define FX_NUMCOMBS		8
 #define FX_NUMALLPASS	4
 #define FX_STEREOSPREAD	23
-#define FX_REV_WET		0.40f		/* wet 加算量。全体(ドラム/ベース含む)に一律掛かるので per-part より控えめに。
-										 * 0.50→0.40 (2026-06-14): リバーブ強め+激しい曲のハウリング感を緩和。tunable */
+#define FX_REV_WET		0.40f		/* wet 加算量。全体(ドラム/ベース含む)に一律掛かるので per-part より控えめに。tunable */
 #define FX_REV_INGAIN	0.025f		/* comb 入力ゲイン */
+#define FX_REV_INLP		0.45f		/* リバーブ入力の 1-pole LPF 係数 (~4.5kHz相当)。共鳴しやすい高域を入口で削り、
+										 * 持続音での金属的なハウリング/ビビりを抑える (ドライ音は明るいまま)。1.0=無効 */
 
 static const int fx_combtune[FX_NUMCOMBS] =
 				{ 1116, 1188, 1277, 1356, 1422, 1491, 1557, 1617 };
@@ -63,6 +64,7 @@ typedef struct {
 	FXCOMB		combL[FX_NUMCOMBS], combR[FX_NUMCOMBS];
 	FXALLPASS	apL[FX_NUMALLPASS], apR[FX_NUMALLPASS];
 	float		comb_fb, damp1, damp2;
+	float		fx_inlp;		/* リバーブ入力 pre-LPF の 1-pole 状態 */
 } QBHDL;
 
 static int s_fx_enable = 1;		/* 全 hdl 共通リバーブ on/off (midiout_fx_setenable) */
@@ -89,7 +91,7 @@ static void fx_alloc(QBHDL *h) {
 	int i, total = 0;
 	int sc[FX_NUMCOMBS], scr[FX_NUMCOMBS], sa[FX_NUMALLPASS], sar[FX_NUMALLPASS];
 	float *fp;
-	float room = 0.80f, damp = 0.25f;
+	float room = 0.62f, damp = 0.40f;	/* 0.80/0.25→0.62/0.40: 残響を短め+暗めにして共鳴(ハウリング)を抑制 */
 
 	for (i = 0; i < FX_NUMCOMBS; i++) {
 		sc[i]  = fx_scale(fx_combtune[i], h->samprate);
@@ -125,6 +127,9 @@ static void fx_apply(QBHDL *h, float *fbuf, UINT n) {
 	for (i = 0; i < n; i++) {
 		float in = (fbuf[i*2] + fbuf[i*2+1]) * FX_REV_INGAIN;
 		float oL = 0.0f, oR = 0.0f;
+		/* 入力 pre-LPF: 共鳴しやすい高域を comb に入れる前に削る (ハウリング抑制) */
+		h->fx_inlp += FX_REV_INLP * (in - h->fx_inlp);
+		in = h->fx_inlp;
 		for (j = 0; j < FX_NUMCOMBS; j++) {
 			oL += fx_comb_run(&h->combL[j], in, h->comb_fb, h->damp1, h->damp2);
 			oR += fx_comb_run(&h->combR[j], in, h->comb_fb, h->damp1, h->damp2);
