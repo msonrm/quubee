@@ -15,6 +15,11 @@
 |---|---|
 | `01_dos_loader_hooks.patch` | Phase 3 ミニマル DOS ローダ用のフック。`bios_initialize` 末尾で `qb_dos_install_trampolines()` 呼び出し + `biosfunc()` switch に 6 case 追加 (0xFEE00 ローダ起動 / 0xFEE10 INT 21h / 0xFEE20 INT 20h / 0xFEE50 INT 2Fh=XMS 検出・応答 / 0xFEE60 INT 67h=EMS 需要プローブ / 0xFEE70 XMS ドライバ entry) |
 | `02_font_reset_fix.patch` | `pccore_reset()` の `ZeroMemory(mem + FONT_ADRS, 0x08000)` を抑止。リセット毎に fontrom 先頭 0x8000 (= JIS 点 0..7 の漢字ブロック) が消去され、Wasm には再生成する hook_fontrom バックエンドが無いため、点1..7 の漢字 (あ/い/う 等) が永久に欠けるのを防ぐ |
+| `03_rtc_y2k_clamp.patch` | `calendar.c:date2bcd` で年 >=2000 を 1999 にクランプ。90 年代ゲームが PC-98 RTC (μPD4990A) から直読みする年が 2026→126 の 3 桁になり固定幅セーブを壊す Y2K バグを汎用シムで回避 (蟹味噌のテキスト残留の真因) |
+
+> 注: かつての `04_vermouth_gs_effects.patch` (VERMOUTH に GS リバーブ等を追加) は **revert 済み**。
+> MIDI 合成は VERMOUTH から TinySoundFont (`native/qb_tsf.c` + `native/third_party/tsf.h`、SF2 再生) に
+> 差し替えたため、VERMOUTH (`sound/vermouth/*.c`) はビルドから外され、コア改変は 01〜03 のみに戻った。
 
 ## 適用方法
 

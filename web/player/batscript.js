@@ -19,15 +19,17 @@
     // MVP ① ではこれらを読み飛ばし、主プログラムだけを直接起動する (上のコメント参照)。
     // 拡張子は付けず素の名前で照合する (.bat 内も素の名前で呼ぶため)。
     const DRIVER_NAMES = new Set([
-        'mdrv98', 'mdrv', 'middrv', 'middrv98', 'middrvpc',
+        'mdrv98', 'mdrv', 'middrv', 'middrv98', 'middrvpc', 'mmd',
         'opndrv', 'ssgdrv', 'tkydrv', 'fmpdrv', 'fmp', 'spbdrv',
         'pmd', 'pmd98', 'pmdb2', 'cats', 'calib', 'mfree',
     ]);
 
     // MIDI (RS-MIDI/MPU) を鳴らす常駐ドライバ。これらを使うレシピは VERMOUTH (soundfont) が
-    // 要るので、Run 時に遅延ロード+有効化する (FM 専用の mdrv98 等とは区別する)。MIDDRV は
-    // 標準 MIDI ファイル演奏ドライバ (-X1 で RS-MIDI シリアルへ送出)。
-    const MIDI_DRIVER_NAMES = new Set(['middrv', 'middrv98', 'middrvpc']);
+    // 要るので、Run 時に遅延ロード+有効化する (FM 専用の mdrv98 等とは区別する)。
+    //  - MIDDRV: 標準 MIDI ファイル演奏ドライバ (-X1 で RS-MIDI シリアルへ送出)。
+    //  - MMD: KAJA の MIDI 音楽ドライバ (PMD の MIDI 版相棒)。MPU-PC98 (0xE0D0) を直接叩く。
+    //    huma_ts2 (東方封魔録) の「MIDI(MPU)」モードがこれ。enable_midi_now が MPU98II も attach する。
+    const MIDI_DRIVER_NAMES = new Set(['middrv', 'middrv98', 'middrvpc', 'mmd']);
 
     // .bat の 1 行を解釈して { kind, ... } に分類する。
     function parseLine(line) {

@@ -837,59 +837,73 @@ NP2KaiModule({
     const dosGetExitFn = M.cwrap('np2kai_dos_get_exit', 'number', ['number']);
 
     // ---- MIDI 遅延 on-demand ロード ----
-    // MIDI ドライバ (MIDDRV 等) を使うレシピを Run した時だけ、soundfont (freepats) を取得して
-    // VERMOUTH を構築する。非 MIDI ゲームは一切ダウンロードしない (「即プレイ」維持)。
-    // VERMOUTH を読んだ後の reset (runStaged 内) で rs232c_reset が COMCREATE_SERIAL を VERMOUTH に
-    // 繋ぎ直し、RS-MIDI (-X1) の MIDI バイトが合成される (C 側 qb_commng.c)。create のやり直しは不要。
+    // MIDI ドライバ (MIDDRV/MMD 等) を使うレシピを Run した時だけ、soundfont (SF2) を取得して
+    // 合成器 (TinySoundFont) を構築する。非 MIDI ゲームは一切ダウンロードしない (「即プレイ」維持)。
+    // SF2 を読んだ後の reset (runStaged 内) で RS-MIDI(シリアル)/MPU98II が合成器に繋ぎ直される
+    // (C 側 qb_commng.c)。create のやり直しは不要。音色は GeneralUser GS (full GM/GS、~32MB)。
     const enableMidiNow = M.cwrap('np2kai_enable_midi_now', 'number', ['number']);
     let midiLoadState = 'none';   // 'none' | 'ready' | 'failed'
-    const mkdirSafe = (p) => { try { M.FS.mkdir(p); } catch (_) { /* 既存 */ } };
     async function ensureMidiLoaded() {
         if (midiLoadState === 'ready')  return true;
         if (midiLoadState === 'failed') return false;   // 同セッション内の再試行はしない
         try {
-            runStatusEl.textContent = 'MIDI: fetching instrument data (~33 MB, first time only)…';
-            // 各 fetch は res.ok を検査する。fetch は 404 等で reject しないので、未配備や欠損を
-            // 見逃すと HTML エラーページの中身を .pat として書き込んでしまう (VERMOUTH は欠損 .pat を
-            // 黙って飛ばす = inst_bankloadex が SUCCESS のままなので無音の原因が分かりにくい)。
-            // 非 OK は throw して下の catch で failed 化する。
-            const fetchBuf = async (url) => {
-                const r = await fetch(url);
-                if (!r.ok) throw new Error(`${url} (HTTP ${r.status})`);
-                return r.arrayBuffer();
+            runStatusEl.textContent = 'MIDI: fetching instrument data (~32 MB, first time only)…';
+            // SF2 の取得。fetch は 404 等で reject しないので res.ok を検査する (未配備時に HTML を SF2 として
+            // 書き込んでしまわないように)。ローカルは単一 soundfont.sf2、本番 (Cloudflare Pages は 1 ファイル
+            // 25MiB 上限) は deploy.sh が soundfont.sf2.00/.01… に分割するので、単一が無ければ連番パートを連結する。
+            const showMB = (b) => runStatusEl.textContent = `MIDI: downloading soundfont… ${(b / 1048576).toFixed(1)} MB`;
+            const readStream = async (res) => {            // 単一ファイルをストリーミングで読み進捗表示
+                const total = Number(res.headers.get('content-length')) || 0;
+                if (!(res.body && res.body.getReader)) return new Uint8Array(await res.arrayBuffer());
+                const reader = res.body.getReader();
+                const parts = []; let n = 0;
+                for (;;) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    parts.push(value); n += value.length;
+                    runStatusEl.textContent = total
+                        ? `MIDI: downloading soundfont… ${Math.round(n / total * 100)}% (${(n / 1048576).toFixed(1)} MB)`
+                        : `MIDI: downloading soundfont… ${(n / 1048576).toFixed(1)} MB`;
+                }
+                const u = new Uint8Array(n); let o = 0;
+                for (const p of parts) { u.set(p, o); o += p.length; }
+                return u;
             };
-            const idxRes = await fetch('assets/freepats/index.json');
-            if (!idxRes.ok) throw new Error(`index.json (HTTP ${idxRes.status})`);
-            const idx = await idxRes.json();
-            // timidity.cfg は data dir (CWD=/tmp) 直下、.pat は /tmp/freepats/<rel> に置く
-            // (cfg 内 `dir freepats` 前提。C 側 qb_vermouth_init が CWD から読む)。
-            const cfgBuf = await fetchBuf('assets/freepats/' + idx.cfg);
-            M.FS.writeFile('/tmp/' + idx.cfg, new Uint8Array(cfgBuf));
-            mkdirSafe('/tmp/freepats');
-            // 進捗ライブ表示 (33MB/128 ファイルの DL は数十秒かかるので、件数+MB を出して「進んでいる」を可視化)。
-            const total = idx.pats.length;
-            let done = 0, bytes = 0;
-            const showProgress = () => {
-                const pct = Math.round(done / total * 100);
-                runStatusEl.textContent = `MIDI: downloading instruments… ${done}/${total} (${pct}%, ${(bytes / 1048576).toFixed(1)} MB)`;
-            };
-            showProgress();
-            await Promise.all(idx.pats.map(async (rel) => {
-                const slash = rel.lastIndexOf('/');
-                if (slash > 0) mkdirSafe('/tmp/freepats/' + rel.slice(0, slash));
-                const buf = await fetchBuf('assets/freepats/' + rel);
-                M.FS.writeFile('/tmp/freepats/' + rel, new Uint8Array(buf));
-                done++; bytes += buf.byteLength;
-                showProgress();
-            }));
-            runStatusEl.textContent = `MIDI: instruments ready (${(bytes / 1048576).toFixed(1)} MB) — preparing…`;
-            const ok = enableMidiNow(handle);   // VERMOUTH 構築 (次の reset で結線)
+            // SF2 は RIFF コンテナ。Pages が未配備パスに 200+HTML を返す (SPA フォールバック) ケースを
+            // 弾くため、先頭 "RIFF" を検査して偽物なら不採用にする。
+            const looksLikeSf2 = (u) => u && u.length > 12 && u[0] === 0x52 && u[1] === 0x49 && u[2] === 0x46 && u[3] === 0x46;
+            let buf = null;
+            const single = await fetch('assets/soundfont.sf2');
+            if (single.ok) {
+                const u = await readStream(single);
+                if (looksLikeSf2(u)) buf = u;     // 偽物 (HTML 等) なら下のパート連結へ
+            }
+            if (!buf) {
+                // 連番パート (soundfont.sf2.00, .01, …) を 404 まで連結
+                const chunks = []; let n = 0;
+                for (let i = 0; ; i++) {
+                    const r = await fetch(`assets/soundfont.sf2.${String(i).padStart(2, '0')}`);
+                    if (!r.ok) break;
+                    const part = new Uint8Array(await r.arrayBuffer());
+                    chunks.push(part); n += part.length; showMB(n);
+                }
+                if (chunks.length) {
+                    buf = new Uint8Array(n); let o = 0;
+                    for (const c of chunks) { buf.set(c, o); o += c.length; }
+                }
+            }
+            if (!looksLikeSf2(buf)) throw new Error('soundfont.sf2 取得失敗 (単一/パートとも不在 or RIFF 不正)');
+            runStatusEl.textContent = `MIDI: soundfont ready (${(buf.length / 1048576).toFixed(1)} MB) — preparing…`;
+            // CWD (= data dir /tmp) 直下に soundfont.sf2 を置く。C 側 midimod_create (qb_tsf.c) が
+            // tsf_load_filename("soundfont.sf2") で読む。
+            M.FS.writeFile('/tmp/soundfont.sf2', buf);
+            const ok = enableMidiNow(handle);   // TSF で SF2 ロード (次の reset で結線)
             midiLoadState = ok ? 'ready' : 'failed';
-            if (!ok) console.warn('[midi] VERMOUTH ロード失敗 (freepats 配置/timidity.cfg を確認)');
+            if (!ok) console.warn('[midi] soundfont ロード失敗 (soundfont.sf2 配置を確認)');
             return !!ok;
         } catch (e) {
             midiLoadState = 'failed';
-            console.warn('[midi] freepats 取得失敗 (production は未配備の可能性):', e);
+            console.warn('[midi] soundfont 取得失敗 (production は未配備の可能性):', e);
             return false;
         }
     }
@@ -1454,6 +1468,7 @@ NP2KaiModule({
     const setMul      = M.cwrap('np2kai_set_clock_multiple', 'number', ['number']);
     const midiBytes   = M.cwrap('np2kai_debug_serial_midi_bytes',  'number', ['number']);
     const midiActive  = M.cwrap('np2kai_debug_serial_midi_active', 'number', ['number']);
+    const midiFxFn    = M.cwrap('np2kai_debug_midi_fx',            null,     ['number']);
     const memprobeFn  = M.cwrap('np2kai_debug_memprobe',           'number', ['number', 'number']);
     const xmsEnableFn = M.cwrap('np2kai_xms_enable',               'number', ['number', 'number']);
     const xmsStatFn   = M.cwrap('np2kai_xms_stat',                 'number', ['number', 'number']);
@@ -1468,8 +1483,12 @@ NP2KaiModule({
     // (np2kai_set_clock_multiple = engine と同手順の changeclock + gdc_updateclock) だけ
     // 借りて、フィードバックは我々の最も信頼できる実時間信号 = run_frame 実測で駆動する。
     const autoClock = {
-        enabled: true,            // 既定 ON (実機検証で快適・音切れ無しを確認)。重い host では
-                                  // floor=20 まで自動で絞るので最悪でも現挙動 (固定20) と同等。
+        enabled: false,           // 既定 OFF (multiple=20 固定)。倍率を上げる快適化の利得は小さく
+                                  // (大半のゲームは HLT 待ちで倍率ほぼ無影響)、一方で倍率を上げると
+                                  // run_frame が重くなり音楽のテンポがもたつく実害が出る (MIDI でも FM/Ray でも
+                                  // 確認、2026-06-14)。速さが欲しい稀な CPU 律速タイトルだけ qbDebug.autoclock(1)
+                                  // または qbDebug.multiple(N) で手動で上げるオプトイン扱いにする。
+                                  // engine 既定 multiple も 20 (PCBASEMULTIPLE) なので OFF=20 で起動から安定。
         floor: 20, ceil: 42, step: 2,   // ceil=42: 仕様の x42 快適化目標。これ以上 (例 60) だと
                                   // vsync ロックゲームの CPU-bound バースト (ステージ遷移等) が
                                   // 速すぎになる (Nyahax で確認) ため、速度の上限として 42 を採用。
@@ -1505,8 +1524,9 @@ NP2KaiModule({
         // FM 音源エンジンの A/B 切替。fmgen(1)=fmgen(既定) / fmgen(0)=opngen。
         // 次の Run (reset) から反映 → 同じ FM ゲームを再実行して聴き比べる。
         fmgen:  (on=1) => `usefmgen=${setFmgen(on ? 1 : 0)} (1=fmgen/0=opngen) — 次の Run から反映。同じゲームを再実行して聴き比べてください`,
-        // async 自動クロック (快適化, 既定 ON)。autoclock(1)=ON で host の余裕に応じ multiple を
-        // floor..ceil 内で自動調整 (達成フレーム時間から逆算)。autoclock(0)=OFF で 20 固定。
+        // async 自動クロック (快適化, **既定 OFF**)。autoclock(1)=ON で host の余裕に応じ multiple を
+        // floor..ceil 内で自動調整 (達成フレーム時間から逆算)。autoclock(0)=OFF で 20 固定 (既定)。
+        // 既定 OFF の理由: 倍率を上げる利得は小さく音楽テンポがもたつく実害がある (上の autoClock 定義参照)。
         // 第2引数で ceil (上限倍率) を調整可: 例 autoclock(1, 30) で遷移をさらに緩く、(1, 60) で攻める。
         autoclock: (on=1, ceil) => {
             if (ceil !== undefined) autoClock.ceil = Math.max(autoClock.floor, ceil | 0);
@@ -1577,6 +1597,9 @@ NP2KaiModule({
         // active=false なら MIDI 無効 or VERMOUTH 未ロード (com_nc 落ち)。bytes が増えていれば MIDDRV が
         // 実際に送出している。bytes>0 かつ無音なら VERMOUTH 合成/freepats 側を疑う。
         midi: () => ({ active: !!midiActive(handle), bytes: midiBytes(handle) }),
+        // GS システムエフェクト (reverb/chorus/delay) の on/off。ドライ⇄ウェットの聴き比べ用。
+        // 既定 ON。例: qbDebug.midifx(0) で素のドライ音、qbDebug.midifx(1) で残響あり。
+        midifx: (on) => { midiFxFn(on ? 1 : 0); return on ? 'GS effects ON' : 'GS effects OFF'; },
         // XMS/EMS 需要プローブ: 現タイトルが拡張メモリを要求した回数 (Run 毎リセット)。
         // xms=INT 2Fh AX=43xx / ems=INT 67h / emmOpen=EMMXXXX0 デバイス open。いずれも未実装で
         // 「無し」と応答済みなので、>0 なら XMS/EMS HLE の実装価値あり (= 640KB の壁に当たっている)。

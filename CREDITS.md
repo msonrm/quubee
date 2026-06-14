@@ -21,6 +21,8 @@ QuuBee は配布しない。）
 | i386c CPU コア（NONAKA Kimihiro 他） | BSD（2条項） |
 | **FPU `fpemul_dosbox*.c`（DOSBox Team）** | **GPLv2 or later**（← 全体を GPL 化する要因） |
 | `web/assets/font.bmp` | 修正 BSD |
+| `native/third_party/tsf.h`（TinySoundFont, Bernhard Schelling） | MIT |
+| `web/assets/soundfont.sf2`（GeneralUser GS, S. Christian Collins） | 寛容ライセンス（下記） |
 | `tools/testdata/boot.d88`（FreeDOS(98)・テスト専用素材） | GPL |
 
 ---
@@ -74,6 +76,27 @@ QuuBee のビルドに含まれる主なものは:
 - 音源（fmgen / opngen）、mamebsd、VERMOUTH 等のライセンスは `core/np2kai` 配下の各ディレクトリを参照。
 
 各ファイルの著作権ヘッダは改変・削除せず温存している。
+
+---
+
+## MIDI 合成エンジン — `native/third_party/tsf.h` (TinySoundFont)
+
+ブラウザでの MIDI 演奏に **TinySoundFont**（単一ヘッダの SF2 ソフトシンセ）を使用。
+**MIT ライセンス**、Copyright (C) 2017–2025 Bernhard Schelling（SFZero, Copyright (C) 2012 Steve Folta
+に基づく）。`native/qb_tsf.c` がこれを用いて SF2 をネイティブ再生する（旧 VERMOUTH/GUS .pat 経路を置換）。
+ヘッダの著作権表示は温存している。
+
+## MIDI 音色 — `web/assets/soundfont.sf2` (GeneralUser GS)
+
+MIDI の音色バンクに **GeneralUser GS v2**（GM/GS 互換 SoundFont、作者 S. Christian Collins）を使用。
+ライセンスは寛容で、原文（`documentation/LICENSE.txt`）いわく「自分の音楽制作・私的/商用を問わず制限なく
+使用してよい。ソフトウェアプロジェクトでの使用も自由で、バンクやパッケージの改変も可」。再配布・同梱が
+明示的に許可されている（QuuBee はローカルコピーを同梱・配布する。作者は直リンクでなくローカルコピー配布を推奨）。
+作者の正直な注記として「一部サンプルの出自は完全には確証できない（ただし自由に入手可能なもので、商用音源 CD
+由来のものは含まれない）」とある。proprietary ROM を同梱しないという QuuBee のクリーン方針とは別軸の留保だが、
+ライセンス上は再配布が許諾されている。配布元: https://www.schristiancollins.com 。
+~32MB と大きいためリポジトリには含めず（`.gitignore`）、`tools/setup_soundfont.sh` で取得する。
+別の SF2 に差し替えるのも自由（TSF が読める SF2 を `web/assets/soundfont.sf2` に置くだけ・コード変更不要）。
 
 ---
 

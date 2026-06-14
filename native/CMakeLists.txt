@@ -83,7 +83,9 @@ set(SOUND_SOURCES
 )
 file(GLOB GETSND_SOURCES    ${NP2}/sound/getsnd/*.c)
 file(GLOB MAME_SOURCES      ${NP2}/sound/mame/*.c)
-file(GLOB VERMOUTH_SOURCES  ${NP2}/sound/vermouth/*.c)
+# VERMOUTH (sound/vermouth/*.c) はビルドしない: MIDI 合成は TinySoundFont (native/qb_tsf.c) に差し替え。
+# cmmidi.c が呼ぶ midimod_*/midiout_* は qb_tsf.c が提供する (VERMOUTH_LIB は cmmidi の分岐用に維持)。
+set(VERMOUTH_SOURCES "")
 file(GLOB TRAP_SOURCES      ${NP2}/trap/*.c)
 file(GLOB VRAM_SOURCES      ${NP2}/vram/*.c)
 
@@ -143,6 +145,7 @@ set(QB_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/qb_sysmng.c
     ${CMAKE_CURRENT_SOURCE_DIR}/qb_commng.c
     ${CMAKE_CURRENT_SOURCE_DIR}/qb_vermouth.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/qb_tsf.c
     ${CMAKE_CURRENT_SOURCE_DIR}/qb_ini.c
     ${CMAKE_CURRENT_SOURCE_DIR}/qb_taskmng.c
     ${CMAKE_CURRENT_SOURCE_DIR}/qb_timemng.c
@@ -191,6 +194,7 @@ set(EXPORTED_FUNCTIONS
     _np2kai_debug_get_reg16
     _np2kai_debug_serial_midi_bytes
     _np2kai_debug_serial_midi_active
+    _np2kai_debug_midi_fx
     _np2kai_debug_memprobe
     _np2kai_xms_enable
     _np2kai_xms_stat

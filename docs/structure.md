@@ -25,8 +25,10 @@ qb/
 │   ├── qb_scrnmng.c         # フレームバッファ管理 (RGB565)
 │   ├── qb_soundmng.c/.h     # 音声出力 (pull 型 — JS の DAC コールバックが直接汲む)
 │   ├── qb_mousemng.c/.h     # マウス入力 (Pointer Lock 相対移動 + 左右ボタン)
-│   ├── qb_commng.c          # COM ポート — RS-MIDI を cmmidi(VERMOUTH) へ結線
-│   ├── qb_vermouth.c        # MIDI (VERMOUTH soundfont) 配線 (freepats は on-demand fetch)
+│   ├── qb_commng.c          # COM ポート — RS-MIDI/MPU-PC98 を MIDI 合成器へ結線
+│   ├── qb_tsf.c             # MIDI 合成 = TinySoundFont で SF2 をネイティブ再生 (+全体リバーブ)
+│   ├── qb_vermouth.c        # MIDI モジュール (= ロード済 SF2) のライフサイクル薄層
+│   ├── third_party/tsf.h    # TinySoundFont (MIT, 単一ヘッダ SF2 シンセ)
 │   ├── qb_guestmem.h        # ゲストメモリ共有ヘルパ (VRAM 窓は正規 CPU 経路で読み書き)
 │   ├── qb_joymng/sysmng/taskmng/timemng/ini/wabrly.c  # その他フロントエンドスタブ
 │   ├── dos_loader.c/.h      # HLE-DOS: MZ/COM ローダ + PSP/MCB + EXEC/TSR + .bat 分岐インタプリタ
@@ -49,14 +51,14 @@ qb/
 │   │   ├── font.bmp         # ANK 8x16 / 漢字フォント (2048×2048 1bpp、修正 BSD — CREDITS.md)
 │   │   ├── loader.d88       # HLE-DOS ローダ用ブート disk (毎 Run pristine 再生成して挿入)
 │   │   ├── np2kai_boot.d88  # 自己起動最小ディスク (HELLO 待機画面)
-│   │   └── freepats/        # GUS パッチ (MIDI 用、gitignore、setup_freepats.sh で展開)
+│   │   └── soundfont.sf2    # MIDI 音色 (GeneralUser GS、gitignore、setup_soundfont.sh で取得)
 │   ├── np2kai_core.js       # ビルド成果物 (gitignore)
 │   └── np2kai_core.wasm     # ビルド成果物 (gitignore)
 │
 ├── tools/                   # 開発・変換・テストツール
 │   ├── deploy.sh            # Cloudflare Pages デプロイ (dist/ 生成)
 │   ├── img2d88.py           # PC-98 raw .img → .d88 変換
-│   ├── setup_freepats.sh    # freepats (GUS パッチ ~33MB) をローカル展開
+│   ├── setup_soundfont.sh   # MIDI 音色 SF2 (GeneralUser GS ~32MB) を取得
 │   ├── *_test.js ほか       # headless 回帰テスト群 (Node + Wasm 実ブート)。例:
 │   │                        #   batch_test (bat 分岐) / xms_test / sft_test / sgr_test /
 │   │                        #   find_sjis_test / exec_env_test / diskimage_test / lzh_l1ext_test /
@@ -91,8 +93,8 @@ qb/
 | メインメモリ | 640KB | 640KB |
 | 拡張メモリ | 数MB | 32MB (XMS 3.0 HLE で EMB として供給) |
 | グラフィック | 640×400 / 16色 | 同 + PEGC 256 色対応 |
-| サウンド | BEEP / 一部 FM | FM 音源 (OPNA / **fmgen** 既定) + BEEP + **RS-MIDI** (VERMOUTH、レシピ検出時に on-demand 有効化) |
-| クロック倍率 | x1 (実機) | **適応オートクロック** (負荷に応じ 20〜42 を自動調整、既定 ON) |
+| サウンド | BEEP / 一部 FM | FM 音源 (OPNA / **fmgen** 既定) + BEEP + **MIDI** (RS-MIDI / MPU-PC98 → TinySoundFont + SF2、レシピ検出時に on-demand 有効化) |
+| クロック倍率 | x1 (実機) | **multiple=20 固定** (≈ 486 @ ~49MHz)。適応オートクロックは既定 OFF (倍率を上げると音楽がもたつくため。qbDebug.autoclock(1) でオプトイン) |
 
 ## CPU エミュレータ構成
 
@@ -159,8 +161,9 @@ qb/
   ボタン=Z/X/Space/Enter/ESC）。PC-98 固有キー（XFER/NFER/KANA/GRPH 等）は未対応。
 - **サウンド**: **pull 型** — ブラウザの DAC コールバック（`ScriptProcessorNode.onaudioprocess`）が
   `np2kai_audio_fill` → `sound_pcmlock` を直接汲む（マスタークロック = DAC に統一、ドリフト皆無）。
-  FM は **fmgen** 既定（音量レバーは `vol_fm`）。RS-MIDI は VERMOUTH + freepats を MIDI レシピ
-  検出時だけ on-demand 有効化（非 MIDI タイトルの即プレイを保つ）。
+  FM は **fmgen** 既定（音量レバーは `vol_fm`）。MIDI は RS-MIDI(8251 シリアル) と MPU-PC98(MPU98II)
+  の両入力を **TinySoundFont + SF2**（`native/qb_tsf.c`、全体リバーブ込み）で合成。SF2 は MIDI レシピ
+  検出時だけ on-demand 取得し有効化（非 MIDI タイトルの即プレイを保つ）。
 - **表示**: フレームバッファは RGB565、JS 側で RGBA32 へ変換して canvas へ。640×400
   ピクセルパーフェクト。
 
@@ -169,7 +172,7 @@ qb/
 - ビルド成果物: `web/np2kai_core.{js,wasm}`, `/build/`, `/dist/`, `core/np2kai/build/`
 - **`/games/*`（.gitkeep 以外すべて）— ゲーム書庫は再配布許可が無いため絶対にコミットしない**
   （ローカル検証専用。リポジトリポリシー）
-- `web/assets/freepats/`（~33MB、`setup_freepats.sh` で展開）
+- `web/assets/soundfont.sf2`（~32MB、`setup_soundfont.sh` で取得）
 - `tools/dos_loader/` の派生物（boot.bin / loader.d88 / shell.bin / テスト COM 群。
   `web/assets/loader.d88` と `native/dos_shell_blob.h` はコミット）
 - `__pycache__/`, IDE, OS ファイル, 作業用スクショ

@@ -1,5 +1,132 @@
 # CHANGELOG
 
+## [適応オートクロックを既定 OFF に (multiple=20 固定)] — 2026-06-14
+
+SF2 移行でクリアな音色になったことで**音楽のテンポもたつき**が顕在化。`qbDebug.autoclock(0)` で全体が快適・
+Ray(FM) もテンポ安定とユーザー確認 → オートクロック ON の実害が判明したため既定 OFF に。
+
+- **真因**: オートクロックは host に余裕があると CPU 倍率を 20→42 に上げる「快適化」だが、倍率↑で run_frame が
+  重くなり、音楽再生中(ドライバの timer ISR が活発)に **producer(rAF 駆動の run_frame)/consumer(DAC pull)の
+  継ぎ目でオーディオバッファが枯れ**、音楽がもたつく。MIDI 限定でなく FM(Ray) でも出ていた(クリア音色で初めて気づいた)。
+- **得 < 害**: 倍率を上げる利得は元々小さい(大半のゲームは HLT 待ちで倍率ほぼ無影響=「静的バンプは低価値」)。
+  過去にも倍率↑で問題(vsync ロックの遷移バースト速すぎ→ceil 60→42 に下げた前科)。
+- **変更**: `web/player/bridge.js` の `autoClock.enabled` を `true→false`(JS のみ・Wasm 不変)。engine 既定 multiple
+  も PCBASEMULTIPLE=20 なので **OFF=起動から 20 固定で安定**(追加初期化不要)。`qbDebug.autoclock(1)` /
+  `qbDebug.multiple(N)` は速さが欲しい稀な CPU 律速タイトル用のオプトインに格下げ。
+- **multiple=20 の実機換算**: realclock = 2,457,600Hz × 20 ≈ **49MHz**、i486 級コア → **486DX2-50 級**(1993-94 の
+  PC-9821 A-mate/X-mate クラス)。autoclock の ceil=42 は ~103MHz 相当のオーバークロックだった。
+
+## [MIDI 合成を TinySoundFont + SF2 に差し替え (VERMOUTH 引退)] — 2026-06-14
+
+MIDI 音色の根本対策。freepats(GUS .pat) は GM 128 中 72 音色しか無く、SC-88 想定曲のパートが欠落していた。
+完全フリーかつ高品位な音色は SF2/SFZ 形式で VERMOUTH(GUS)は読めないため、**合成エンジンを VERMOUTH から
+TinySoundFont (TSF, MIT, 単一ヘッダ) に差し替え、SF2 (GeneralUser GS) をネイティブ再生**する。ユーザー方針
+「VERMOUTH にこだわらず実装が素直になる方へ」に沿った選択。
+
+- **エンジン**: `native/third_party/tsf.h` (TinySoundFont) を導入。`native/qb_tsf.c` が cmmidi.c の呼ぶ
+  小さな API (midimod_/midiout_ 群) を TSF 上に再実装 (MIDI バイト→tsf_channel_* / tsf_render_float)。
+  NP2kai コアの `sound/vermouth/*.c` はビルドから除外 (`set(VERMOUTH_SOURCES "")`)。cmmidi.c / qb_commng.c /
+  qb_vermouth.c の継ぎ目は不変 (型は vermouth.h の薄い公開型を流用)。
+- **音色**: GeneralUser GS v2 (GM/GS 互換、再配布可の寛容ライセンス、~32MB)。**全 128 音色 + GS ドラムキット**で
+  パート欠落が解消。SF2 はフィルタ/エンベロープ付きで freepats より音質の天井が高い。
+- **エフェクト**: GS パート別センドは TSF が内部ミックスのため不可 → **全体リバーブ (Freeverb)** を出力に一律適用
+  (qb_tsf.c、`midiout_fx_setenable`/`qbDebug.midifx(0|1)` で on/off)。コーラス/ディレイは一旦非対応。
+  ユーザー了承済み (「全体リバーブで可、音質の底上げが効く」)。
+- **乖離が減る**: VERMOUTH 用の `04_vermouth_gs_effects.patch` (コア +437 行) を **revert** — NP2kai コア改変は
+  01〜03 (bios/calendar/pccore の小修正) のみに戻った。合成エンジン置換は native/ 側 (自前 MIT コード) で完結。
+- **アセット**: SF2 はリポジトリ非同梱 (`.gitignore`)、`tools/setup_soundfont.sh` で取得、deploy.sh が dist へ同梱、
+  ブラウザは遅延 on-demand fetch (`ensureMidiLoaded` を単一 SF2 取得+進捗表示に書き換え)。CREDITS に TSF(MIT)/
+  GeneralUser GS を明記 (作者注記のサンプル出自留保も正直に記載)。別 SF2 への差し替えはファイル置換だけで可。
+- **検証**: 既存 MIDI テストを SF2 経路に移行 (mpu_midi=note 発音・reset 跨ぎ / midi_fx=リバーブ ON が OFF の
+  1.39x / midi_serial=RS-MIDI 2 サイクル peak 28524 未クリップ)。touhou FM 4/4・batch/batscript/xms/sgr 回帰ゼロ。
+  freepats 専用だった midi_fallback_test は削除 (SF2 完全収録で不要)。**ブラウザ実機確認はユーザー側 (次)**。
+- 既知の限界: SC-88 のエフェクト/独自音色と完全一致はしない (近似)。コーラス/ディレイ・パート別リバーブは未対応。
+
+## [MIDI 音色フォールバック — freepats 未収録プログラムを近傍音色で代用] — 2026-06-13
+
+MIDI モードで「音数が少なすぎる・ドラムしか聞こえない」(ユーザー報告、huma_ts2 の "She's in a temper!!"
+等) の真因を特定し暫定対処。**リバーブやエフェクトのせいではなく音色データの欠落**だった。
+
+- **真因**: 同梱の freepats (2006 opensrc.org 版) は GM 128 メロディ音色のうち **72 個しか持たない**
+  (`web/assets/freepats/Tone_000/` に 72 .pat、cfg の bank0 定義も 72)。未収録の 56 個に**シンセリード
+  (81 saw 等)・シンセベース (39)・パッド (89-93)・シンセストリングス/合唱 (50/51/52)・ブラス
+  セクション (62/63)** など SC-98 系ゲーム音楽の主役が多数含まれる。VERMOUTH はそれらを指定したパートで
+  `ch->inst == NULL` となり `voice_on` が `if (inst==NULL) return;` で**そのパートを丸ごと無音化**していた
+  (ドラムは drumset 収録済で鳴るため「ドラムだけ」に聞こえた)。曲データの問題ではなくアレンジの大半が消えていた。
+- **暫定対処 (Fix A)**: `progchange` (vermouth/midiout.c) に**近傍プログラム代用**を追加。bank0 にも音色が
+  無い場合、番号が最も近い収録済みプログラムで代用する (GM は同系統楽器が番号順に並ぶので最寄り ≒ 同系統。
+  例: 未収録 81 saw lead → 収録済 80 square lead)。これで**全パートが鳴る**ようになり「音数不足」を解消。
+  本来の音色そのものではない暫定対処で、**本筋は完全な音色セットへの差し替え (Fix B、別途)**。
+- **検証**: `tools/midi_fallback_test.js` 新設 — 未収録 prog 81 を progchange→note-on し、近傍代用で発音
+  (peak 6228 ≒ 収録済 piano 6117。従来は baseline ~2048 で無音)。回帰ゼロ (mpu_midi・midi_fx 1.33x・
+  midi_serial 2 サイクル PASS)。patch 04 に同梱。**ブラウザ実機確認はユーザー側**。
+
+## [GS システムエフェクト (リバーブ / コーラス / ディレイ) を VERMOUTH に実装] — 2026-06-13
+
+MIDI 音源 (VERMOUTH) が元来ドライ合成のみで、SC-88 想定の曲 (東方旧作の MIDI モード等) が無響で
+素っ気なかったのを解消。GS の Reverb/Chorus/Delay を実装し「あの残響」を取り戻す (`04_vermouth_gs_effects.patch`)。
+
+- **真因**: VERMOUTH は GS の Reverb/Chorus/Delay SysEx をパースしても `break;` で捨て、ボイスは
+  ドライのまま出力バッファへ直接合成していた (センドバスの概念が無い)。CC#91/93 も保存していなかった。
+- **実装 (センドバス + エフェクト DSP)**:
+  - `_CHANNEL` に reverb/chorus/delay の send レベル、`_MIDIHDL` に `*fx` を追加。
+  - `preparepcm` を変更し、各ボイスを per-voice scratch (vtemp) にミックスしてから dry (sampbuf) と
+    各センドバスへ「チャンネルのセンド量」で分配する。**12 個の mix 関数は無改造** (dst を差し替えるだけ)。
+  - `fx_process` がバスにエフェクトをかけ dry へ wet を加算: **reverb = Freeverb (8 comb + 4 allpass, stereo)**、
+    **chorus = 三角 LFO 変調ディレイ** (chorus→reverb 送り対応)、**delay = stereo フィードバックディレイ**。
+    内部 float、最終 wet 加算ゲインのみ実測キャリブレーション (FX_REV_CAL=9 で held note +33%)。
+  - **tail 維持**: ボイス停止後も ~2.2s はエフェクトを回し続け、残響が切れないようにする (`fx->tail`)。
+    完全無音なら従来通り即終了 (idle 時の CPU 浪費なし)。
+  - **honor する GS パラメータ**: CC#91 (reverb send)・CC#93 (chorus send) のパート単位、GS SysEx の
+    reverb type/level・chorus level・chorus→reverb・delay level、パート別 send (0x19/0x1a/0x1c)。
+    GM/GS リセットで reverb send=40 が既定なので、明示指定が無い曲でも自動的に残響が付く。
+  - `midiout_fx_setenable()` (VERMOUTH) → `np2kai_debug_midi_fx()` (bridge) → **`qbDebug.midifx(0|1)`** で
+    全体 on/off。ドライ⇄ウェットの A/B 用。既定 ON。
+- **複数音源の合成**: 既存の加算ミキサ (`streamprepare` がゼロ初期化バッファに各ストリームを加算) に
+  そのまま乗る。reverb wet が peak を押し上げるが soft-clip が捌く (RS-MIDI 実測 28514→30141、未クリップ)。
+- **検証**: `tools/midi_fx_test.js` 新設 (MPU 経由で note を撃ち、fx ON のサステインが OFF の 1.33 倍 =
+  残響が積み上がることを A/B 確認)。回帰ゼロ — mpu_midi (peak 6117→11726)・midi_serial 2 サイクル・
+  touhou 4/4・batch 14/0・batscript 51/0・xms・sgr・exec_env 全 PASS。**ブラウザ実機確認はユーザー側**。
+- 既知の限界: SC-88 のリバーブは Roland 独自アルゴリズムなので完全一致はしない (残響の質感は近似)。
+  reverb type/time の細部・insertion EFX (EFX) は未実装 (この年代の曲はシステムエフェクトが主で実害小)。
+
+## [MPU-PC98 (MPU98II) MIDI を限定有効化 — huma_ts2 (東方封魔録) の MIDI(MPU) モードが鳴る] — 2026-06-13
+
+東方封魔録 体験版 (`huma_ts2.lzh`) で OPTION→MUSIC を **MIDI(MPU)** に切り替えると無音だった問題を根治
+(C + JS)。**ブラウザ実機確認済 (2026-06-13、ユーザー)**: 書庫ドロップ→game.bat 起動で freepats ロード→
+ゲーム内 OPTION で MUSIC を MIDI(MPU) に切替えると発音。
+
+- **真因 (複合 2 点)**:
+  1. **MPU98II ボードが無効のまま**。`huma_ts2` の game.bat は MIDI ドライバ `mmd /D /K /M12` (KAJA の
+     MIDI 音楽ドライバ、PMD の MIDI 版相棒) を常駐させ、これが MPU-PC98 (I/O 0xE0D0) を直接叩く
+     (説明書: 「MIDI(MPU)…MPU が必要」)。だが現行 MIDI 実装は **RS-MIDI (8251 シリアル) しか繋いでおらず**、
+     `np2cfg.mpuenable` は既定 0 のまま。`mpu98ii_bind()` は `mpuenable` が真のときだけ 0xE0D0 を attach
+     するので、MMD が起動時に MPU を検出できず (オープンバス → MPU-401 ACK 無し)、MIDI 出力先が無かった。
+  2. **レシピが MIDI と判定されず freepats が読まれない**。`batscript.js` の `MIDI_DRIVER_NAMES` が
+     `middrv` 系のみで `mmd` を含まず、`usesMidi()` が false → VERMOUTH soundfont が未ロード。
+- **修正**:
+  - `native/bridge.c` — `np2kai_enable_midi_now()` が VERMOUTH ロード成功時に `mpuenable=1` /
+    `mpuopt=0x82` (0xE0D0, INT2 = MPU-PC98 標準) も立てる。次の reset で `pccore_set`→`PCCBUS_MPU98`、
+    `mpu98ii_bind` が 0xE0D0 を attach、`mpu98ii_reset`→`commng_create(MPU98II)` が VERMOUTH に結線。
+    **enable_midi_now は MIDI レシピ Run 時のみ呼ばれる**ので、MPU の attach は「MIDI を使うセッション
+    限定」(非 MIDI ゲームは mpuenable=0 のまま = 0xE0D0 未 attach・従来通り)。
+  - `native/qb_commng.c` — MPU98II→VERMOUTH 経路を forever-singleton から **「destroy で release+NULL、
+    create で作り直し」**に変更 (RS-MIDI serial と同型)。`pccore_reset` は `sound_reset`→`streamreset` で
+    毎リセット登録済みストリームを全消去してから `mpu98ii_reset` を回すので、singleton だと 2 回目以降の
+    reset で `sound_streamregist` が走らず MPU ストリームが永久に失われていた (= 旧実装のバグ)。毎リセット
+    作り直すことで再登録され reset を跨いで鳴り続ける。`qb_vermouth_ready()` ゲートで freepats 未ロード時は
+    idle stream を作らず com_nc に落とす。
+  - `web/player/batscript.js` — `mmd` を `MIDI_DRIVER_NAMES` / `DRIVER_NAMES` に追加。
+- **複数音源 (FM/BEEP/MIDI) の合成は適切と確認**: `streamprepare` がゼロ初期化バッファへ各ストリーム
+  コールバックを **加算** (`vermouth_getpcm` も `+=`) し soft-clip するだけの素直な加算ミキサ。各 cmmidi は
+  独立した MIDIHDL を持ち (共有は read-only な楽器バンクのみ)、idle な MPU ストリームは無音を加算する。
+  **過去メモの「MPU+serial 二重登録で音量半減」は本実装では再現しない**: `midi_serial_test` (RS-MIDI を
+  鳴らしつつ MPU も有効) で peak 28514/28363 と健全 (従来の serial 単独 25277〜27800 と同域)。
+- **検証**: `tools/mpu_midi_test.js` 新設 (MPU-401 UART へ note-on を撃つ極小 COM を staging。MIDI OFF=
+  baseline 止まり / ON=合成ピーク 6117 / reset 跨ぎでも継続)。回帰ゼロ — midi_serial 2 サイクル PASS、
+  touhou_test 4/4 (TH02 huma_ts2 の FM 起動含む)、batch 14/0・batscript 51/0・exec_env・xms・sgr・
+  find_sjis・create_sjis 全 PASS。
+
 ## [宣言 (About) — 初回訪問時に設計思想を日英で表示] — 2026-06-13
 
 サイトを最初に開いたとき、QuuBee の設計思想宣言文をポップアップ表示する (JS/HTML のみ・Wasm 不変)。

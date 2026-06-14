@@ -72,15 +72,28 @@ void np2kai_enable_midi(int enable) {
 /* 遅延 MIDI 有効化 (ブラウザ on-demand)。create 後に VERMOUTH を構築する。
  * 前提: freepats (CWD/timidity.cfg と CWD/freepats/{Tone,Drum}_000/ の .pat 群) を呼び出し前に配置済み
  * (CWD は create 内の chdir(data_dir) で data dir になっている)。
- * 直後に np2kai_reset を呼ぶと iocore_reset→rs232c_reset が COMCREATE_SERIAL を VERMOUTH に
- * 繋ぎ直し、RS-MIDI (-X1, 例 MIDDRV) の MIDI バイトが合成されるようになる。
- * MPU は使わない経路なので mpuenable は触らない (VERMOUTH stream を二重登録しないため)。
+ * 直後に np2kai_reset を呼ぶと:
+ *   - iocore_reset→rs232c_reset が COMCREATE_SERIAL を VERMOUTH に繋ぎ直し、RS-MIDI (-X1, 例 MIDDRV) の
+ *     MIDI バイトが合成される。
+ *   - pccore_set が mpuenable を見て PCCBUS_MPU98 を立て、cbuscore_bind→mpu98ii_bind が MPU-PC98 (0xE0D0) を
+ *     attach、mpu98ii_reset→commng_create(MPU98II) が VERMOUTH ストリームを (再)登録する。
+ * これで「MIDI(MPU)」モードのゲーム (huma_ts2 = 東方封魔録 等、MMD ドライバが 0xE0D0 を直接叩く) も鳴る。
+ *
+ * MPU98II の有効化は VERMOUTH ロード成功時だけ・かつ enable_midi_now は MIDI レシピ Run 時のみ呼ばれるので、
+ * MPU の attach は「MIDI を使うセッション限定」に留まる (非 MIDI ゲームは mpuenable=0 のまま = 0xE0D0 は
+ * 未 attach で従来通り)。port=0xE0D0/INT2 (mpuopt=0x82) は pccore_setdefault と同値。
  * 戻り値: VERMOUTH ロード成否 (1=成功 / 0=失敗: freepats 不在等)。冪等。 */
 int np2kai_enable_midi_now(np2kai_handle h) {
 	if (!h) return 0;
 	s_midi_enable = 1;
 	if (!qb_vermouth_ready()) {
 		qb_vermouth_init();
+	}
+	if (qb_vermouth_ready()) {
+		/* MPU-PC98 (MPU98II) を限定有効化。次の reset で 0xE0D0/INT2 が attach され、
+		 * commng_create(COMCREATE_MPU98II) が VERMOUTH に結線される (qb_commng.c)。 */
+		np2cfg.mpuenable = 1;
+		np2cfg.mpuopt    = 0x82;   /* 0xE0D0, INT2 (= MPU-PC98 標準) */
 	}
 	return qb_vermouth_ready();
 }
@@ -236,6 +249,11 @@ extern UINT32 qb_serial_midi_bytes(void);   /* qb_commng.c */
 extern int    qb_serial_midi_active(void);  /* qb_commng.c */
 uint32_t np2kai_debug_serial_midi_bytes(np2kai_handle h)  { if (!h) return 0; return (uint32_t)qb_serial_midi_bytes(); }
 int      np2kai_debug_serial_midi_active(np2kai_handle h) { if (!h) return 0; return qb_serial_midi_active(); }
+
+/* GS システムエフェクト (reverb/chorus/delay) の on/off (qbDebug.midifx)。VERMOUTH 全 hdl 共通。
+ * 主にドライ/ウェットの A/B 確認用。既定は ON。 */
+extern void midiout_fx_setenable(int enable);   /* core/np2kai/sound/vermouth/midiout.c */
+void np2kai_debug_midi_fx(int enable) { midiout_fx_setenable(enable); }
 
 /* XMS/EMS 需要プローブ (qbDebug.memprobe): 現タイトルが拡張メモリ (XMS/EMS) を要求した回数。
  * which 0=XMS(INT 2Fh AX=43xx) / 1=EMS(INT 67h) / 2=EMMXXXX0 open。いずれも未実装で「無し」と

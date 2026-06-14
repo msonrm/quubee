@@ -14,8 +14,11 @@
 # NP2kai build artifacts
 /core/np2kai/build/
 
-# freepats (GUS パッチセット、~33MB)
-# tools/setup_freepats.sh でローカルに展開、リポジトリには含めない
+# MIDI soundfont (GeneralUser GS、~32MB)。tools/setup_soundfont.sh で取得、リポジトリには含めない
+# (font.bmp と違い大きいので。デプロイ時 deploy.sh が同梱、ブラウザは遅延 on-demand で fetch)
+/web/assets/soundfont.sf2
+/web/assets/soundfont.sf2.*
+# freepats (旧 GUS パッチセット、~33MB)。MIDI 合成は TinySoundFont+SF2 に移行済で現在は未使用
 /web/assets/freepats/
 
 # ゲーム書庫 (.lzh/.zip/.rar 等) と派生イメージ。

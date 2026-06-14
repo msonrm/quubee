@@ -2,8 +2,9 @@
 # QuuBee 静的デプロイ用ディレクトリ dist/ を生成する。
 #   - wasm/js が無ければ emscripten ビルド (bash emscripten/build.sh)
 #   - web/ を dist/ へ複製。
-#     MIDI 用 freepats (~33MB) は同梱する (本番でも MIDI が鳴るように。遅延 on-demand なので
-#     MIDI ゲーム起動時のみ初回 DL され、非 MIDI ユーザーは取得しない)。
+#     MIDI 用 soundfont (web/assets/soundfont.sf2、GeneralUser GS ~32MB) は同梱する (本番でも MIDI が
+#     鳴るように。遅延 on-demand なので MIDI ゲーム起動時のみ初回 DL され、非 MIDI ユーザーは取得しない)。
+#     無ければ tools/setup_soundfont.sh で取得してから deploy すること。
 #     *.map は除外。テスト専用素材 (FreeDOS boot.d88) は tools/testdata/ にあり web/ に入れない。
 #
 # 生成後のアップロード (Cloudflare Pages、ドメイン不要 → quubee.pages.dev):
@@ -23,6 +24,17 @@ rm -rf "$DIST"
 mkdir -p "$DIST"
 cp -rL web/. "$DIST/"                                    # -L: symlink は実体化 (現状 web/ に無し)
 find "$DIST" -name '*.map' -delete
+
+# Cloudflare Pages は 1 ファイル 25MiB 上限。soundfont.sf2 (GeneralUser GS ~31MB) は超えるので、
+# 16MiB ごとに soundfont.sf2.00/.01… へ分割し、単一ファイルは dist から除く。
+# ブラウザ側 (bridge.js ensureMidiLoaded) は単一が無ければ連番パートを 404 まで連結する。
+SF2="$DIST/assets/soundfont.sf2"
+if [ -f "$SF2" ] && [ "$(stat -c%s "$SF2")" -gt 26214400 ]; then
+    echo "soundfont.sf2 を 16MiB 分割 (Pages 25MiB 上限対応)..."
+    split -d -b 16m "$SF2" "$SF2."           # → soundfont.sf2.00, soundfont.sf2.01, ...
+    rm -f "$SF2"
+    echo "  分割: $(cd "$DIST/assets" && ls soundfont.sf2.* | tr '\n' ' ')"
+fi
 
 echo "dist 生成: $DIST ($(du -sh "$DIST" | cut -f1))"
 echo "アップロード: npx wrangler pages deploy $DIST --project-name quubee --branch main --commit-dirty=true --commit-message \"QuuBee deploy\""

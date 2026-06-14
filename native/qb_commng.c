@@ -55,30 +55,31 @@ static _COMMNG com_serial = {
 UINT32 qb_serial_midi_bytes(void)    { return s_serial_midi_bytes; }
 int      qb_serial_midi_active(void) { return s_serial_inner != NULL; }
 
-/* MPU98II 用 COMMNG をシングルトン化。
- * 背景: mpu98ii_reset は pccore_init / pccore_reset 等で複数回呼ばれ、毎回
- * commng_destroy → commng_create を回す。一方で cmmidi_create 内の
- * sound_streamregist は cb 配列に追加するだけで unregist API が無い。
- * 都度新しい hdl で create すると、旧 hdl への dangling pointer が cb 配列に
- * 残り、midiout_get で free 済みメモリを読み書き → メモリ破壊で他音源にノイズ。
- * シングルトン化で cmmidi_create と sound_streamregist を 1 回だけに留める。 */
-static COMMNG s_mpu98_singleton = NULL;
+/* MPU98II (MPU-PC98) → VERMOUTH 結線 (B, 2026-06-13)。
+ * 「MIDI(MPU)」モードを持つゲーム (huma_ts2 = 東方封魔録 等、KAJA の MMD ドライバ経由) は MIDI バイトを
+ * MPU-PC98 (I/O 0xE0D0) へ直接書く。RS-MIDI (シリアル) と違いゲストは MPU-401 UART のハンドシェイク
+ * (FFh リセット → ACK 読み等) を commng の read/write/getstat 経由で行うため、薄いラッパでなく cmmidi の
+ * 本体 COMMNG をそのまま返す (mpu98ii.c は cm_mpu98->read/write/getstat を直接叩く)。
+ *
+ * パターン: RS-MIDI と同じ「destroy で release+NULL、create で作り直し」にする (旧実装の forever-singleton
+ * からの変更)。理由: pccore_reset は sound_reset()→streamreset() で毎リセット cbreg (登録済みストリーム) を
+ * 全消去してから cbuscore_reset()→mpu98ii_reset() を回す。forever-singleton だと 2 回目以降の reset で
+ * cmmidi_create (= sound_streamregist) が走らず VERMOUTH ストリームが永久に失われていた。毎リセット作り直す
+ * ことで再登録され、reset を跨いで鳴り続ける (serial 経路と同型・実証済)。
+ * dangling 回避: mpu98ii_reset は commng_destroy → cm_mpu98=NULL の順、しかも streamreset で cbreg が空に
+ * なった後に release するので、midirelease が vermouth hdl を free しても cbreg に残骸は残らない。
+ * qb_vermouth_ready() ゲートで、freepats 未ロード時は VERMOUTH ストリームを登録せず com_nc に落とす
+ * (idle stream を作らない = serial と同じ判定)。 */
+static COMMNG s_mpu98_inner = NULL;
 
 COMMNG commng_create(UINT device, BOOL onReset) {
-    if (device == COMCREATE_MPU98II) {
-        if (s_mpu98_singleton == NULL) {
-            s_mpu98_singleton = cmmidi_create(device, cmmidi_vermouth, NULL, "GM");
+    (void)onReset;
+    if (device == COMCREATE_MPU98II && qb_vermouth_ready()) {
+        if (s_mpu98_inner == NULL) {
+            s_mpu98_inner = cmmidi_create(device, cmmidi_vermouth, NULL, "GM");
         }
-        if (s_mpu98_singleton) {
-            /* T4.5: COMMSG_MIDIRESET は midireset() で 16 ch × sound_sync() を
-             * 回すが、CPU_CLOCK 累積状況で sound_sync 内 streamprepare() が
-             * 大量サンプル生成 → Wasm でブラウザ凍結する。我々の用途では
-             * 実際に MIDI 出力を使わない (vermouth soundfont 未ロード) ので、
-             * 2 回目以降の reset 時の MIDI 全ボイス停止は省略しても実害なし。
-             * シングルトン化で dangling pointer 問題は既に解消済。 */
-            (void)onReset;
-            return s_mpu98_singleton;
-        }
+        if (s_mpu98_inner) return s_mpu98_inner;
+        /* cmmidi 失敗 (VERMOUTH 未ロード等) は com_nc にフォールバック */
     }
     /* RS-MIDI: MIDI 有効時のみ、シリアルを VERMOUTH シンクに繋ぐ (TW212 TWMIDI.BAT 等 -X1)。
      * 内側 cmmidi は「無ければ作る」遅延生成。重要: cmmidi_create が呼ぶ sound_streamregist は
@@ -99,10 +100,15 @@ COMMNG commng_create(UINT device, BOOL onReset) {
 }
 
 void commng_destroy(COMMNG cm) {
-    /* シングルトンと no-connect は破棄しない。dangling pointer 問題回避のため、
-     * シングルトンはプロセス終了まで生かす。 */
-    if (cm == s_mpu98_singleton)  return;
     if (cm == (COMMNG)&com_nc)     return;
+    if (cm && cm == s_mpu98_inner) {
+        /* MPU の cmmidi 本体。release (midirelease) が vermouth hdl 破棄 + COMMNG 自体を free。
+         * NULL に戻して次の commng_create(MPU98II) で作り直す → sound_reset で消えた
+         * sound_streamregist 登録が復活し、reset を跨いで MIDI が鳴り続ける (serial と同型)。 */
+        if (s_mpu98_inner->release) s_mpu98_inner->release(s_mpu98_inner);
+        s_mpu98_inner = NULL;
+        return;
+    }
     if (cm == (COMMNG)&com_serial) {
         /* com_serial 自体は静的なので free しない。中身の cmmidi (VERMOUTH sink) を release して
          * s_serial_inner を NULL に戻す → 次の commng_create(SERIAL) で作り直され、sound_reset で

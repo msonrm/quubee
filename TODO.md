@@ -259,24 +259,19 @@ bio 100% (互換性の長尾) とは別軸のフロント強化。詳細は CHAN
      工数大 (数日〜) だが著作権クリーン
   3. **自己起動 HDD ゲームに賭ける** — 元々少数派なので恩恵小
 
-- **MIDI 音質改善 (Phase 4 以降に再分類)** — VERMOUTH 経路は通電して `qbDebug` レベルでは
-  鳴ることを確認 (`peak ~5000` の妥当な振幅、ピアノ的エンベロープ)。が、FM 音源と合算
-  すると「ビリビリ」歪みが出る。Pixel 10 でも同様なので ChromeOS の Audio (CRAS) は無罪。
-  原因候補: (a) freepats の GUS パッチ品質、(b) `vermouth_getpcm` と他 cb の合計が
-  SINT16 範囲を超えるクリップ歪み (`>> 1` 程度では改善せず)、(c) `midiout_get` 内部の
-  preparepcm が呼ばれること自体の副作用 (no-op で症状消失)。再開時の選択肢:
-  1. VERMOUTH 出力を更に減衰 (`>> 2/3`) + クリップ抑制で改善するか試す
-  2. freepats を eawpats 等のリッチセットに差し替え
-  3. JS 側 SoundFont 合成 (sf2synth.js / spessasus) に経路を切り替える
+- [x] **MIDI 音質改善 → 合成エンジンを TinySoundFont + SF2 に刷新 (2026-06-14)** — 上記選択肢の
+  「より良い音色セットへ差し替え」を、形式の壁 (VERMOUTH は GUS .pat のみ・完全フリー音源は SF2/SFZ) を越えて
+  **エンジンごと TinySoundFont (MIT) に差し替え、GeneralUser GS (SF2、全 128 音色) をネイティブ再生**する形で実現。
+  freepats が GM 72/128 しか無くパートが欠落していた問題 (ユーザー報告「ドラムだけ・音数不足」) を根治。SF2 は
+  フィルタ/エンベロープ付きで音質の天井も上がった。全体リバーブ (Freeverb) は `native/qb_tsf.c` に実装
+  (`qbDebug.midifx`)。VERMOUTH はビルド除外・patch 04 revert でコア改変は 01-03 のみに縮小。**ユーザー実機確認済**
+  (「全く違う音、音楽を聞く気になった」)。残: SC-88 と完全一致はしない (近似)・コーラス/ディレイ未対応 (任意)。
 
-- **ゲーム側 MIDI 検出ロジックの解明 (Phase 4 以降に再分類)** — プリメ 2 で MPU98II を
-  `mpuopt=0` (IRQ 3) / `mpuopt=2` (IRQ 6 = PC-98 INT2 表記) のいずれで attach しても
-  音源選択メニューが出ず、`mpu98ii_o0/o2` への write も 0 件 (= **MIDI 検出されていない**)。
-  プリメ 2 マニュアルによれば「FM のみなら音源選択メニューは出ない」のが仕様で、
-  逆に言えばメニューが出ないこと自体が「MIDI 無し判定」のサイン。
-  検出経路は MPU port のステータス読みだけでなく、BIOS の音源 ID 領域 (`0x60100` 付近?)
-  や別の I/O port を見る可能性が高い。再開時は「ゲームから読まれる全 I/O port をログ」
-  「BIOS sound ID メモリの内容を確認」で検出経路を特定すべき。
+- [x] **MPU-PC98 (MPU98II) MIDI 対応 (2026-06-13)** — 「ゲーム側 MIDI 検出ロジック」の懸案を解消。MIDI(MPU) モードの
+  ゲーム (huma_ts2=東方封魔録 等、MMD ドライバが 0xE0D0 直叩き) が無音だった真因 = `mpuenable=0` で 0xE0D0 未 attach
+  だったこと。`np2kai_enable_midi_now` が MIDI レシピ Run 時に MPU98II を限定有効化 (port 0xE0D0/INT2) し、
+  `qb_commng.c` で VERMOUTH→(現 TSF) に結線。**ブラウザ実機で発音確認済 (ユーザー)**。
+  ※プリメ 2 のように「音源選択メニューが出ない=MIDI 無し判定」型は別途 (検出経路がメニュー UI 側) で、MPU 直叩き型とは別。
 
 - [x] **✅ MIDI 鳴った (2026-06-05、TW212 = bio_100% TWMIDI.BAT)** — RS-MIDI (`-X1`) を VERMOUTH へ
   結線し、実機ブラウザで FM とは別の MIDI 音色が鳴ることをユーザー確認。**遅延 on-demand 配線 + reset 跨ぎ

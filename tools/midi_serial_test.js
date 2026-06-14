@@ -21,14 +21,14 @@ const cp   = require('child_process');
 const ROOT     = path.join(__dirname, '..');
 const WEB      = path.join(ROOT, 'web');
 const GAME_LZH = path.join(ROOT, 'games', 'bio_100', 'TW212.LZH');
-const FREEPATS = path.join(WEB, 'assets', 'freepats');
+const SF2      = path.join(WEB, 'assets', 'soundfont.sf2');
 const FONT     = path.join(WEB, 'assets', 'font.bmp');
 const LOADER   = path.join(WEB, 'assets', 'loader.d88');
 
 function skip(msg) { console.log('SKIP — ' + msg); process.exit(0); }
-if (!fs.existsSync(GAME_LZH))                            skip('TW212.LZH 不在 (ローカル限定テスト)');
-if (!fs.existsSync(path.join(FREEPATS, 'timidity.cfg'))) skip('freepats 不在 (tools/setup_freepats.sh)');
-if (!fs.existsSync(LOADER))                              skip('loader.d88 不在 (tools/dos_loader/build.sh)');
+if (!fs.existsSync(GAME_LZH)) skip('TW212.LZH 不在 (ローカル限定テスト)');
+if (!fs.existsSync(SF2))      skip('soundfont.sf2 不在 (tools/setup_soundfont.sh)');
+if (!fs.existsSync(LOADER))   skip('loader.d88 不在 (tools/dos_loader/build.sh)');
 
 // TW212.LZH を一時ディレクトリへ展開 (lha が無ければ lhasa)。
 const TMP = fs.mkdtempSync('/tmp/tw212_midi_');
@@ -51,23 +51,10 @@ const latin1 = (s) => { const u = new Uint8Array(s.length); for (let i = 0; i < 
     M.ccall('np2kai_set_data_dir', null, ['string'], ['/tmp/']);
     M.FS.writeFile('/tmp/FONT.BMP', new Uint8Array(fs.readFileSync(FONT)));
 
-    // ---- freepats を MEMFS へ: /tmp/timidity.cfg + /tmp/freepats/{Tone,Drum}_000/*.pat ----
-    // (timidity.cfg は CWD=/tmp を見る。cfg 内 `dir freepats` で .pat は /tmp/freepats/ 相対)
-    M.FS.writeFile('/tmp/timidity.cfg', new Uint8Array(fs.readFileSync(path.join(FREEPATS, 'timidity.cfg'))));
+    // ---- soundfont を MEMFS へ (TSF が CWD の soundfont.sf2 を読む) ----
     const mkdir = (p) => { try { M.FS.mkdir(p); } catch (_) {} };
-    mkdir('/tmp/freepats');
-    let nPat = 0;
-    for (const sub of ['Tone_000', 'Drum_000']) {
-        const src = path.join(FREEPATS, sub);
-        if (!fs.existsSync(src)) continue;
-        mkdir('/tmp/freepats/' + sub);
-        for (const f of fs.readdirSync(src)) {
-            if (!/\.pat$/i.test(f)) continue;
-            M.FS.writeFile(`/tmp/freepats/${sub}/${f}`, new Uint8Array(fs.readFileSync(path.join(src, f))));
-            nPat++;
-        }
-    }
-    console.log(`freepats: ${nPat} pat, timidity.cfg 配置`);
+    M.FS.writeFile('/tmp/soundfont.sf2', new Uint8Array(fs.readFileSync(SF2)));
+    console.log('soundfont.sf2 配置');
 
     // ---- 遅延 on-demand 経路を検証: MIDI OFF で create → 後から enable_midi_now → reset で結線 ----
     // (ブラウザ bridge.js と同じ順序。boot 時は MIDI OFF=即プレイ維持、MIDI レシピ Run 時のみ有効化)
