@@ -66,11 +66,16 @@ start:
     jmp     .next
 
 .done:
-    mov     ax, 0x4C00                   ; 全コマンド完了 → セッション終了
-    int     0x21
-.hang:                                   ; 念のため: 4Ch が戻ったら停止
+    ; 全コマンド完了。ここで AH=4Ch 終了せず、割り込み許可 (sti) でアイドルする。
+    ; 理由: 音源ドライバ等の常駐 TSR は OPNA タイマ割り込み (IRQ12 等) で演奏を進めるが、
+    ;   実 DOS の COMMAND.COM が常駐後も IF=1 で回るのと違い、4Ch 終了後の HLE アイドルは
+    ;   IF=0 になり、ISR が二度と配送されず曲が最初の1音で止まる (計測で確定)。sti + hlt
+    ;   ループで割り込みを生かしたままアイドルし、常駐演奏ドライバを動かし続ける。
+    ;   セッションの後始末は Stop / 新規ドロップ時の reset が行う。
+    sti
+.idle:
     hlt
-    jmp     .hang
+    jmp     .idle
 
 ; ---- EXEC パラメータブロック (ES:BX) ----
 ; +0 env seg (0 = 子は親 env 継承、C 側 build_child_env が子固有 env を作って argv[0] を

@@ -1,5 +1,19 @@
 # QB 作業状況
 
+## ✅ PMD (.M) FM 音楽再生 — エンジン完成 (2026-06-16)
+
+東方旧作 BGM 等の PC-98 同人 FM 音楽 `.M`(PMD)をブラウザで再生可能に(NEC BIOS / MS-DOS 不使用)。
+Path B = 本物の KAJA PMD ドライバを HLE-DOS で常駐演奏。**ブラウザ実機確認済み**。
+
+- 鳴らす修正: `native/bridge.c`(86 ボード IRQ12 = PMD の hook と一致)+ `tools/dos_loader/shell.asm`
+  (シーケンス後を `sti` アイドルに = 常駐 ISR が IF=1 で刻み続ける)。`core/np2kai` 改変ゼロ。
+- クリーン素性エンジン: KAJA 2019 自由公開ソースから `PMD86.COM` + `PMP.COM` を自前ビルド
+  (`tools/pmd_build/build_pmd.sh` + README、UASM も自前ビルド)。CREDITS に KAJA 項。1997 バイナリ/PMDWin 不使用。
+- 対象 = PMD `.M`(大多数)。`.M2`(PPZ8=要 EMS)/`.M26`(26K)は別ドライバ要で後回し。回帰 = `tools/pmd_test.js`。
+- **残 (②)**: 同梱配線(ビルドした PMD86/PMP を QuuBee のロード経路へ = web/assets 遅延 fetch or blob)+
+  音楽ポップアップ UI(ファイラで .M タップ→曲情報+Play→再生/一時停止/停止)。デザインはユーザーと。
+- 詳細は CHANGELOG 2026-06-16 / `tools/pmd_build/README.md`。
+
 ## 🎯 現在の目標: bio 100% ゲーム互換性 (2026-06-05〜)
 
 **目標 = bio 100% の純ゲーム 31 本中 20 本を T3 (操作可能・プレイ可能) にする** (floor=16/過半、stretch=24)。

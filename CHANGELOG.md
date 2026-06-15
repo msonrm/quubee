@@ -1,5 +1,35 @@
 # CHANGELOG
 
+## [PMD (.M) FM 音楽をブラウザで再生 + クリーン素性エンジンを自前ビルド] — 2026-06-16
+
+東方旧作 BGM をはじめ PC-98 同人 FM 音楽の事実上の標準 `.M`(PMD)を、NEC BIOS / MS-DOS 不使用のまま
+ブラウザで鳴らせるようにした(Path B = 本物の KAJA PMD ドライバを HLE-DOS で常駐演奏)。**ブラウザ実機確認済み**。
+
+### 鳴らすための修正(自前コードのみ・`core/np2kai` 改変ゼロ)
+- **`native/bridge.c`: 86 ボードの割り込みを INT5/IRQ12 に固定**(`snd86opt |= 0x0C`)。PMD は OPNA タイマ
+  割り込みでテンポを刻み、その ISR を IRQ12(INT 0x14)のベクタに hook する。NP2kai 既定の IRQ3 のままだと、
+  board が上げる IRQ と PMD が待つベクタが食い違い、割り込みが ISR に届かず曲が進まなかった。
+- **`tools/dos_loader/shell.asm`: シーケンス完了後を `AH=4Ch` 終了 → `sti` + `hlt` アイドルに**(`native/dos_shell_blob.h` 再生成)。
+  実 DOS の COMMAND.COM は常駐後も IF=1 で回るが、4Ch 後の HLE アイドルは IF=0 で常駐演奏ドライバの
+  ISR が二度と配送されず「最初の 1 音だけ鳴って無音」になっていた。`sti` アイドルで ISR が刻み続ける。
+- 切り分けは計測ビルド(`pic.c` 等に一時 printf)で確定: `pic_irq` が `EI=0` で早期 return = IF=0 が真因。
+  当初疑った fmgen の `Intr()` スタブは無関係(タイマ IRQ は fmgen/opngen とも `opntimer.c` 経由)。
+
+### クリーン素性エンジンの自前ビルド(`tools/pmd_build/`)
+- 「素の `.M` 単体→即演奏」には PMD ドライバ/プレイヤの内蔵が要る。KAJA(梶原正裕)氏が 2019 に
+  「ご自由に使って」と公開したソースから **PMD86.COM + PMP.COM を自前ビルド**(1997 バイナリの改変/商用
+  禁止を避け、C60 氏の PMDWin も不使用)。
+- `tools/pmd_build/build_pmd.sh`: MASM 互換アセンブラ **UASM を gh tarball から取得し modern gcc-14 向けに
+  移植してビルド** → KAJA ソースを gh 取得(生 github.com の git clone はサンドボックス DNS 不可)→
+  OPTASM→UASM の機械的補正(制御文字除去・負変位 `-N[reg]`→`[reg-N]`・文字列 equate→`<...>`・
+  `loop`→`dec cx/jnz`・include 大小)→ `uasm -bin -Zm`(原典 `ml /Zm` 相当の M510)→ PMP 末尾の BSS トリム。
+  **罠: UASM は環境変数 `UASM` を既定オプションに読む(MASM の `ML` と同じ)→ 変数名 `ASM` + `unset UASM` で根治**。
+  `README.md` / `CREDITS.md`(KAJA 項)あり。`out/` は `.gitignore`(再生成可)。
+- 対象は **PMD `.M`**(東方旧作 BGM 含む大多数)。`.M2`(PPZ8 PCM=要 EMS)/`.M26`(26K/OPN)は別ドライバ要で後回し。
+- 回帰: `tools/pmd_test.js`(fmgen/opngen 両方で steady-state 演奏を確認)新設。既存スイート
+  (batch_test 19/0・batscript 51/0・touhou 4/4・midi 系・bio100 triage = 描画到達24/動作確認26・CRASH0/EXIT0)回帰ゼロ。
+- **残: 同梱配線(ビルドした PMD86/PMP を QuuBee のロード経路へ)+ 音楽ポップアップ UI**(② として後続)。
+
 ## [レビュー追従: テストハーネス堅牢化 + UI メッセージ英語化] — 2026-06-15
 
 現行コードのレビューで見つかった小修正をまとめて適用 (プロダクトのロジックは不変・Wasm 再ビルド不要)。

@@ -108,6 +108,21 @@ FreeDOS(98) の 2HD フロッピーイメージ（**GPL**、再配布可）。he
 
 ---
 
+## PMD (Professional Music Driver) — PC-98 FM 音楽 .M の再生
+
+PC-98 同人 FM 音楽の事実上の標準フォーマット `.M`(PMD)を QuuBee 内で再生するため、KAJA(梶原正裕)氏作の
+**PMD ドライバ + PMP プレイヤ**を同梱する。KAJA 氏は 2019/12/25 に PMD/MC/PMP の全ソースを公開し、
+「ソースについての著作権は放棄しませんが、**ご自由に使って頂いて構いません**。むしろ…再利用するアイデアが
+あるようでしたら、ぜひ利用してやってください」と明記している。QuuBee はこの自由公開ソースから**自分自身で
+バイナリをビルド**する(1997 配布バイナリは「無断の改変・営利使用を禁ず」の別ライセンスなので使わない)。
+
+ビルドは `tools/pmd_build/build_pmd.sh`(MASM 互換アセンブラ UASM を用意し、OPTASM→UASM の機械的な
+移植補正を当てて `PMD86.COM` + `PMP.COM` を生成)。素性が完全にクリーンなバイナリのみを同梱する。
+帰属: PMD / MC / PMP © M.Kajihara (KAJA)。原典ソース: https://github.com/d2lmirrors/pmd (KAJA 2019 公開のミラー)。
+C60 氏の PMDWin は使用していない(連絡許諾が要るため。Path B は KAJA のドライバのみで完結)。
+
+---
+
 ## QuuBee 自身
 
 QuuBee のブリッジ層・フロントエンド・ツール群（`native/` の `qb_*`/`bridge`/`dos_*`、`web/player/`、
