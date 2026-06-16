@@ -106,6 +106,11 @@ int np2kai_set_fmgen(int on);
 __attribute__((visibility("default")))
 int np2kai_set_beep_mute(int mute);
 
+/* 86 ボードの割り込みを INT5/IRQ12 に寄せる (on) / 既定へ戻す (off)。PMD .M 単体再生の音楽
+ * セッションでだけ on。常駐ドライバ同梱ゲームは既定 (off)。reset の前に設定すること。 */
+__attribute__((visibility("default")))
+int np2kai_set_pmd_irq(int on);
+
 /* CPU クロック倍率の live 設定 (快適化 A/B / async 自動クロック / ベンチ用)。倍率↑ = エミュ CPU
  * 高速化だが host 負荷も比例増 (CPU-bound 時。HLT-idle 時は HLT fast-forward でほぼ無影響)。
  * pull 型音声では host が追いつかない倍率にすると音声が枯れて途切れるので real-time を割らない

@@ -89,6 +89,7 @@ const NP2KaiModule = require(path.join(WEB, 'np2kai_core.js'));
     if (r !== 0) throw new Error('stage_music r=' + r);
     M.ccall('np2kai_dos_music_play', 'number', ['string'], [songs[0]]);
     M.ccall('np2kai_insert_fdd', 'number', ['number', 'string', 'number', 'number'], [handle, '/tmp/loader.d88', 0, 0]);
+    M.ccall('np2kai_set_pmd_irq', 'number', ['number'], [1]);   // 音楽セッション = 86 ボードを IRQ12 に (reset 前)
     M.ccall('np2kai_reset', null, ['number'], [handle]);   // ★ ここが唯一の reset
 
     const a = runAndMeasure(1500, 1100);

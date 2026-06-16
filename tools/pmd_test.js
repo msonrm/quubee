@@ -92,6 +92,7 @@ const latin1 = (s) => { const u = new Uint8Array(s.length); for (let i = 0; i < 
         if (sr !== 0) throw new Error('stage_script r=' + sr);
 
         M.ccall('np2kai_insert_fdd', 'number', ['number', 'string', 'number', 'number'], [handle, '/tmp/loader.d88', 0, 0]);
+        M.ccall('np2kai_set_pmd_irq', 'number', ['number'], [1]);   // 音楽セッション = 86 ボードを IRQ12 に (reset 前)
         M.ccall('np2kai_reset', null, ['number'], [handle]);
 
         const runFrame = M.cwrap('np2kai_run_frame', null, ['number']);

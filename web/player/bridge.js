@@ -819,8 +819,10 @@ NP2KaiModule({
         musicState = 'stopped';
         musicSessionUp = false;     // セッション破棄 (C 側も qb_dos_reset_state で g_music_active=0)
         musicElapsedMs = 0; musicAwaitingStart = false;   // 経過時間もリセット
+        hideEngineFiles = false;
         if (machineAtIdle) return;
         insertFdd(handle, '/tmp/boot.d88', 0, 0);   // 失敗しても reset で BIOS 待機になるだけ
+        setPmdIrq(0);               // snd86opt を既定に戻す (reset 前)
         reset(handle);
         setBeepMute(0);             // 起動音を通常に戻す (音楽セッションでミュートしていた場合)
         machineAtIdle = true;
@@ -920,7 +922,11 @@ NP2KaiModule({
     const dosMusicPlay  = M.cwrap('np2kai_dos_music_play',  'number', ['string']);
     // 起動音 (ピポ = BEEP) のミュート。音楽セッションのブートでだけ消す (FM 曲は別音源で無傷)。
     const setBeepMute   = M.cwrap('np2kai_set_beep_mute',   'number', ['number']);
-    let suppressBootBeep = false;   // 次の loader ブートで起動音を消すか (音楽セッション時 true)
+    // 86 ボードの割り込みを IRQ12 に寄せる。我々の PMD .M 再生でだけ on (常駐ドライバ同梱ゲームは
+    // 既定 IRQ を前提にするので off=既定でないと演奏が壊れる)。snd86opt は reset(board bind) 前に設定。
+    const setPmdIrq     = M.cwrap('np2kai_set_pmd_irq',     'number', ['number']);
+    let suppressBootBeep = false;   // 次の loader ブートが音楽セッションか (= beep 消音 + IRQ12 + エンジン非表示)
+    let hideEngineFiles  = false;   // 一覧から PMD86.COM/PMP.COM を隠すか (音楽セッション中だけ true)
     // np2kai_dos_get_exit(int* code) — JS では HEAP に書き込み番地を渡す
     const dosGetExitFn = M.cwrap('np2kai_dos_get_exit', 'number', ['number']);
 
@@ -1021,11 +1027,16 @@ NP2KaiModule({
         if (r !== 0) throw new Error(`loader.d88 insert failed (r=${r})`);
         emuFrozen = false;       // 新セッション = まっさら (凍結/前の音楽セッションを引き継がない)
         musicSessionUp = false;  // 音楽セッション確立は playMusic が reset 後に立て直す
-        reset(handle);
-        // 起動音 (ピポ) は音楽セッションのブートでだけ消す。ゲーム起動は当時どおり鳴らす。
-        // reset 直後・ブートの pipo 描画前に設定する (beepcfg.vol を見て render するので間に合う)。
-        setBeepMute(suppressBootBeep ? 1 : 0);
+        const musicBoot = suppressBootBeep;   // このブートが音楽セッションか
         suppressBootBeep = false;
+        hideEngineFiles = musicBoot;          // 注入エンジンを一覧から隠すのは音楽セッション中だけ
+        // snd86opt は board bind (reset) 時に読まれるので reset の前に設定する。音楽セッションだけ
+        // IRQ12 に寄せ、ゲームは既定 IRQ のまま (常駐ドライバ同梱ゲームの演奏を壊さない)。
+        setPmdIrq(musicBoot ? 1 : 0);
+        reset(handle);
+        // 起動音 (ピポ) は音楽セッションのブートでだけ消す。ゲーム起動は当時どおり鳴らす
+        // (beepcfg.vol は render 時参照なので reset 後でも間に合う)。
+        setBeepMute(musicBoot ? 1 : 0);
         machineAtIdle = false;   // ゲーム実行開始 — 以後の resetToIdle は実リセットする
     }
 
@@ -1075,9 +1086,10 @@ NP2KaiModule({
                 let st;
                 try { st = M.FS.stat(path); } catch (_) { continue; }
                 if (M.FS.isDir(st.mode)) walk(path, prefix + e + '/');
-                // 音楽再生で /run へ注入した PMD エンジン (PMD86.COM/PMP.COM) は一覧に出さない
-                // (ユーザーの .M / 作品ファイルだけ見せる)。書庫由来でなくこちらが置いたツール。
-                else if (HIDDEN_RUN_NAMES.has(e.toUpperCase())) { /* 隠す */ }
+                // 音楽セッション中だけ、こちらが /run へ注入した PMD エンジン (PMD86.COM/PMP.COM)
+                // を一覧から隠す。ゲーム同梱の pmd86.com (東方旧作等) を巻き込まないよう
+                // hideEngineFiles でスコープを音楽セッションに限定する。
+                else if (hideEngineFiles && HIDDEN_RUN_NAMES.has(e.toUpperCase())) { /* 隠す */ }
                 else out.push({ name: prefix + e, size: st.size, mtimeMs: +st.mtime });
             }
         })('/run', '');

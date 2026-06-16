@@ -129,17 +129,11 @@ np2kai_handle np2kai_create(void) {
 	 * が出る)。CPU は重めだが -O3 で吸収できる。実行時 A/B は np2kai_set_fmgen /
 	 * qbDebug.fmgen(0|1) で可能 (次の Run で反映)。 */
 	np2cfg.usefmgen = 1;
-	/* PC-9801-86 サウンドボードの割り込みレベルを INT5 (=IRQ12) に固定する。
-	 * snd86opt のビット2,3 (0x0C) が IRQ セレクト: 0x0c → s_irqtable[3] = 0x0c = IRQ12
-	 * (core/np2kai/sound/opntimer.c, cbus/board86.c の nIrq 導出)。base/ROM/ID ビットは
-	 * 既定 (pccore_setdefault) のまま温存し、IRQ ビットだけ寄せる。
-	 * 【なぜ】PMD 等 OPNA ハードタイマでテンポを刻むドライバは 86 ボードの標準設定 INT5=IRQ12 を
-	 * 前提に自分の ISR をその割り込みベクタ (PC-98 IRQ12 → INT 0x14) に hook する。NP2kai の
-	 * 既定 (IRQ3) のままだと、OPNA タイマ溢れで上がる IRQ と PMD が待つベクタが食い違い、
-	 * 割り込みが ISR に届かず曲が進まない (最初の1音だけ鳴って無音=実測の症状)。IVT プローブで
-	 * PMD は INT 0x14 を hook、board は IRQ3 を assert と確認済。INT5/IRQ12 は実機 86 ボードの
-	 * 事実上の標準で、FM タイマと PCM(ADPCM) が共有する単一 INT 線とも整合する。 */
-	np2cfg.snd86opt |= 0x0C;
+	/* 86 ボードの割り込みレベルは既定 (pccore_setdefault = IRQ3 相当) のまま。
+	 * PMD .M 単体再生 (我々の PMD86/PMP) は INT5=IRQ12 を前提に ISR を hook するので、その
+	 * 音楽セッションのブートでだけ np2kai_set_pmd_irq(1) で IRQ12 に寄せる (= JS の loadLoaderDisk が
+	 * 制御)。【重要】これを全ゲームに無条件適用すると、既定 IRQ を前提にする常駐ドライバ
+	 * (東方旧作の zun.com→pmd86.com 等) の演奏とタイマ演出が壊れるため、グローバル設定はしない。 */
 	/* オーディオレイテンシ (ms)。soundmng_create が rate*ms/(2*1000) を 2 の冪へ丸めて
 	 * バッファ長にする。ini 既定 0 のままだと最小 (20ms→512frame) になり、メインスレッド
 	 * の ScriptProcessor コールバックがジャンクで underrun しやすい。100 で ~170ms の
@@ -424,6 +418,16 @@ int np2kai_set_beep_mute(int mute) {
 		s_beep_muted = 0;
 	}
 	return (int)beepcfg.vol;
+}
+
+/* 86 ボードの割り込みレベルを INT5/IRQ12 に寄せる (on) / 既定へ戻す (off)。
+ * 我々の PMD .M 再生 (PMD86/PMP) は IRQ12 前提で ISR を hook するので、その音楽セッションの
+ * ブートでだけ on にする。常駐ドライバ同梱ゲーム (東方旧作等) は既定のまま (off)。
+ * snd86opt は board bind (pccore_reset) 時に読まれるので、reset の前に設定すること。 */
+int np2kai_set_pmd_irq(int on) {
+	if (on) np2cfg.snd86opt |= 0x0C;       /* bit2,3 = IRQ セレクト → s_irqtable[3]=0x0c=IRQ12 */
+	else    np2cfg.snd86opt &= ~0x0C;      /* 既定 (IRQ3 相当) に戻す */
+	return np2cfg.snd86opt;
 }
 
 /* CPU クロック倍率の live 設定 (快適化 A/B / async 自動クロック / ベンチ用)。
