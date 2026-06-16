@@ -132,6 +132,22 @@ NP2KaiModule({
     // リフが出る。化けるならその時こそ BMP 中身が不正と確定する。
     await loadDisk(M, 'assets/font.bmp', '/tmp/FONT.BMP');
 
+    // OPNA 内蔵リズム音源 (バスドラ/スネア/シンバル/ハイハット/タム/リム) のサンプルを
+    // データディレクトリへ置く。これが無いと OPNA のリズム部 (reg 0x10 キーオン) が無音になり、
+    // 東方旧作など多くの曲でハイハット等のパーカッションが欠ける (実機では鳴る)。本物の YM2608
+    // リズム ROM はヤマハ著作物なので同梱不可 → font.bmp と同じく**クリーンな代替**を使う:
+    // メモル氏 (J'aime la musique, http://sound.jp/jaime/) が独自作成した「YM2608風リズム音色」
+    // 2608modoki2 (作者明示で「組み込み・再配布は有償無償問わず自由」)。CREDITS 参照。
+    // opna_reset (pccore_reset) が getbiospath()+"2608_*.WAV" を読むので、最初の reset より前に置く。
+    // fmgen は大文字 (2608_BD.WAV)、opngen 経路は小文字 (2608_bd.wav) を探すため両方の名前で書く。
+    for (const nm of ['bd', 'sd', 'top', 'hh', 'tom', 'rim']) {
+        const res = await fetch('assets/rhythm/2608_' + nm + '.wav');
+        if (!res.ok) continue;
+        const data = new Uint8Array(await res.arrayBuffer());
+        M.FS.writeFile('/tmp/2608_' + nm.toUpperCase() + '.WAV', data); // fmgen 既定
+        M.FS.writeFile('/tmp/2608_' + nm + '.wav', data);               // opngen A/B 用
+    }
+
     // ---- AudioContext を先に作って rate を確定させる ----
     // np2kai_create より前に samplingrate を反映させる必要があるため。
     // 48000 をリクエスト、得られた実 rate を使う。サポート外の値だと sound_create が

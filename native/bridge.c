@@ -129,6 +129,13 @@ np2kai_handle np2kai_create(void) {
 	 * が出る)。CPU は重めだが -O3 で吸収できる。実行時 A/B は np2kai_set_fmgen /
 	 * qbDebug.fmgen(0|1) で可能 (次の Run で反映)。 */
 	np2cfg.usefmgen = 1;
+	/* 音源ボードを「86 + ADPCM」(SOUNDID 0x14) にする。既定 (pccore_setdefault) は素の
+	 * PC-9801-86 (0x04) で OPNA の ADPCM-B サンプルチャンネルが無効 (board86_reset(adpcm=FALSE))。
+	 * 0x14 にすると board86_reset(adpcm=TRUE) で OPNA_HAS_ADPCM が立ち、.PPC 等 ADPCM PCM を
+	 * 使う PMD/曲データの打楽器・ベース・ボイス声部が発音できる (= 欠けていた音数の補完)。
+	 * FM6/SSG3/リズムは元から有効で不変、86 リニア PCM (pcm86io) も常時 bind なので、これは
+	 * 能力の上積みのみ (リグレッション検証は touhou_test / pmd_session_test / bio100_triage)。 */
+	np2cfg.SOUND_SW = SOUNDID_PC_9801_86_ADPCM;
 	/* 86 ボードの割り込みレベルは既定 (pccore_setdefault = IRQ3 相当) のまま。
 	 * PMD .M 単体再生 (我々の PMD86/PMP) は INT5=IRQ12 を前提に ISR を hook するので、その
 	 * 音楽セッションのブートでだけ np2kai_set_pmd_irq(1) で IRQ12 に寄せる (= JS の loadLoaderDisk が
@@ -429,6 +436,7 @@ int np2kai_set_pmd_irq(int on) {
 	else    np2cfg.snd86opt &= ~0x0C;      /* 既定 (IRQ3 相当) に戻す */
 	return np2cfg.snd86opt;
 }
+
 
 /* CPU クロック倍率の live 設定 (快適化 A/B / async 自動クロック / ベンチ用)。
  * realclock = baseclock × multiple が 1 表示フレームあたりの実行 CPU クロック数
