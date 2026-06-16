@@ -1,5 +1,106 @@
 # CHANGELOG
 
+## [PMD (.M) ② 同梱配線 + 音楽ポップアップ UI] — 2026-06-16
+
+`.M`(PMD FM 音楽) を「ファイラでタップ→そのまま再生」できるようにした (②)。エンジン部 (鳴らす)は
+直前の Path B で完成済み。今回は同梱とプロダクト層 UI で「お手軽」を成立させる。**JS/HTML/asset のみ・
+`core/np2kai` も `native/` も loader も不変**。残るはブラウザ実機 T3 確認 (ユーザー)。
+
+### 体験フロー
+- ファイラで `.M` をタップ → 下部ビューアに **曲名 / 作曲者 / 作者コメント** + `▶ Play`。
+- `▶ Play` → **クリーンな HTML プレイヤー**ポップアップ (ラベル付きで File / Title / Composer / Arranger /
+  Comment を表示・空フィールドも枠は残す、`▶ Play`/`⏸ Pause`/`■ Stop`、`playing via KAJA PMD driver (HLE-DOS)` 帰属)。
+
+### ユーザーフィードバック反映 (同日、ブラウザ実機後)
+- **一時停止 (`⏸ Pause`) を追加** — `run_frame` ループを `emuFrozen` フラグで凍結する**真の一時停止**
+  (エミュレータごと止まり位置を保持・再起動なし)。再開は凍結解除のみ。`bridge.js` の `frame()` に
+  `if (emuFrozen) { nextDue = now; return; }` を 1 行、`resetToIdle` で必ず解除。
+- **ボタン活殺** — 再生中は `▶ Play` 無効 / 停止中は `■ Stop` 無効 / `⏸ Pause` は再生中のみ有効
+  (`musicState` = stopped|playing|paused で駆動)。
+- **ポップアップを閉じたら停止** (`×`・Esc・背景クリック → `stopMusic`)。
+- **PMD86 の常駐自己診断バナー** (`!警告! プログラムがウイルスに侵されている可能性があります。`= PMD86 が
+  常駐部チェックサムで出す既知の良性メッセージ・HLE 環境で必ず出る) が背後に見えて怖い、を **プレイヤー表示中は
+  PC-98 画面をほぼ不透明な暗幕で覆う**ことで解消 (`#player-modal` の背景 `.94`)。
+- **情報をラベル付きに** (File/Title/Composer/Arranger/Comment、英語ラベル・値は作者表記のまま・空欄も枠を残す)。
+
+### Part 2: 再起動レスの曲差し替え (PMD86 常駐セッション、native 変更 + Wasm 再ビルド)
+ユーザー設計「**デフォルト＝PMD86 常駐、ソフト Run でまっさら reset**」を実装。どの書庫の `.M` も
+別 DOS セッション (reset) を起こさず次々演奏できる。
+- **shell.asm に待機経路 (AX=2) を追加** — フックが「いま実行する曲は無いが待機して再問い合わせ」を返すと、
+  `sti` + `hlt` で一拍待ってから再問い合わせる。常駐音源 ISR が IF=1 で刻み続け、JS が次曲を queue したら
+  次の問い合わせで EXEC。4Ch 終了しないので PMD86 常駐は維持。**既存の AX=0/1 経路は不変** = 通常ゲーム/.bat に
+  影響なし (shell blob 68B、nasm 再生成)。
+- **`dos_loader.c` に音楽コマンドキュー** — `qb_dos_stage_music` が PMD86(常駐) + PMP(曲は実行時差し替え) を
+  仕込み、`qb_dos_music_play(song)` が次曲を queue。フックは PMD86 消化後、pending があれば PMP の cmdtail
+  (シェル内 guest 0x1000+off) を書き換えて EXEC、無ければ AX=2 待機。セッションは `qb_dos_reset_state`
+  (Run/新規ドロップの reset) で破棄。**PMD86 のバナーは EXEC 後に `ESC[2J` で消す** (閉じたとき例の警告を見せない)。
+- **bridge** (`np2kai_dos_stage_music` / `np2kai_dos_music_play`) + **bridge.js**: `musicSessionUp` で分岐 —
+  初回だけセッション起動 (1 回 reset)、以後は `dosMusicPlay` で曲差し替え (reset なし)。Stop/Pause は凍結
+  (セッション維持)、Run/ドロップで破棄。
+- **検証** `tools/pmd_session_test.js` (新規): 曲 A→曲 B を **reset / loader 再挿入なし**で両方 steady-state
+  発音 (peak>4000・rms>500) + セッション非 exit を確認 (3/3 PASS)。回帰: pmd_test 2/0・batch 19/0・
+  batscript 51/0・sft/exec_env/xms/find_sjis/sgr/wildcard/zip PASS・touhou_test 4/0。
+
+### Part 2 後の追加フィードバック反映 (同日、JS/HTML のみ・Wasm 不変)
+- **① 一時停止/停止で「最後の音が鳴り続ける」を根治** — pull 型音声 (`onaudioprocess`) は凍結中も
+  `np2kai_audio_fill` を呼び続け、FM チップの保持音を audio クロックで延々レンダリングしていた。
+  **凍結中 (`emuFrozen`) は fill せず無音を出す** (チップ状態は据え置き → 再開で続きから)。
+- **② ポップアップの暗幕を全種で統一** — PMD86 バナーは EXEC 後 `ESC[2J` で消える (背後はクリア済みの
+  黒画面) ので、音楽プレイヤーの暗幕を不透明 (.94) から他ポップアップ (テキスト/MAG = `#viewer-modal`) と
+  同じ薄い暗幕 (.2 + blur) に揃えた。
+- **③ ポップアップにタイムスタンプ (Date 行) を追加** — 配布当時の mtime (例 1998-10-26) を表示。歴史を感じる。
+- **④ PMD `.M` の埋め込みメタは Title/Composer/Arranger/Comment が全て** (コーパス 45 本確認: PCM/PPZ サンプル名
+  スロットは全曲空 = 純 FM/SSG/Rhythm)。既に全て表示済み + ③ の日付で打ち止め。
+- **⑤ 演奏経過時間を表示** — 音楽は DAC クロックで実時間再生されるので、壁時計 (`performance.now()`) ベースで
+  正確に経過を刻める。`#player-time` に M:SS。**総尺は出さない**: PMD 曲は無限ループで「終わり」が無く、PMD
+  ドライバも曲長を公開しない (INT 60H は `GET_SYOUSETU` で現在小節は返すが総尺なし) → 本当の総尺はループ点検出の
+  シミュレーションが要り複雑なので見送り (ラジオ式の経過のみ)。
+  - **一時停止は値を保持・停止は 0 にリセット** (ユーザー要望)。
+  - **初回 boot 中 (常駐/曲ロードで数秒無音) は 0:00 のまま待ち、実際に音が出た瞬間 (`onaudioprocess` で
+    maxAbs>1000 を検出) に計時開始点を合わせる** — boot 時間ぶん時刻が先行する問題を解消。曲切り替え時は
+    旧曲の音で即座に開始 (boot ≒ 0)。
+- **⑥ 音楽セッションのブートは起動音 (ピポ) を消す (native + Wasm 再ビルド)** — ②の「音が出たら計時開始」が
+  **PC-98 起動音 (ピポ) に誤反応**していた (起動音より早く時刻が進む)。真因対処として **BEEP だけミュート**:
+  pipo は BEEP (スピーカ)、PMD 音楽は FM (OPNA) と**別音源**なので、`beepcfg.vol=0` で pipo だけ消えて曲は無傷
+  (`native/bridge.c` `np2kai_set_beep_mute`、退避/復元式)。**音楽セッションのブートでだけミュート、ゲーム起動
+  (まっさら環境) は当時どおりピポを鳴らす** (`bridge.js` の `suppressBootBeep` を `loadLoaderDisk` の reset 直後に
+  適用、`resetToIdle` で復帰)。B2「完全に消す」を採らない理由 = pipo とゲーム内 BEEP 音 (効果音/BEEP 楽曲) は
+  同じデバイスで、常時ミュートすると TWBEEP 等の正規 BEEP まで死ぬため。検証: BEEP ミュート中でも FM 曲は
+  steady-state 演奏 (peak 23926=従来同一) + 全回帰 (pmd_session 3/0・pmd_test 2/0・batch 19/0・touhou 4/0)。
+- **⑦ 音楽セッションの画面に "HELLO QuuBee" を中央表示 (native + Wasm 再ビルド)** — 音楽再生中もメイン画面に
+  HELLO 待機画面と同じ見た目を出す。フックのクリア時に `ESC[2J` + `ESC[13;35H` + `"HELLO QuuBee"` を tty へ
+  (boot_hello と同じ row13/col35 中央)。ポップアップを閉じても PMD86 バナーでなく HELLO が見える。検証: 音楽
+  セッションの VRAM 0xA07C4 に "HELLO QuuBee" がバイト一致で書かれることを確認。
+- **⑧ 下部プレビューは曲タイトルだけに簡素化** (JS のみ) — `.M` タップ時のファイラ下表示から作曲者/コメント/
+  「PMD FM 音楽…」を削り、`♪ {タイトル}` のみ。詳細 (File/Date/Title/Composer/Arranger/Comment) は ▶ Play で開く
+  ポップアップに集約済みなので重複を排除。
+
+### エンジン同梱と再生経路
+- 自前クリーンビルド (KAJA 2019 ソース) の **`PMD86.COM` + `PMP.COM` (計 35KB) を `web/assets/pmd/` に
+  コミット同梱**。1997 バイナリ/C60 PMDWin は不使用。`deploy.sh` の `cp -rL web/.` で本番にも自動同梱。
+- 初回 `.M` 再生時のみ engine を遅延 fetch (`ensurePmdEngine`) → `/run` へ注入 → 既存の
+  `stageAndRunScript` で `PMD86`(常駐)→`PMP <曲>`(演奏) を 1 DOS セッションで実行 (= 実証済み Path B 経路を
+  そのまま再利用、新規 DOS 実装ゼロ)。loader の `sti`+`hlt` アイドルで常駐 ISR が刻み続ける。
+- engine の 2 本は `scanRun` の `HIDDEN_RUN_NAMES` でフィルタし**一覧に出さない** (ユーザーの .M /
+  作品ファイルだけ見せる。ユーザー決定)。
+
+### PMD `.M` memo パーサ (`web/player/pmdmeta.js`、新規)
+- PMD は `.M` コンパイル時に曲データ末尾へ作者注釈 (#Title/#Composer/#Arrangement/#Memo) を埋め込む。
+  これを取り出して曲名/作曲/コメント表示に使う。
+- **形式 (実コーパス 45 本で全数検証)**: ファイル末尾に 2 byte LE の「インデックス表」(`00 00` 終端)。
+  各エントリは「直前文字列を終端する NUL/空スロット印 0xFF」を指し、**自己参照的** (`nulAfter(E[i]+1)===E[i+1]`)。
+  正準スロット = `[0..2]`予約(PCM/PPZ/PPSファイル名,多く空)・`[3]`曲名・`[4]`作曲・`[5]`編曲・`[6..]`コメント。
+- 後方走査が楽曲データの偽ワードを 1 個拾うことがあるため、**(a) 区切りバイト判定 + (b) 自己参照チェーン
+  整合トリム**の 2 段で確定 (推測でなく構造で除去)。「最初の非空文字列=曲名」は予約スロットに中身がある
+  曲 (Dim. Dream 等) で誤るため不採用 → slot[3] 固定参照。
+- 復号は bridge の `decodeSjisText` (NEC 罫線対応) を渡す。ブラウザ/Node 両対応 export。
+
+### 検証
+- `tools/pmd_meta_test.js` (新規): 東方旧作 BGM コーパス (`games/touhou/pmd_music/*.lzh`, 45 本) を展開し
+  **45/45 で曲名+作曲を抽出** (ZUN 本人のコメントまで復号: 「怪綺談５面の曲。/ いい感じ」等)。不在時 SKIP。
+- 回帰ゼロ: pmd_test 2/0 (実証済みエンジン演奏)・touhou_test 4/0・batscript 51/0・batch 19/0・
+  find_sjis/zip/sgr PASS。native 無改変なので bio100 triage は不変。
+
 ## [PMD (.M) FM 音楽をブラウザで再生 + クリーン素性エンジンを自前ビルド] — 2026-06-16
 
 東方旧作 BGM をはじめ PC-98 同人 FM 音楽の事実上の標準 `.M`(PMD)を、NEC BIOS / MS-DOS 不使用のまま

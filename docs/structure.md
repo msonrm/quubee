@@ -46,11 +46,13 @@ qb/
 │   │   ├── archive.js       # LZH (LH1/4/5/6/7 + header L0/1/2) デコーダ + ZIP (deflate) 展開
 │   │   ├── diskimage.js     # ディスクイメージ→FAT12/16 ファイル取り出し (ブートせず)
 │   │   ├── batscript.js     # 起動 .bat を「作者の起動レシピ」として解釈 (if/goto は C 側と分担)
-│   │   └── magimage.js      # PC-98 .MAG (MAKI02) 画像デコーダ
+│   │   ├── magimage.js      # PC-98 .MAG (MAKI02) 画像デコーダ
+│   │   └── pmdmeta.js       # PMD (.M) 曲データ末尾 memo (曲名/作曲/編曲/コメント) パーサ
 │   ├── assets/
 │   │   ├── font.bmp         # ANK 8x16 / 漢字フォント (2048×2048 1bpp、修正 BSD — CREDITS.md)
 │   │   ├── loader.d88       # HLE-DOS ローダ用ブート disk (毎 Run pristine 再生成して挿入)
 │   │   ├── np2kai_boot.d88  # 自己起動最小ディスク (HELLO 待機画面)
+│   │   ├── pmd/             # PMD86.COM + PMP.COM (KAJA 2019 ソースから自前ビルド — CREDITS.md)
 │   │   └── soundfont.sf2    # MIDI 音色 (GeneralUser GS、gitignore、setup_soundfont.sh で取得)
 │   ├── np2kai_core.js       # ビルド成果物 (gitignore)
 │   └── np2kai_core.wasm     # ビルド成果物 (gitignore)

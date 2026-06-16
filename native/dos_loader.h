@@ -127,6 +127,13 @@ int qb_dos_stage_batch(const char *prog, size_t len, const char *name);
 /* 「次コマンド?」フック (0xFEE90 で biosfunc から呼ばれる)。常に 1 を返す。 */
 int qb_dos_batch_next_hook(void);
 
+/* 音楽セッション (PMD .M を再起動なしで次々演奏): PMD86 を 1 度だけ常駐させ、以後は曲を
+ * 差し替えるだけにする。qb_dos_stage_music で stage → loader.d88 で起動 → 以後
+ * qb_dos_music_play(song) で曲を queue (別 DOS セッションを起こさない)。
+ * セッションは qb_dos_reset_state (Run/新規ドロップの reset) で破棄される。 */
+int qb_dos_stage_music(void);
+int qb_dos_music_play(const char *song);
+
 /* loader-start フック (0xFEE00 で biosfunc から呼ばれる)。
  * 戻り値: 1 = CPU 状態を書き換えたので caller は return(1) すること
  *         0 = stage されていないので素通り */

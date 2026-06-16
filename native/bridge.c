@@ -8,6 +8,7 @@
 #include <dosio.h>
 #include <scrnmng.h>
 #include <soundmng.h>
+#include <sound/beep.h>   /* beepcfg.vol — 起動音 (BEEP) ミュート用 */
 #include <mousemng.h>
 #include <keystat.h>
 #include <ia32/cpu.h>
@@ -407,6 +408,24 @@ int np2kai_set_fmgen(int on) {
 	return np2cfg.usefmgen;
 }
 
+/* 起動音 (PC-98 の「ピポ」) のミュート。pipo は BEEP (スピーカ)、PMD 音楽は FM (OPNA) と別音源
+ * なので、BEEP の音量 (beepcfg.vol) を 0 にすれば pipo だけ消えて曲は無傷。音楽セッションの
+ * ブートでだけミュートし、ゲーム起動 (まっさら環境) では当時どおり鳴らす用途。
+ * mute!=0 で現在音量を退避して 0、mute=0 で復帰。戻り値 = 設定後の beep 音量。 */
+extern BEEPCFG beepcfg;
+static int  s_beep_muted = 0;       /* 現在ミュート中か */
+static UINT s_beep_vol_saved = 0;   /* ミュート直前の beep 音量 (復元用) */
+int np2kai_set_beep_mute(int mute) {
+	if (mute) {
+		if (!s_beep_muted) { s_beep_vol_saved = beepcfg.vol; s_beep_muted = 1; }
+		beepcfg.vol = 0;
+	} else if (s_beep_muted) {       /* 未ミュート時は実既定を壊さない (no-op) */
+		beepcfg.vol = s_beep_vol_saved;
+		s_beep_muted = 0;
+	}
+	return (int)beepcfg.vol;
+}
+
 /* CPU クロック倍率の live 設定 (快適化 A/B / async 自動クロック / ベンチ用)。
  * realclock = baseclock × multiple が 1 表示フレームあたりの実行 CPU クロック数
  * (gdc.dispclock ∝ multiple) を決め、これが CPU-bound タイトルでの run_frame 負荷に比例する
@@ -501,6 +520,15 @@ int np2kai_dos_stage_batch(const char *prog, int len, const char *name) {
 
 int np2kai_dos_get_exit(int *code_out) {
 	return qb_dos_get_exit(code_out);
+}
+
+/* 音楽セッション (PMD .M を再起動なしで次々演奏): stage_music で PMD86 常駐セッションを仕込み、
+ * loader.d88 で 1 度起動 → 以後 music_play(song) で曲だけ差し替える。 */
+int np2kai_dos_stage_music(void) {
+	return qb_dos_stage_music();
+}
+int np2kai_dos_music_play(const char *song) {
+	return qb_dos_music_play(song);
 }
 
 const uint8_t *np2kai_get_framebuffer(

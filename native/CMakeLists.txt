@@ -202,7 +202,10 @@ set(EXPORTED_FUNCTIONS
     _np2kai_dos_stage_exe
     _np2kai_dos_stage_script
     _np2kai_dos_stage_batch
+    _np2kai_dos_stage_music
+    _np2kai_dos_music_play
     _np2kai_set_fmgen
+    _np2kai_set_beep_mute
     _np2kai_set_clock_multiple
     _np2kai_dos_get_exit
     _malloc

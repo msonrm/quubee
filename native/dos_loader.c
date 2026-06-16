@@ -565,6 +565,18 @@ static int  g_batch_pc     = 0;
 static int  g_batch_active = 0;    /* シェル stage 済 (qb_dos_reset_state でクリア) */
 static char g_batch_echo[QB_BATCH_ECHO_POOL];
 
+/* ---- 音楽セッション (PMD .M を再起動なしで次々演奏する常駐セッション) ----
+ * シェルは PMD86 を 1 度だけ常駐させ、以後は「待機(AX=2)」で曲を待つ。JS が次曲を queue
+ * すると、フックが PMP の cmdtail (シェル内 0x1000+off) を書き換えて AH=4Bh EXEC させる。
+ * 別 DOS セッションを起こさないので、どの書庫の .M も reset なしで切り替えできる。 */
+#define QB_MUSIC_TAIL_MAX 64           /* PMP の曲名 cmdtail 予約バイト数 (8.3+α で十分) */
+static int      g_music_active   = 0;  /* 音楽セッション中 (qb_dos_reset_state でクリア) */
+static int      g_music_pending  = 0;  /* 次に演奏する曲が queue 済み */
+static int      g_music_cleared  = 0;  /* 直近 EXEC 後にテキスト画面をクリア済みか */
+static uint16_t g_music_pmp_path = 0;  /* シェル内 "\PMP.COM" path オフセット */
+static uint16_t g_music_pmp_tail = 0;  /* シェル内 曲名 cmdtail バッファ オフセット */
+static char     g_music_song[QB_MUSIC_TAIL_MAX];  /* queue された曲名 (JS→C、フックで guest へ) */
+
 /* batch インタプリタ (set/cd 文) が使う env/build_env は後方定義なので前方宣言する。 */
 static void qb_env_set(const char *assign, size_t len);
 static void build_env(uint16_t seg);
@@ -647,6 +659,51 @@ int qb_dos_stage_script(const char *script, size_t len, const char *name) {
     g_batch_pc     = 0;
     g_batch_active = 1;
     fprintf(stderr, "[dos_loader] staged SHELL: %d cmd(s)\n", n);
+    return 0;
+}
+
+/* 音楽セッションを stage する: シェルに PMD86(常駐) と PMP(曲は実行時に差し替え) を仕込む。
+ * stage 後 loader.d88 で 1 度だけ起動すれば、以後 qb_dos_music_play で曲だけ差し替えられる
+ * (= どの書庫の .M も別 DOS セッション=reset 無しで次々に演奏)。 */
+int qb_dos_stage_music(void) {
+    static const char tailpad[QB_MUSIC_TAIL_MAX] = { 0 };   /* PMP cmdtail の予約スペース */
+    shell_cmd_t cmds[2];
+    cmds[0].path = "PMD86.COM"; cmds[0].plen = 9; cmds[0].args = "";      cmds[0].alen = 0;
+    cmds[1].path = "PMP.COM";   cmds[1].plen = 7; cmds[1].args = tailpad; cmds[1].alen = QB_MUSIC_TAIL_MAX - 2;
+
+    uint16_t path_offs[2], tail_offs[2];
+    int r = stage_shell_image(cmds, 2, "pmd-music", path_offs, tail_offs);
+    if (r != 0) return r;
+
+    /* 文列は PMD86 のみ (PMP は music queue で実行時に差し込む) */
+    qb_batch_stmt_t *s = &g_batch_stmts[0];
+    memset(s, 0, sizeof(*s));
+    s->op = QB_BATCH_CMD;
+    s->path_off = path_offs[0];
+    s->tail_off = tail_offs[0];
+    g_batch_nstmts = 1;
+    g_batch_pc     = 0;
+    g_batch_active = 1;
+
+    g_music_active   = 1;
+    g_music_pending  = 0;
+    g_music_cleared  = 0;
+    g_music_pmp_path = path_offs[1];
+    g_music_pmp_tail = tail_offs[1];
+    g_music_song[0]  = '\0';
+    fprintf(stderr, "[dos_loader] staged MUSIC session (PMD86 resident + PMP slot)\n");
+    return 0;
+}
+
+/* 次に演奏する曲を queue する (再起動なし)。フックが次の問い合わせで PMP <song> を EXEC する。
+ * song = /run 相対の DOS パス (例 "TH5_12.M" / "SUB\\X.M")。セッション未起動なら -1。 */
+int qb_dos_music_play(const char *song) {
+    if (!g_music_active || !song) return -1;
+    size_t l = strlen(song);
+    if (l >= sizeof(g_music_song)) l = sizeof(g_music_song) - 1;
+    memcpy(g_music_song, song, l);
+    g_music_song[l] = '\0';
+    g_music_pending = 1;
     return 0;
 }
 
@@ -821,6 +878,37 @@ int qb_dos_batch_next_hook(void) {
         }
     }
 
+    /* 音楽セッション: 文列 (= PMD86 常駐) を消化し終えたら、曲を待つ/差し替える。
+     * 別 DOS セッションを起こさず PMP の cmdtail を書き換えて再 EXEC するのが肝。 */
+    if (g_music_active) {
+        /* 直近 EXEC (PMD86 のバナー or PMP のバナー) の後に画面を 1 度だけ整える: クリアして
+         * 中央に "HELLO QuuBee" を出す (= HELLO 待機画面と同じ見た目。ポップアップを閉じても
+         * PMD86 の自己診断バナーでなく HELLO が見える)。位置は boot_hello と同じ row13/col35。 */
+        if (!g_music_cleared) {
+            static const char hello_scr[] = "\x1b[2J\x1b[13;35HHELLO QuuBee";
+            qb_dos_tty_write((const uint8_t *)hello_scr, sizeof(hello_scr) - 1);
+            g_music_cleared = 1;
+        }
+        if (g_music_pending) {
+            /* queue された曲名を guest のシェル内 cmdtail バッファへ [len][name][0x0D] で書く。
+             * シェルは QB_DOS_LOAD_SEG(0x0100) にロードされ、文字列は 0x1000+off に在る。 */
+            size_t l = strlen(g_music_song);
+            if (l > QB_MUSIC_TAIL_MAX - 2) l = QB_MUSIC_TAIL_MAX - 2;
+            uint32_t lin = ((uint32_t)QB_DOS_LOAD_SEG << 4) + g_music_pmp_tail;
+            poke8(lin, (uint8_t)l);
+            for (size_t i = 0; i < l; i++) poke8(lin + 1 + i, (uint8_t)g_music_song[i]);
+            poke8(lin + 1 + l, 0x0D);
+            CPU_DX = g_music_pmp_path;
+            CPU_CX = g_music_pmp_tail;
+            CPU_AX = 1;             /* PMP <曲> を EXEC */
+            g_music_pending = 0;
+            g_music_cleared = 0;    /* PMP のバナー後に再クリアさせる */
+            return 1;
+        }
+        CPU_AX = 2;   /* 曲待ち = シェルは sti+hlt で待機して再問い合わせ (PMD86 常駐維持) */
+        return 1;
+    }
+
     CPU_AX = 0;   /* 列が尽きた → シェルが AH=4Ch でセッション終了 */
     return 1;
 }
@@ -835,6 +923,10 @@ void qb_dos_reset_state(void) {
     g_batch_pc = 0;
     g_last_exit_code = 0;
     g_last_exit_type = 0;
+    /* 音楽セッションもセッション境界で破棄 (Run/新規ドロップの reset → まっさら DOS) */
+    g_music_active  = 0;
+    g_music_pending = 0;
+    g_music_cleared = 0;
 }
 
 int qb_dos_get_exit(int *code_out) {

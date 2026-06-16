@@ -101,6 +101,11 @@ int np2kai_set_audio_rate(uint32_t rate);
 __attribute__((visibility("default")))
 int np2kai_set_fmgen(int on);
 
+/* 起動音 (PC-98 の「ピポ」= BEEP) のミュート。音楽セッションのブートでだけ消す用途
+ * (pipo は BEEP・PMD 曲は FM で別音源)。mute!=0 で 0 に、mute=0 で復帰。戻り値 = 設定後の beep 音量。 */
+__attribute__((visibility("default")))
+int np2kai_set_beep_mute(int mute);
+
 /* CPU クロック倍率の live 設定 (快適化 A/B / async 自動クロック / ベンチ用)。倍率↑ = エミュ CPU
  * 高速化だが host 負荷も比例増 (CPU-bound 時。HLT-idle 時は HLT fast-forward でほぼ無影響)。
  * pull 型音声では host が追いつかない倍率にすると音声が枯れて途切れるので real-time を割らない
@@ -151,6 +156,14 @@ int np2kai_dos_stage_script(const char *script, int len, const char *name);
  * 戻り値: 0 = まだ動作中、1 = 終了済み。code_out が non-NULL なら exit code を書く。 */
 __attribute__((visibility("default")))
 int np2kai_dos_get_exit(int *code_out);
+
+/* 音楽セッション (PMD .M を再起動なしで次々演奏)。stage_music で PMD86 常駐セッションを stage し、
+ * loader.d88 で 1 度起動 → 以後 music_play(song) で曲だけ差し替える (別 DOS セッション=reset 不要)。
+ * song は /run 相対の DOS パス。戻り値 0=OK / <0=エラー。 */
+__attribute__((visibility("default")))
+int np2kai_dos_stage_music(void);
+__attribute__((visibility("default")))
+int np2kai_dos_music_play(const char *song);
 
 #ifdef __cplusplus
 }

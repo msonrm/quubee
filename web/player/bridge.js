@@ -193,14 +193,29 @@ NP2KaiModule({
         const heapPtr = M._malloc(bufSize * 2 * 2);  // ステレオ int16
         const node = audioCtx.createScriptProcessor(bufSize, 0, 2);
         node.onaudioprocess = (e) => {
+            const L = e.outputBuffer.getChannelData(0);
+            const R = e.outputBuffer.getChannelData(1);
+            // 一時停止/停止中はエミュレータを凍結している。ここで pull すると FM チップの保持音
+            // (鳴りっぱなしのノート) を audio クロックで延々レンダリングして「最後の音が鳴り続ける」
+            // ので、凍結中は fill せず無音を出す (チップ状態は据え置き → 再開で続きから)。
+            if (emuFrozen) { L.fill(0); R.fill(0); return; }
             fillFn(handle, heapPtr, bufSize);
             // ALLOW_MEMORY_GROWTH で heap が再確保されることがあるので毎回 view を取り直す
             const pcm = new Int16Array(M.HEAPU8.buffer, heapPtr, bufSize * 2);
-            const L = e.outputBuffer.getChannelData(0);
-            const R = e.outputBuffer.getChannelData(1);
+            let maxAbs = 0;
             for (let i = 0; i < bufSize; i++) {
-                L[i] = pcm[i * 2]     / 32768;
-                R[i] = pcm[i * 2 + 1] / 32768;
+                const l = pcm[i * 2], r = pcm[i * 2 + 1];
+                L[i] = l / 32768;
+                R[i] = r / 32768;
+                const m = Math.max(l < 0 ? -l : l, r < 0 ? -r : r);
+                if (m > maxAbs) maxAbs = m;
+            }
+            // 初回再生は boot/常駐/曲ロードで数秒無音 → 実際に音が出た瞬間に計時開始点を合わせる
+            // (それまで musicElapsed() は 0 を返す)。音楽の頭が boot 時間ぶんずれないように。
+            if (musicAwaitingStart && maxAbs > 1000) {
+                musicAwaitingStart = false;
+                musicElapsedMs = 0;
+                musicAnchorMs = performance.now();
             }
         };
         node.connect(audioCtx.destination);
@@ -301,6 +316,21 @@ NP2KaiModule({
     const addArchiveBtn  = document.getElementById('add-archive');
     const closeRunBtn    = document.getElementById('close-run');
     const textHeadBar = document.getElementById('text-head');        // ビューアのヘッダ帯 (何も開いていない間は隠す)
+    const textPlayBtn = document.getElementById('text-play');        // PMD .M タップ時の ▶ Play (音楽ポップアップを開く)
+    // 音楽プレイヤーポップアップ (クリーン HTML プレイヤー。PC-98 画面は背後で暗転)
+    const playerModalEl  = document.getElementById('player-modal');
+    const pfFileEl       = document.getElementById('pf-file');
+    const pfDateEl       = document.getElementById('pf-date');
+    const pfTitleEl      = document.getElementById('pf-title');
+    const pfComposerEl   = document.getElementById('pf-composer');
+    const pfArrangerEl   = document.getElementById('pf-arranger');
+    const pfCommentEl    = document.getElementById('pf-comment');
+    const playerTimeEl   = document.getElementById('player-time');
+    const playerPlayBtn  = document.getElementById('player-play');
+    const playerPauseBtn = document.getElementById('player-pause');
+    const playerStopBtn  = document.getElementById('player-stop');
+    // 音楽再生で /run へ注入する PMD エンジン名 (一覧から隠す対象 — scanRun でフィルタ)
+    const HIDDEN_RUN_NAMES = new Set(['PMD86.COM', 'PMP.COM']);
     // 初期の歓迎文 (HTML 直書き・「宣言を読む」リンク入り) を退避 — 「閉じる」/新規オープンで
     // 復元する。リンク要素ごと戻すため innerHTML で持つ (クリックは textBodyEl への委譲で拾う)
     const WELCOME_HTML = textBodyEl.innerHTML;
@@ -371,6 +401,7 @@ NP2KaiModule({
         /readme|read\.me|どきゅめんと|説明|よみ/i.test(n);
     const isReadme   = (n) => /readme|read\.me|よみ|説明|どきゅめんと/i.test(n);
     const isImageName = (n) => /\.mag$/i.test(n);   // PC-98 標準画像 (MAKI02)。.MKI は別系統で未対応
+    const isMusicName = (n) => /\.m$/i.test(n);     // PMD (KAJA) FM 音楽データ。.M2/.M26 は後回し
     const baseName   = (n) => n.slice(n.lastIndexOf('/') + 1);   // /run 相対 → ファイル名
     // DOS 8.3 (ASCII) 名か — ＋Add の単体ファイル受け入れ / Save ボタン有効化の共通判定。
     // /run の名前正準形は SJIS 生バイトだが、ブラウザの File.name / download 名は Unicode。
@@ -470,8 +501,8 @@ NP2KaiModule({
             fileListEl.appendChild(row);
         }
 
-        // ファイル行 (readme→起動.bat→text→画像→exec→other、各内アルファベット順)
-        const rank = (n) => isReadme(n) ? 0 : isBatName(n) ? 1 : isTextName(n) ? 2 : isImageName(n) ? 3 : isExecName(n) ? 4 : 5;
+        // ファイル行 (readme→起動.bat→text→画像→音楽→exec→other、各内アルファベット順)
+        const rank = (n) => isReadme(n) ? 0 : isBatName(n) ? 1 : isTextName(n) ? 2 : isImageName(n) ? 3 : isMusicName(n) ? 4 : isExecName(n) ? 5 : 6;
         files.sort((a, b) => rank(a.name) - rank(b.name) ||
             baseName(a.name).toLowerCase().localeCompare(baseName(b.name).toLowerCase()));
         for (const ent of files) {
@@ -487,16 +518,19 @@ NP2KaiModule({
                             (ent === selectedEntry ? ' armed' : '');
             // 種別アイコンは専用カラム (.fi)。絵文字でなく本文フォントの幾何学記号で統一:
             // ▶=起動できるもの (EXE/COM/.bat 共通 — 種別は色と拡張子が示す) / ≡=テキスト /
-            // ▨=画像 / ▸=フォルダ
+            // ▨=画像 / ♪=音楽 (PMD .M) / ▸=フォルダ
             const icon = (isBat || isExecName(nm)) ? '▶'
-                       : isImageName(nm) ? '▨' : isTextName(nm) ? '≡' : '';
+                       : isImageName(nm) ? '▨' : isMusicName(nm) ? '♪' : isTextName(nm) ? '≡' : '';
             row.innerHTML =
                 `<span class="fi">${icon}</span>` +
                 `<span class="fn">${escapeHtml(sjisName(nm))}</span>` +
                 `<span class="fsz">${fmtSize(ent.data.length)}</span>` +
                 `<span class="fdt">${fmtTime(ent.mtime)}</span>`;
             row.addEventListener('click', () =>
-                runnable ? selectEntry(ent) : isImageName(nm) ? openImage(ent) : openText(ent));
+                runnable ? selectEntry(ent)
+                : isMusicName(nm) ? openMusic(ent)
+                : isImageName(nm) ? openImage(ent)
+                : openText(ent));
             fileListEl.appendChild(row);
         }
     }
@@ -539,7 +573,29 @@ NP2KaiModule({
         textBodyEl.textContent = decodeSjisText(bytes).replace(/\r\n?/g, "\n");
         textBodyEl.scrollTop = 0;
         textPopoutBtn.hidden = false;   // 本文があるので別窓ボタンを出す
+        textPlayBtn.hidden = true;      // 音楽でないので Play は出さない
         showSaveFor(ent);
+    }
+
+    // PMD .M (FM 音楽) をタップ — 下部ビューアに曲名/作曲/作者コメントを表示し ▶ Play を出す。
+    // memo (作者注釈) は QBPmd.parseMemo で抽出 (NEC 罫線対応の decodeSjisText を渡す)。
+    let currentMusic = null;   // { ent, meta } — Play / ポップアップが参照
+    function openMusic(ent) {
+        focusedEntry = ent;
+        renderFileList();
+        showTextMode();
+        textHeadBar.hidden = false;
+        const nm = baseName(ent.name);
+        textHeadEl.textContent = sjisName(ent.name);
+        let meta = null;
+        try { meta = QBPmd.parseMemo(ent.data, (u) => decodeSjisText(u)); } catch (_) { meta = null; }
+        currentMusic = { ent, meta };
+        // 下部プレビューは曲タイトルだけ (作曲者/コメント等の詳細は ▶ Play で開くポップアップに集約)。
+        textBodyEl.textContent = '♪ ' + (meta && meta.title ? meta.title : sjisName(nm));
+        textBodyEl.scrollTop = 0;
+        textPopoutBtn.hidden = true;
+        textPlayBtn.hidden = false;   // ▶ Play を出す
+        showSaveFor(ent);             // .M (ASCII 8.3) はそのまま Save でき往復可能
     }
 
     // デコード済 MAG を canvas へ描く (アスペクト/200ライン縦2倍は intrinsic で持たせ、
@@ -570,6 +626,7 @@ NP2KaiModule({
             textHeadEl.textContent = sjisName(ent.name);
             textBodyEl.textContent = `画像をデコードできませんでした:\n${e.message}`;
             textBodyEl.scrollTop = 0; textPopoutBtn.hidden = false;
+            textPlayBtn.hidden = true;
             showSaveFor(ent);   // デコード不能でも生バイトの保存はできる
             return;
         }
@@ -578,6 +635,7 @@ NP2KaiModule({
         renderImageTo(textImageEl, img);
         textBodyEl.hidden = true; textImageEl.hidden = false;
         textPopoutBtn.hidden = false;
+        textPlayBtn.hidden = true;
         showSaveFor(ent);
     }
 
@@ -737,11 +795,34 @@ NP2KaiModule({
     // メモリ衛生は毎 Run の reset + pristine loader.d88 が保証する (新規ドロップのたびに
     // 左画面が無意味に再起動しないように)。
     let machineAtIdle = true;   // 初期ブート = HELLO 待機。Run で false / 本リセットで true
+    // 音楽プレイヤーの状態 (PMD .M)。pause は run_frame ループの凍結 (emuFrozen) で実現する
+    // = エミュレータごと止まり位置を保持する真の一時停止 (再起動なし)。
+    let musicState = 'stopped';   // 'stopped' | 'playing' | 'paused'
+    let emuFrozen  = false;       // frame() の run_frame 消化を止める (一時停止)
+    let musicSessionUp = false;   // PMD86 常駐の音楽セッションが起動済み (曲差し替えで再起動不要)
+    // 演奏経過時間 (壁時計ベース。音楽は DAC クロックで実時間再生なので壁時計=演奏位置)。
+    // playing の間だけ進み、pause で凍り、stop で 0 に戻る。初回は boot 中 (無音) は 0 のまま待ち、
+    // 実際に音が出た瞬間から計時する (musicAwaitingStart)。
+    let musicElapsedMs = 0;       // 確定済み経過 (playing でない区間は据え置き)
+    let musicAnchorMs  = 0;       // 現在の playing 区間の開始 (performance.now())
+    let musicAwaitingStart = false;  // Play 直後、まだ音が出ていない (boot/常駐/ロード中) → 0 表示で待つ
+    function freezeElapsed() {    // playing なら現在区間を確定して止める
+        if (musicState === 'playing' && !musicAwaitingStart) musicElapsedMs += performance.now() - musicAnchorMs;
+    }
+    function musicElapsed() {     // 表示用の総経過 ms
+        if (musicAwaitingStart) return 0;   // 音が出るまでは 0:00
+        return musicElapsedMs + (musicState === 'playing' ? performance.now() - musicAnchorMs : 0);
+    }
     function resetToIdle() {
         if (currentPoll && pollDosExit._stop) pollDosExit._stop();   // exit 監視を停止
+        emuFrozen = false;          // 凍結したまま reset すると HELLO が描かれない
+        musicState = 'stopped';
+        musicSessionUp = false;     // セッション破棄 (C 側も qb_dos_reset_state で g_music_active=0)
+        musicElapsedMs = 0; musicAwaitingStart = false;   // 経過時間もリセット
         if (machineAtIdle) return;
         insertFdd(handle, '/tmp/boot.d88', 0, 0);   // 失敗しても reset で BIOS 待機になるだけ
         reset(handle);
+        setBeepMute(0);             // 起動音を通常に戻す (音楽セッションでミュートしていた場合)
         machineAtIdle = true;
     }
 
@@ -833,6 +914,13 @@ NP2KaiModule({
     // ③ if errorlevel/goto 入り .bat (C 側文インタプリタ)。直列化文列を生バイトで渡す。
     const dosStageBatch = M.cwrap('np2kai_dos_stage_batch', 'number',
                                   ['number', 'number', 'string']);
+    // 音楽セッション (PMD .M を再起動なしで次々演奏)。stage_music で PMD86 常駐セッションを
+    // 仕込み、loader.d88 で 1 度起動 → 以後 music_play(song) で曲だけ差し替える。
+    const dosStageMusic = M.cwrap('np2kai_dos_stage_music', 'number', []);
+    const dosMusicPlay  = M.cwrap('np2kai_dos_music_play',  'number', ['string']);
+    // 起動音 (ピポ = BEEP) のミュート。音楽セッションのブートでだけ消す (FM 曲は別音源で無傷)。
+    const setBeepMute   = M.cwrap('np2kai_set_beep_mute',   'number', ['number']);
+    let suppressBootBeep = false;   // 次の loader ブートで起動音を消すか (音楽セッション時 true)
     // np2kai_dos_get_exit(int* code) — JS では HEAP に書き込み番地を渡す
     const dosGetExitFn = M.cwrap('np2kai_dos_get_exit', 'number', ['number']);
 
@@ -931,7 +1019,13 @@ NP2KaiModule({
         M.FS.writeFile('/tmp/loader.d88', loaderDiskCached);
         const r = insertFdd(handle, '/tmp/loader.d88', 0, 0);
         if (r !== 0) throw new Error(`loader.d88 insert failed (r=${r})`);
+        emuFrozen = false;       // 新セッション = まっさら (凍結/前の音楽セッションを引き継がない)
+        musicSessionUp = false;  // 音楽セッション確立は playMusic が reset 後に立て直す
         reset(handle);
+        // 起動音 (ピポ) は音楽セッションのブートでだけ消す。ゲーム起動は当時どおり鳴らす。
+        // reset 直後・ブートの pipo 描画前に設定する (beepcfg.vol を見て render するので間に合う)。
+        setBeepMute(suppressBootBeep ? 1 : 0);
+        suppressBootBeep = false;
         machineAtIdle = false;   // ゲーム実行開始 — 以後の resetToIdle は実リセットする
     }
 
@@ -981,6 +1075,9 @@ NP2KaiModule({
                 let st;
                 try { st = M.FS.stat(path); } catch (_) { continue; }
                 if (M.FS.isDir(st.mode)) walk(path, prefix + e + '/');
+                // 音楽再生で /run へ注入した PMD エンジン (PMD86.COM/PMP.COM) は一覧に出さない
+                // (ユーザーの .M / 作品ファイルだけ見せる)。書庫由来でなくこちらが置いたツール。
+                else if (HIDDEN_RUN_NAMES.has(e.toUpperCase())) { /* 隠す */ }
                 else out.push({ name: prefix + e, size: st.size, mtimeMs: +st.mtime });
             }
         })('/run', '');
@@ -1090,6 +1187,142 @@ NP2KaiModule({
         await runStaged(label);
         return true;
     }
+
+    // ---- PMD (.M) FM 音楽の再生 ------------------------------------------------
+    // 自前クリーンビルドの PMD エンジン (PMD86.COM 常駐 + PMP.COM 演奏) を assets から
+    // 遅延 fetch して /run へ注入し、既存のシーケンス起動経路 (stageAndRunScript) で
+    // 「PMD86 → PMP <曲>」を 1 DOS セッションで走らせる。loader の sti+hlt アイドルで
+    // 常駐 ISR (OPNA タイマ IRQ12) が刻み続ける = steady-state 演奏 (Path B 実証済)。
+    let pmdEngineCache = null;   // { pmd86: Uint8Array, pmp: Uint8Array } — 一度 fetch すれば再利用
+    async function ensurePmdEngine() {
+        if (!pmdEngineCache) {
+            const fetchBin = async (p) => {
+                const r = await fetch(p);
+                if (!r.ok) throw new Error(`${p} fetch failed (${r.status})`);
+                return new Uint8Array(await r.arrayBuffer());
+            };
+            const [pmd86, pmp] = await Promise.all([
+                fetchBin('assets/pmd/PMD86.COM'),
+                fetchBin('assets/pmd/PMP.COM'),
+            ]);
+            pmdEngineCache = { pmd86, pmp };
+        }
+        // 毎再生 /run へ書き直す (reset を跨いでも内容は不変・固定パスなので積み上がらない)。
+        // scanRun が HIDDEN_RUN_NAMES でフィルタするので一覧には出ない。
+        ensureRunDir();
+        M.FS.writeFile('/run/PMD86.COM', pmdEngineCache.pmd86);
+        M.FS.writeFile('/run/PMP.COM',   pmdEngineCache.pmp);
+    }
+
+    // 曲を再生する。音楽セッション (PMD86 常駐) が既に在れば曲だけ差し替え (再起動なし)、
+    // 無ければセッションを 1 度だけ起動する。停止/一時停止の凍結はここで必ず解除する。
+    async function playMusic(ent) {
+        musicElapsedMs = 0; musicAnchorMs = performance.now(); musicAwaitingStart = true;  // 音が出るまで 0:00
+        emuFrozen = false; musicState = 'playing'; updatePlayerButtons();   // 楽観的に playing (凍結解除)
+        const dosPath = ent.name.replace(/\//g, '\\');   // /run 相対 → DOS パス (PMP の引数)
+        const label = `♪ ${sjisName(baseName(ent.name))}`;
+        try {
+            await ensurePmdEngine();   // PMD86.COM/PMP.COM を /run へ (毎回・冪等)
+            if (musicSessionUp) {
+                // 常駐セッションに曲を queue するだけ = 別 DOS セッションを起こさない (再起動なし)
+                dosMusicPlay(dosPath);
+                runStatusEl.textContent = `${label}: running`;
+            } else {
+                // 初回: PMD86 常駐の音楽セッションを起動し、最初の曲を queue する (ここだけ 1 回 reset)
+                runStatusEl.textContent = `${label}: loading engine…`;
+                runButton.disabled = true;
+                const r = dosStageMusic();
+                if (r !== 0) throw new Error(`stage_music failed r=${r}`);
+                dosMusicPlay(dosPath);
+                suppressBootBeep = true;    // 音楽セッションのブートは起動音 (ピポ) を消す
+                await runStaged(label);     // loader.d88 挿入 + reset + /run sync + exit polling
+                musicSessionUp = true;
+            }
+        } catch (e) {
+            runStatusEl.textContent = `ERROR: ${e.message}`;
+            console.error(e);
+            runButton.disabled = false;
+            musicState = 'stopped'; musicSessionUp = false; updatePlayerButtons();
+        }
+    }
+
+    // 一時停止 = エミュレータごと凍結 (位置保持・再起動なし)。常駐 ISR も刻まなくなる。
+    function pauseMusic() {
+        if (musicState !== 'playing') return;
+        freezeElapsed();             // 経過カウンタを確定して止める
+        emuFrozen = true; musicState = 'paused';
+        runStatusEl.textContent = `${currentMusic ? '♪ ' + sjisName(baseName(currentMusic.ent.name)) : '♪'}: paused`;
+        updatePlayerButtons();
+    }
+    function resumeMusic() {
+        if (musicState !== 'paused') return;
+        musicAnchorMs = performance.now();   // 経過カウンタを再開
+        emuFrozen = false; musicState = 'playing';
+        runStatusEl.textContent = `${currentMusic ? '♪ ' + sjisName(baseName(currentMusic.ent.name)) : '♪'}: running`;
+        updatePlayerButtons();
+    }
+    // 停止 = 凍結で無音化 + 経過を 0 に戻す (一時停止は値を保持・停止はリセット = ユーザー要望)。
+    // セッション (PMD86 常駐) は維持するので、次の Play は再起動なしで頭から。
+    // セッションの実破棄は Run / 新規ドロップ / 閉じる の reset が行う。
+    function stopMusic() {
+        emuFrozen = true; musicState = 'stopped';
+        musicElapsedMs = 0; musicAwaitingStart = false;   // 0:00 に戻す
+        runStatusEl.textContent = `${currentMusic ? '♪ ' + sjisName(baseName(currentMusic.ent.name)) : '♪'}: stopped`;
+        updatePlayerButtons();
+        updatePlayerTime();
+    }
+
+    // ---- 音楽プレイヤーポップアップ (クリーン HTML。表示中は PC-98 画面を覆う) ----
+    // ボタン活殺: 再生中は Play 無効 / 停止中は Stop 無効 / Pause は再生中のみ有効。
+    function updatePlayerButtons() {
+        playerPlayBtn.disabled  = (musicState === 'playing');
+        playerPauseBtn.disabled = (musicState !== 'playing');
+        playerStopBtn.disabled  = (musicState === 'stopped');
+    }
+    // 経過時間表示 (M:SS、無限ループなので総尺は出さない)。~250ms 間隔で playing 中だけ進む。
+    let playerTimer = null;
+    function fmtClock(ms) {
+        const t = Math.max(0, Math.floor(ms / 1000));
+        return `${(t / 60) | 0}:${String(t % 60).padStart(2, '0')}`;
+    }
+    function updatePlayerTime() { playerTimeEl.textContent = fmtClock(musicElapsed()); }
+
+    // ラベル付きで情報を流し込む (空でもフィールドは残す)。値はそのまま (作者の表記を尊重)。
+    function openPlayer(music) {
+        const meta = music && music.meta;
+        pfFileEl.textContent     = sjisName(baseName(music.ent.name));
+        pfDateEl.textContent     = music.ent.mtime ? fmtTime(music.ent.mtime) : '';   // 配布当時のタイムスタンプ
+        pfTitleEl.textContent    = (meta && meta.title)    || '';
+        pfComposerEl.textContent = (meta && meta.composer) || '';
+        pfArrangerEl.textContent = (meta && meta.arranger) || '';
+        pfCommentEl.textContent  = (meta && meta.memo && meta.memo.length) ? meta.memo.join('\n') : '';
+        playerModalEl.hidden = false;
+        updatePlayerButtons();
+        updatePlayerTime();
+        if (!playerTimer) playerTimer = setInterval(updatePlayerTime, 250);
+    }
+    // 閉じる = 停止 (ユーザー要望: 閉じたら音楽も止まる)。
+    function closePlayer() {
+        stopMusic();
+        if (playerTimer) { clearInterval(playerTimer); playerTimer = null; }
+        playerModalEl.hidden = true;
+    }
+
+    // 下部ビューアの ▶ Play: 再生開始 + ポップアップを開く。
+    textPlayBtn.addEventListener('click', () => {
+        if (!currentMusic) return;
+        openPlayer(currentMusic);
+        playMusic(currentMusic.ent);
+    });
+    // ポップアップ: ▶ = 停止中なら頭から再生 / 一時停止中なら再開 ・ ⏸ = 一時停止 ・ ■ = 停止。
+    playerPlayBtn.addEventListener('click', () => {
+        if (musicState === 'paused') resumeMusic();
+        else if (currentMusic) playMusic(currentMusic.ent);
+    });
+    playerPauseBtn.addEventListener('click', pauseMusic);
+    playerStopBtn.addEventListener('click', stopMusic);
+    document.getElementById('player-close').addEventListener('click', closePlayer);
+    playerModalEl.addEventListener('click', (e) => { if (e.target === playerModalEl) closePlayer(); });
 
     stopButton.addEventListener('click', () => {
         // exit 監視の停止だけでなく機械もリセット — 「止まった」が見た目どおりになる
@@ -1396,6 +1629,8 @@ NP2KaiModule({
         if (inField(e)) return;
         // 別窓ビューアを開いている間はゲームへキーを送らない (Esc で閉じる)
         if (!viewerModalEl.hidden) { if (e.key === 'Escape') { e.preventDefault(); closeViewer(); } return; }
+        // 音楽プレイヤーポップアップを開いている間も同様 (Esc で閉じる。演奏は背後で続く)
+        if (!playerModalEl.hidden) { if (e.key === 'Escape') { e.preventDefault(); closePlayer(); } return; }
         // Ctrl/Meta/Alt + 他キーのブラウザショートカット (Ctrl+R / Ctrl+W / Ctrl+Shift+I 等)
         // は横取りしない。ただし CTRL キー単体は PC-98 の CTRL(0x74) としてゲームに送る
         // (発射/ダッシュに CTRL を使うゲーム向け)。これを通さないと PC98_KEYMAP の
@@ -1414,6 +1649,7 @@ NP2KaiModule({
     window.addEventListener('keyup', (e) => {
         if (inField(e)) return;
         if (!viewerModalEl.hidden) return;   // ビューア表示中はゲームへ送らない
+        if (!playerModalEl.hidden) return;   // 音楽ポップアップ表示中も同様
         const code = PC98_KEYMAP[e.code];
         if (code === undefined) return;
         if (KEY_PREVENT_DEFAULT.has(e.code)) e.preventDefault();
@@ -1770,6 +2006,9 @@ NP2KaiModule({
     function frame(now) {
         // パッド入力をエミュレータ実行前にサンプリング (ポーリング型 API のため毎フレーム)
         pollGamepads();
+        // 音楽の一時停止: エミュレータごと凍結する (run_frame を進めない = 位置保持・無音)。
+        // nextDue を現在時刻に張り付けて、再開時に catch-up が暴発しないようにする。
+        if (emuFrozen) { nextDue = now; requestAnimationFrame(frame); return; }
         // 経過時間分の emulator step を消化
         let steps = 0;
         while (now >= nextDue && steps < MAX_CATCHUP) {

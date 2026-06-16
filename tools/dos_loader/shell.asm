@@ -56,6 +56,8 @@ start:
     ; AX/DX/CX を設定して RETF で戻る (XMS entry 0xFEE70 と同じ NOP+RETF パターン)。
     ; レジスタは毎周この問い合わせで取り直すので、EXEC 子側で何が起きても影響しない。
     call    0xF000:0xEE90                ; = QB_TRAMP_BATCH_NEXT (native/dos_loader.h)
+    cmp     ax, 2                        ; AX=2: いま実行する物は無いが「待機して再問い合わせ」
+    je      .wait                        ;        (音楽セッション: PMD86 常駐のまま曲を待つ)
     test    ax, ax
     jz      .done                        ; AX=0: 列が尽きた
 
@@ -63,6 +65,14 @@ start:
     mov     bx, pblock                   ; ES:BX = EXEC パラメータブロック
     mov     ax, 0x4B00                   ; AH=4Bh AL=00 (load & execute)、DS:DX = path
     int     0x21                         ; 失敗 (CF=1) でも続行 = 次コマンドへ (errorlevel 不変)
+    jmp     .next
+
+.wait:
+    ; 音楽セッションの待機: 割り込み許可で一拍 hlt してから再問い合わせる。常駐音源ドライバの
+    ; OPNA タイマ ISR が IF=1 で刻み続け、JS が次曲を queue したら次の問い合わせで EXEC される
+    ; (= 曲の切り替えが別 DOS セッションを起こさずに済む)。4Ch 終了しないので PMD86 常駐は維持。
+    sti
+    hlt
     jmp     .next
 
 .done:
