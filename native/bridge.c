@@ -129,18 +129,21 @@ np2kai_handle np2kai_create(void) {
 	 * が出る)。CPU は重めだが -O3 で吸収できる。実行時 A/B は np2kai_set_fmgen /
 	 * qbDebug.fmgen(0|1) で可能 (次の Run で反映)。 */
 	np2cfg.usefmgen = 1;
-	/* 音源ボードを「86 + ADPCM」(SOUNDID 0x14) にする。既定 (pccore_setdefault) は素の
-	 * PC-9801-86 (0x04) で OPNA の ADPCM-B サンプルチャンネルが無効 (board86_reset(adpcm=FALSE))。
-	 * 0x14 にすると board86_reset(adpcm=TRUE) で OPNA_HAS_ADPCM が立ち、.PPC 等 ADPCM PCM を
-	 * 使う PMD/曲データの打楽器・ベース・ボイス声部が発音できる (= 欠けていた音数の補完)。
-	 * FM6/SSG3/リズムは元から有効で不変、86 リニア PCM (pcm86io) も常時 bind なので、これは
-	 * 能力の上積みのみ (リグレッション検証は touhou_test / pmd_session_test / bio100_triage)。 */
-	np2cfg.SOUND_SW = SOUNDID_PC_9801_86_ADPCM;
-	/* 86 ボードの割り込みレベルは既定 (pccore_setdefault = IRQ3 相当) のまま。
-	 * PMD .M 単体再生 (我々の PMD86/PMP) は INT5=IRQ12 を前提に ISR を hook するので、その
-	 * 音楽セッションのブートでだけ np2kai_set_pmd_irq(1) で IRQ12 に寄せる (= JS の loadLoaderDisk が
-	 * 制御)。【重要】これを全ゲームに無条件適用すると、既定 IRQ を前提にする常駐ドライバ
-	 * (東方旧作の zun.com→pmd86.com 等) の演奏とタイマ演出が壊れるため、グローバル設定はしない。 */
+	/* 音源ボードは素の PC-9801-86 (SOUNDID 0x04 = pccore_setdefault の既定) のまま使う。
+	 * 【2026-06-17 revert】一時 86+ADPCM (0x14) を既定化したが (.PPC 等 ADPCM PCM 声部の将来対応の
+	 * 前倒し)、現コーパスに実需が無い (no-op) ため戻した。0x14 は board86_reset で OPNA_HAS_ADPCM を
+	 * 立て、opna_readExtendedStatus が ADPCM ステータスビットを混ぜる等 OPNA の実時間挙動を変える
+	 * 副作用があり、利得ゼロでこれを抱える理由が無い (ADPCM が要る曲データが実在したら、その再生
+	 * セッションでだけ限定有効化する = 下の IRQ12 と同型)。※ザルバール無音回帰の真因は ADPCM でなく
+	 * 86 ボードの割り込み線だった (下記)。 */
+	/* 86 ボードの割り込みレベルは np2kai_create では設定せず、JS の loadLoaderDisk が毎ブートで
+	 * np2kai_set_pmd_irq により決める (既定 = INT5/IRQ12)。PC-98 86 ボードの FM ドライバの多くは
+	 * INT5=IRQ12 を前提に ISR を hook する de-facto 標準で、ザルバールの SIZ3/SIZ4P は IRQ12 決め打ち
+	 * (既定 IRQ だと曲送りが止まり本編 FM が無音)、我々の PMD .M プレイヤも IRQ12 前提、KAJA PMD86
+	 * (東方旧作同梱) は board 設定に追従するのでどちらでも鳴る → IRQ12 を既定にすれば全部満たす。
+	 * (履歴: a0fe8a4 で .M 用に snd86opt|=0x0C をグローバル適用 → deae233 が「東方を壊す」として
+	 *  音楽セッション限定に縮めたが、その診断は誤りで IRQ12 必須の SIZ3/SIZ4P を巻き添えに無音化して
+	 *  いた。東方は IRQ12 でも正常と実機確認済 = 2026-06-17。) */
 	/* オーディオレイテンシ (ms)。soundmng_create が rate*ms/(2*1000) を 2 の冪へ丸めて
 	 * バッファ長にする。ini 既定 0 のままだと最小 (20ms→512frame) になり、メインスレッド
 	 * の ScriptProcessor コールバックがジャンクで underrun しやすい。100 で ~170ms の
@@ -427,9 +430,10 @@ int np2kai_set_beep_mute(int mute) {
 	return (int)beepcfg.vol;
 }
 
-/* 86 ボードの割り込みレベルを INT5/IRQ12 に寄せる (on) / 既定へ戻す (off)。
- * 我々の PMD .M 再生 (PMD86/PMP) は IRQ12 前提で ISR を hook するので、その音楽セッションの
- * ブートでだけ on にする。常駐ドライバ同梱ゲーム (東方旧作等) は既定のまま (off)。
+/* 86 ボードの割り込みレベルを INT5/IRQ12 に寄せる (on) / 既定へ戻す (off)。INT5/IRQ12 は PC-98
+ * 86 ボード FM ドライバの de-facto 標準で、JS の loadLoaderDisk が毎ブート on を既定に呼ぶ
+ * (ザルバール SIZ3/SIZ4P=IRQ12 決め打ち、我々の PMD .M=IRQ12 前提、KAJA PMD86=どちらでも可)。
+ * off は将来 IRQ12 非対応ドライバが出たときの逃げ道 (qbDebug.snd86irq(0))。
  * snd86opt は board bind (pccore_reset) 時に読まれるので、reset の前に設定すること。 */
 int np2kai_set_pmd_irq(int on) {
 	if (on) np2cfg.snd86opt |= 0x0C;       /* bit2,3 = IRQ セレクト → s_irqtable[3]=0x0c=IRQ12 */

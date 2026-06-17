@@ -941,6 +941,9 @@ NP2KaiModule({
     // 86 ボードの割り込みを IRQ12 に寄せる。我々の PMD .M 再生でだけ on (常駐ドライバ同梱ゲームは
     // 既定 IRQ を前提にするので off=既定でないと演奏が壊れる)。snd86opt は reset(board bind) 前に設定。
     const setPmdIrq     = M.cwrap('np2kai_set_pmd_irq',     'number', ['number']);
+    // 86 ボード IRQ の上書きトグル。null=既定 (全ブート IRQ12)、0=既定 IRQ 強制、1=IRQ12 強制。
+    // 既定は下の loadLoaderDisk で IRQ12。将来 IRQ12 非対応ドライバが出たら qbDebug.snd86irq(0) で逃げる。
+    let forcePmdIrq = null;
     let suppressBootBeep = false;   // 次の loader ブートが音楽セッションか (= beep 消音 + IRQ12 + エンジン非表示)
     let hideEngineFiles  = false;   // 一覧から PMD86.COM/PMP.COM を隠すか (音楽セッション中だけ true)
     // np2kai_dos_get_exit(int* code) — JS では HEAP に書き込み番地を渡す
@@ -1046,9 +1049,15 @@ NP2KaiModule({
         const musicBoot = suppressBootBeep;   // このブートが音楽セッションか
         suppressBootBeep = false;
         hideEngineFiles = musicBoot;          // 注入エンジンを一覧から隠すのは音楽セッション中だけ
-        // snd86opt は board bind (reset) 時に読まれるので reset の前に設定する。音楽セッションだけ
-        // IRQ12 に寄せ、ゲームは既定 IRQ のまま (常駐ドライバ同梱ゲームの演奏を壊さない)。
-        setPmdIrq(musicBoot ? 1 : 0);
+        // 86 ボードの割り込み線を INT5=IRQ12 に寄せる (全ブートの既定)。PC-98 86 ボードの FM
+        // ドライバの多くは INT5/IRQ12 を前提に ISR を hook する: ザルバールの SIZ3/SIZ4P は
+        // IRQ12 決め打ち (既定 IRQ だと曲送りが止まり本編 FM が無音)、我々の PMD .M プレイヤも
+        // IRQ12 前提。KAJA PMD86 (東方旧作同梱) は board 設定に追従するのでどちらでも鳴る。
+        // → IRQ12 を既定にすれば全部満たす (2026-06-17、ザルバール無音回帰の根治。deae233 の
+        // 「音楽セッションのみ IRQ12」は撤去範囲が広すぎ IRQ12 必須のドライバを巻き添えにしていた)。
+        // snd86opt は board bind (reset) 時に読まれるので reset の前に設定する。
+        // forcePmdIrq が non-null なら上書き (qbDebug.snd86irq / 将来 IRQ12 非対応ドライバ用)。
+        setPmdIrq(forcePmdIrq !== null ? forcePmdIrq : 1);
         reset(handle);
         // 起動音 (ピポ) は音楽セッションのブートでだけ消す。ゲーム起動は当時どおり鳴らす
         // (beepcfg.vol は render 時参照なので reset 後でも間に合う)。
@@ -1803,6 +1812,9 @@ NP2KaiModule({
         // FM 音源エンジンの A/B 切替。fmgen(1)=fmgen(既定) / fmgen(0)=opngen。
         // 次の Run (reset) から反映 → 同じ FM ゲームを再実行して聴き比べる。
         fmgen:  (on=1) => `usefmgen=${setFmgen(on ? 1 : 0)} (1=fmgen/0=opngen) — 次の Run から反映。同じゲームを再実行して聴き比べてください`,
+        // 86 ボードの割り込み線の上書き。既定は全ブート IRQ12 (de-facto 標準)。snd86irq(0)=既定 IRQ へ、
+        // snd86irq(1)=IRQ12 明示、snd86irq()=既定 (IRQ12) に戻す。設定後に対象ゲームを Run (reset) して反映。
+        snd86irq: (v) => { forcePmdIrq = (v === undefined ? null : (v ? 1 : 0)); return `forcePmdIrq=${forcePmdIrq} (null=既定IRQ12/1=IRQ12/0=既定IRQ) — 次の Run から反映`; },
         // async 自動クロック (快適化, **既定 OFF**)。autoclock(1)=ON で host の余裕に応じ multiple を
         // floor..ceil 内で自動調整 (達成フレーム時間から逆算)。autoclock(0)=OFF で 20 固定 (既定)。
         // 既定 OFF の理由: 倍率を上げる利得は小さく音楽テンポがもたつく実害がある (上の autoClock 定義参照)。
