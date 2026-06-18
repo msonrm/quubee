@@ -205,6 +205,8 @@ set(EXPORTED_FUNCTIONS
     _np2kai_dos_stage_music
     _np2kai_dos_music_play
     _np2kai_set_fmgen
+    _np2kai_set_vol
+    _np2kai_get_vol
     _np2kai_set_beep_mute
     _np2kai_set_pmd_irq
     _np2kai_set_clock_multiple
