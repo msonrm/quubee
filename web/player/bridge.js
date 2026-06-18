@@ -120,6 +120,265 @@ async function loadDisk(M, url, fsPath) {
 const qbVerbose = () => typeof window !== 'undefined' &&
     (window.QB_VERBOSE || /[?&]debug\b/.test(location.search));
 const qbChatter = /^\[[a-z]/;
+
+// ---- Stage 1 (音声スレッド再設計): ?worker=1 で emulator を Web Worker に載せる ----
+// 既定 (フラグ無し) は下の従来パス (メインスレッドで NP2kai を走らせる) のまま = 回帰ゼロ。
+// docs/audio_worker_migration.md 参照。Stage 1a-0 = worker でブート画面 (HELLO) を表示するだけ
+// (フィラー/入力/音声は後続の増分)。これで Worker 内 Emscripten・COEP・framebuffer 転送・main 描画の
+// 一番新しい部分を丸ごと検証する。
+const QB_USE_WORKER = /[?&]worker\b/.test(location.search);
+
+function initWorkerMode() {
+    // framebuffer 描画用 LUT (closure 内 RGB565_LUT と同等。worker から来た生バイトを RGB565→RGBA)
+    const LUT = new Uint32Array(65536);
+    for (let p = 0; p < 65536; p++) {
+        const r = ((p >> 11) & 0x1f) << 3, g = ((p >> 5) & 0x3f) << 2, b = (p & 0x1f) << 3;
+        LUT[p] = (0xff << 24) | (b << 16) | (g << 8) | r;
+    }
+    function drawFrame(w, h, bpp, buf) {
+        if (w <= 0 || h <= 0) return;
+        if (offscreen.width !== w || offscreen.height !== h) { offscreen.width = w; offscreen.height = h; fitCanvas(w, h); }
+        const imgData = offCtx.createImageData(w, h);
+        const dst = imgData.data;
+        if (bpp === 2) {
+            const src = new Uint16Array(buf);
+            const dst32 = new Uint32Array(dst.buffer);
+            for (let i = 0; i < w * h; i++) dst32[i] = LUT[src[i]];
+        } else if (bpp === 4) {
+            dst.set(new Uint8Array(buf));
+        }
+        offCtx.putImageData(imgData, 0, 0);
+        ctx.drawImage(offscreen, 0, 0, canvas.width, canvas.height);
+    }
+
+    const worker = new Worker('player/emu-worker.js');
+    let nextId = 1;
+    const pending = new Map();
+    function call(msg, transfer) {
+        return new Promise((resolve) => {
+            const id = nextId++;
+            pending.set(id, resolve);
+            worker.postMessage(Object.assign({ id }, msg), transfer || []);
+        });
+    }
+
+    // CPU クロック倍率 (worker)。既定 20 = PCBASEMULTIPLE ≈ 486DX2-50。reset を跨ぐと engine 既定 (20) に
+    // 戻るので run/music の reset 後に再適用する。ライブ A/B: コンソールで qbWorkerClock(27) 等。
+    // multiple=27 ≈ 66MHz (486DX2-66、東方 TH04/05 推奨級)、42 ≈ 103MHz。倍率↑は弾幕のスローダウンを
+    // 減らすが run_frame が重くなり音声マージンを食う (audio-driven なので枯れるとプチ詰まり)。
+    let workerMultiple = 27;   // ≈66MHz (486DX2-66、東方 TH04/05 推奨級)。この機(Snapdragon 7c)で 27=OK/42=プチプチ
+    window.qbWorkerClock = (m) => {
+        if (m) { workerMultiple = m | 0; worker.postMessage({ type: 'call', fn: 'np2kai_set_clock_multiple', argTypes: ['number'], args: [workerMultiple] }); }
+        return `worker multiple=${workerMultiple} (≈${(2.4576 * workerMultiple).toFixed(0)}MHz)`;
+    };
+    const applyClock = () => call({ type: 'call', fn: 'np2kai_set_clock_multiple', ret: 'number', argTypes: ['number'], args: [workerMultiple] });
+    worker.onmessage = (ev) => {
+        const m = ev.data;
+        if (m.type === 'frame') { drawFrame(m.w, m.h, m.bpp, m.buf); return; }
+        if (m.type === 'reply') { const r = pending.get(m.id); if (r) { pending.delete(m.id); r(m); } return; }
+    };
+    worker.onerror = (e) => showFatal('worker error: ' + (e.message || (e.filename + ':' + e.lineno)));
+
+    // ---- 入力転送 (1a-1)。DOM 判定は main、emulator 呼び出しだけ worker へ ----
+    // (従来パスの keydown/keyup/mouse と同じロジック。modal 抑制はまだ worker モードに無いので最小)
+    const pressed = new Set();
+    const inField = (e) => e.target && (e.target.tagName === 'INPUT' ||
+        e.target.tagName === 'TEXTAREA' || e.target.isContentEditable);
+    window.addEventListener('keydown', (e) => {
+        if (inField(e)) return;
+        const isCtrlKey = (e.code === 'ControlLeft' || e.code === 'ControlRight');
+        if (!isCtrlKey && (e.ctrlKey || e.metaKey || e.altKey)) return;
+        const code = PC98_KEYMAP[e.code];
+        if (code === undefined) return;
+        if (KEY_PREVENT_DEFAULT.has(e.code)) e.preventDefault();
+        if (pressed.has(e.code)) return;
+        pressed.add(e.code);
+        worker.postMessage({ type: 'key', down: 1, code });
+    });
+    window.addEventListener('keyup', (e) => {
+        if (inField(e)) return;
+        const code = PC98_KEYMAP[e.code];
+        if (code === undefined) return;
+        if (KEY_PREVENT_DEFAULT.has(e.code)) e.preventDefault();
+        if (!pressed.has(e.code)) return;
+        pressed.delete(e.code);
+        worker.postMessage({ type: 'key', down: 0, code });
+    });
+    // マウス (Pointer Lock 相対移動)。スケールは従来パスと同式。
+    canvas.addEventListener('click', () => {
+        if (document.pointerLockElement !== canvas) canvas.requestPointerLock().catch(() => {});
+    });
+    document.addEventListener('pointerlockchange', () => {
+        if (document.pointerLockElement === canvas) canvas.classList.add('captured');
+        else { canvas.classList.remove('captured'); worker.postMessage({ type: 'mouseButton', btn: 0, state: 0 }); worker.postMessage({ type: 'mouseButton', btn: 1, state: 0 }); }
+    });
+    document.addEventListener('mousemove', (e) => {
+        if (document.pointerLockElement !== canvas) return;
+        const cssW = parseFloat(canvas.style.width) || canvas.width;
+        const cssH = parseFloat(canvas.style.height) || canvas.height;
+        const dx = Math.round(e.movementX * (offscreen.width || 640) / cssW);
+        const dy = Math.round(e.movementY * (offscreen.height || 400) / cssH);
+        if (dx !== 0 || dy !== 0) worker.postMessage({ type: 'mouseMove', dx, dy });
+    });
+    document.addEventListener('mousedown', (e) => {
+        if (document.pointerLockElement !== canvas) return;
+        if (e.button === 0) worker.postMessage({ type: 'mouseButton', btn: 0, state: 1 });
+        else if (e.button === 2) worker.postMessage({ type: 'mouseButton', btn: 1, state: 1 });
+    });
+    document.addEventListener('mouseup', (e) => {
+        if (document.pointerLockElement !== canvas) return;
+        if (e.button === 0) worker.postMessage({ type: 'mouseButton', btn: 0, state: 0 });
+        else if (e.button === 2) worker.postMessage({ type: 'mouseButton', btn: 1, state: 0 });
+    });
+    canvas.addEventListener('contextmenu', (e) => { if (document.pointerLockElement === canvas) e.preventDefault(); });
+
+    const st = document.getElementById('run-status');
+    const fetchBin = async (p) => { const r = await fetch(p); if (!r.ok) throw new Error(`${p} (${r.status})`); return new Uint8Array(await r.arrayBuffer()); };
+
+    // ---- 音声 (1c): SAB リング + AudioWorklet + 音声駆動 production ----
+    // main が SAB リングと AudioWorkletNode を作り、worker が producer・worklet が consumer。
+    // 音声駆動 (worker が DAC 消費にペースして生成) でテンポの揺れを根治する (docs §音声生成モデル)。
+    const RING_FRAMES = 16384;                                   // 2 の冪 (≈340ms @48k)
+    const ringSab = new SharedArrayBuffer(8 + RING_FRAMES * 2 * 4);   // ctrl[2]int32 + data float32
+    let audioCtx = null;
+    let audioRate = 48000;
+    async function setupAudio() {
+        try {
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000 });
+            audioRate = audioCtx.sampleRate;
+            await audioCtx.audioWorklet.addModule('player/emu-audio-worklet.js');
+            const node = new AudioWorkletNode(audioCtx, 'emu-audio',
+                { processorOptions: { sab: ringSab, ringFrames: RING_FRAMES }, outputChannelCount: [2] });
+            node.connect(audioCtx.destination);
+        } catch (e) { console.warn('worker audio setup failed:', e); audioCtx = null; }
+    }
+    const resumeAudio = () => { if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume().catch(() => {}); };
+    window.addEventListener('pointerdown', resumeAudio);
+    window.addEventListener('keydown', resumeAudio);
+
+    // ---- 最小の .M 再生 (1c 検証用): FM 音楽の揺れが worker で消えるかを直接テストする ----
+    async function playMusicWorker(songBytes, songName) {
+        resumeAudio();
+        const songUp = songName.toUpperCase().replace(/[^A-Z0-9._]/g, '_').slice(-12);
+        if (st) st.textContent = `♪ ${songName}: loading engine…`;
+        const [pmd86, pmp] = await Promise.all([fetchBin('assets/pmd/PMD86.COM'), fetchBin('assets/pmd/PMP.COM')]);
+        await call({ type: 'writeFile', path: '/run/PMD86.COM', bytes: pmd86 }, [pmd86.buffer]);
+        await call({ type: 'writeFile', path: '/run/PMP.COM', bytes: pmp }, [pmp.buffer]);
+        await call({ type: 'writeFile', path: '/run/' + songUp, bytes: songBytes }, [songBytes.buffer]);
+        await call({ type: 'stageMusic' });
+        await call({ type: 'musicPlay', song: songUp });
+        const loaderBytes = await fetchBin('assets/loader.d88');
+        await call({ type: 'writeFile', path: '/tmp/loader.d88', bytes: loaderBytes }, [loaderBytes.buffer]);
+        await call({ type: 'insertFdd', drive: 0, path: '/tmp/loader.d88', readonly: 0 });
+        await call({ type: 'call', fn: 'np2kai_set_pmd_irq', ret: 'number', argTypes: ['number'], args: [1] });
+        await call({ type: 'reset' });
+        await applyClock();              // reset 後に倍率を再適用
+        await call({ type: 'call', fn: 'np2kai_set_beep_mute', ret: 'number', argTypes: ['number'], args: [1] });
+        worker.postMessage({ type: 'audioOn', on: true });        // 音声駆動 production を開始
+        if (st) st.textContent = `♪ ${songName} (worker audio — 揺れチェック)`;
+    }
+    // ---- 最小の「書庫ドロップ → ゲーム起動」(1a-2 検証用): 東方を worker で動かして弾幕の場面で
+    //      従来パスと A/B し、重い負荷で揺れが消えるかを体感する。pure モジュール qbArchive/qbBatScript を再利用。
+    const latin1Bytes = (s) => { const b = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) b[i] = s.charCodeAt(i) & 0xff; return b; };
+    async function runGameWorker(file) {
+        resumeAudio();
+        if (st) st.textContent = `Loading ${file.name}…`;
+        const buf = new Uint8Array(await file.arrayBuffer());
+        let entries;
+        if (/\.lzh$/i.test(file.name)) entries = qbArchive.parseLzh(buf);
+        else if (/\.zip$/i.test(file.name)) entries = await qbArchive.parseZip(buf);
+        else entries = [{ name: file.name, data: buf }];   // 素の .com/.exe
+        // 展開ファイルを worker /run へ (転送せずクローン: 後で .bat 本文を main で parse するため)
+        for (const e of entries) await call({ type: 'writeFile', path: '/run/' + e.name, bytes: e.data });
+        const names = entries.map((e) => e.name);
+        // 起動 .bat を解決 (従来パス resolveBat 相当)
+        let rec = null;
+        for (const e of entries) {
+            if (!/\.bat$/i.test(e.name)) continue;
+            const recipe = qbBatScript.parse(e.data);
+            const m = qbBatScript.resolveMain(recipe, names);
+            if (m && entries.find((x) => x.name === m.name)) { rec = { recipe, mainName: m.name, args: m.args, batName: e.name }; break; }
+        }
+        const irq = 1;
+        if (rec && (rec.recipe.hasControlFlow || rec.recipe.hasEnvOps)) {
+            const stmts = qbBatScript.buildStatements(rec.recipe, names, '');
+            await call({ type: 'stageBatch', bytes: latin1Bytes(qbBatScript.serializeStatements(stmts)), label: rec.batName });
+        } else if (rec && qbBatScript.resolveSequence(rec.recipe, names, '') && qbBatScript.resolveSequence(rec.recipe, names, '').length > 1) {
+            const seq = qbBatScript.resolveSequence(rec.recipe, names, '');
+            await call({ type: 'stageScript', bytes: latin1Bytes(seq.map((c) => c.name + '\t' + (c.args || '')).join('\n') + '\n'), label: rec.batName });
+        } else {
+            const main = rec ? entries.find((x) => x.name === rec.mainName)
+                             : (entries.find((e) => /\.(exe|com)$/i.test(e.name)) || entries[0]);
+            const isExe = /\.exe$/i.test(main.name);
+            const cmdline = rec ? qbBatScript.buildCmdline(rec.args, '') : '';
+            await call({ type: isExe ? 'stageExe' : 'stageCom', bytes: main.data, cmdline, label: main.name });
+        }
+        // loader 起動 (loadLoaderDisk 相当) + 音声駆動開始
+        const loaderBytes = await fetchBin('assets/loader.d88');
+        await call({ type: 'writeFile', path: '/tmp/loader.d88', bytes: loaderBytes }, [loaderBytes.buffer]);
+        await call({ type: 'insertFdd', drive: 0, path: '/tmp/loader.d88', readonly: 0 });
+        await call({ type: 'call', fn: 'np2kai_set_pmd_irq', ret: 'number', argTypes: ['number'], args: [irq] });
+        await call({ type: 'reset' });
+        await applyClock();              // reset 後に倍率を再適用 (engine 既定 20 に戻るため)
+        await call({ type: 'call', fn: 'np2kai_set_beep_mute', ret: 'number', argTypes: ['number'], args: [0] });
+        worker.postMessage({ type: 'audioOn', on: true });
+        if (st) st.textContent = `Running ${file.name} (worker — 弾幕で揺れ A/B)`;
+    }
+
+    window.addEventListener('dragover', (e) => e.preventDefault());
+    window.addEventListener('drop', (e) => {
+        e.preventDefault();
+        const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+        if (!f) return;
+        if (/\.m$/i.test(f.name)) {
+            const r = new FileReader();
+            r.onload = () => playMusicWorker(new Uint8Array(r.result), f.name).catch((err) => showFatal('music: ' + err));
+            r.readAsArrayBuffer(f);
+        } else if (/\.(lzh|zip|exe|com)$/i.test(f.name)) {
+            runGameWorker(f).catch((err) => showFatal('game: ' + err));
+        } else {
+            if (st) st.textContent = 'worker mode: .lzh/.zip/.exe/.com (ゲーム) か .M (音楽) をドロップ';
+        }
+    });
+
+    (async () => {
+        await setupAudio();
+        const coreUrl = new URL('np2kai_core.js', location.href).href;
+        // FONT.BMP を create より前に worker FS へ (従来パスの loadDisk(font) 相当)。これが無いと
+        // font ROM が空でテキスト VRAM の字形が崩れる。main で fetch しバイトを init で渡す。
+        const dataFiles = [];
+        const transfer = [];
+        const fontRes = await fetch('assets/font.bmp');
+        if (fontRes.ok) {
+            const fontBytes = new Uint8Array(await fontRes.arrayBuffer());
+            dataFiles.push({ path: '/tmp/FONT.BMP', bytes: fontBytes });
+            transfer.push(fontBytes.buffer);
+        }
+        // OPNA 内蔵リズム音源サンプル (ハイハット等) も create 前に worker FS へ (従来パス相当)。
+        // 無いと OPNA リズム部 (reg 0x10 キーオン) が無音 = ドラムが欠ける。fmgen=大文字/opngen=小文字 両方。
+        for (const nm of ['bd', 'sd', 'top', 'hh', 'tom', 'rim']) {
+            const rr = await fetch('assets/rhythm/2608_' + nm + '.wav');
+            if (!rr.ok) continue;
+            const rb = new Uint8Array(await rr.arrayBuffer());
+            dataFiles.push({ path: '/tmp/2608_' + nm.toUpperCase() + '.WAV', bytes: rb });   // 同 rb を 2 パス
+            dataFiles.push({ path: '/tmp/2608_' + nm + '.wav', bytes: rb });                 // (転送しない = クローン)
+        }
+        // SAB は transferable でない (共有渡し) ので transfer リストには入れない。
+        const initRep = await call({ type: 'init', coreUrl, audioRate, dataFiles, audioSab: ringSab, ringFrames: RING_FRAMES }, transfer);
+        if (initRep.error) { showFatal(initRep.error); return; }
+        // ブート用ディスクを main で fetch → worker FS へ → 挿入 → run
+        const bytes = await fetchBin('assets/np2kai_boot.d88');
+        await call({ type: 'writeFile', path: '/tmp/boot.d88', bytes }, [bytes.buffer]);
+        const ins = await call({ type: 'insertFdd', drive: 0, path: '/tmp/boot.d88', readonly: 0 });
+        if (ins.r !== 0) { showFatal('boot disk insert failed r=' + ins.r); return; }
+        worker.postMessage({ type: 'run', on: true });
+        if (st) st.textContent = 'worker mode (1c): .M ファイルをドロップ → 音楽再生 (揺れチェック)';
+    })().catch((e) => showFatal('worker init error: ' + e));
+}
+
+if (QB_USE_WORKER) {
+    initWorkerMode();
+} else {
 NP2KaiModule({
     print:    (t) => { if (qbVerbose() || !qbChatter.test(t)) console.log(t); },
     printErr: (t) => { if (qbChatter.test(t)) { if (qbVerbose()) console.log(t); }
@@ -203,18 +462,46 @@ NP2KaiModule({
     // (旧: rAF で生成して push する二重クロック構成を撤去)。別スレッド化 (AudioWorklet +
     // SharedArrayBuffer) は将来の C2。SPN は非推奨 API だが全ブラウザで動作し、Emscripten
     // SDL2 の非 worklet 音声も内部でこれを使う。
+    // ---- 音声/エミュ進行の計測ハーネス (qbDebug.audioStats) ----
+    // 症状①「テンポの揺れ・フレームが詰まるようなスキップ」の真因切り分け用。ScriptProcessorNode は
+    // メインスレッドで走るので、音声コールバックの発火が run_frame や ~25 万回のピクセル変換ループと
+    // 取り合いになって遅刻すると、ハードウェアの音声バッファが枯れて可聴スキップになる。さらに FM の
+    // レンダリングは emulated clock までしか進めず、その clock を進める run_frame が rAF で詰まると音が
+    // 枯れる。「音声コールバックの遅刻」と「エミュの追いつけなさ」を別々に数値化し、本丸 (AudioWorklet/
+    // Worker 化) のどのレベルが要るかを実測で決める。純 JS・リビルド不要。qbDebug.audioStats() で読む。
+    const audioStats = {
+        since: performance.now(),
+        // 音声コールバック (ScriptProcessorNode, メインスレッド)
+        cb: 0, cbLate: 0, cbGapMaxMs: 0, cbExpectMs: 0,
+        fillSumMs: 0, fillMaxMs: 0, lastCbMs: 0,
+        // run_frame (rAF)
+        raf: 0, rafSlowCount: 0, rafDtMaxMs: 0, emuSaturated: 0,
+        fbSumMs: 0, fbMaxMs: 0, lastRafMs: 0,
+    };
+
     if (audioCtx && handle) {
         const bufSize = M.ccall('np2kai_audio_get_bufsize', 'number', ['number'], [handle]) || 2048;
         const fillFn  = M.cwrap('np2kai_audio_fill', null, ['number', 'number', 'number']);
         const heapPtr = M._malloc(bufSize * 2 * 2);  // ステレオ int16
         const node = audioCtx.createScriptProcessor(bufSize, 0, 2);
+        audioStats.cbExpectMs = bufSize / (audioRate || 48000) * 1000;  // 期待コールバック間隔
         node.onaudioprocess = (e) => {
+            // コールバック間隔の計測: 期待 (bufSize/rate) の 1.5 倍超 = HW バッファ枯れ = スキップ疑い
+            const _cbNow = performance.now();
+            if (audioStats.lastCbMs) {
+                const gap = _cbNow - audioStats.lastCbMs;
+                if (gap > audioStats.cbGapMaxMs) audioStats.cbGapMaxMs = gap;
+                if (audioStats.cbExpectMs && gap > audioStats.cbExpectMs * 1.5) audioStats.cbLate++;
+            }
+            audioStats.lastCbMs = _cbNow;
+            audioStats.cb++;
             const L = e.outputBuffer.getChannelData(0);
             const R = e.outputBuffer.getChannelData(1);
             // 一時停止/停止中はエミュレータを凍結している。ここで pull すると FM チップの保持音
             // (鳴りっぱなしのノート) を audio クロックで延々レンダリングして「最後の音が鳴り続ける」
             // ので、凍結中は fill せず無音を出す (チップ状態は据え置き → 再開で続きから)。
             if (emuFrozen) { L.fill(0); R.fill(0); return; }
+            const _fill0 = performance.now();
             fillFn(handle, heapPtr, bufSize);
             // ALLOW_MEMORY_GROWTH で heap が再確保されることがあるので毎回 view を取り直す
             const pcm = new Int16Array(M.HEAPU8.buffer, heapPtr, bufSize * 2);
@@ -226,6 +513,9 @@ NP2KaiModule({
                 const m = Math.max(l < 0 ? -l : l, r < 0 ? -r : r);
                 if (m > maxAbs) maxAbs = m;
             }
+            const _fillMs = performance.now() - _fill0;
+            audioStats.fillSumMs += _fillMs;
+            if (_fillMs > audioStats.fillMaxMs) audioStats.fillMaxMs = _fillMs;
             // 初回再生は boot/常駐/曲ロードで数秒無音 → 実際に音が出た瞬間に計時開始点を合わせる
             // (それまで musicElapsed() は 0 を返す)。音楽の頭が boot 時間ぶんずれないように。
             if (musicAwaitingStart && maxAbs > 1000) {
@@ -268,8 +558,8 @@ NP2KaiModule({
         } else {
             canvas.classList.remove('captured');
             // キャプチャ解除時はボタン状態をリセット (スタックボタン防止)
-            mouseButton(handle, 0, 0);
-            mouseButton(handle, 1, 0);
+            emu.mouseButton(0, 0);
+            emu.mouseButton(1, 0);
         }
     });
 
@@ -287,18 +577,18 @@ NP2KaiModule({
         const srcH = offscreen.height || 400;
         const dx = Math.round(e.movementX * srcW / cssW);
         const dy = Math.round(e.movementY * srcH / cssH);
-        if (dx !== 0 || dy !== 0) mouseMove(handle, dx, dy);
+        if (dx !== 0 || dy !== 0) emu.mouseMove(dx, dy);
     });
 
     document.addEventListener('mousedown', (e) => {
         if (document.pointerLockElement !== canvas) return;
-        if (e.button === 0) mouseButton(handle, 0, 1);
-        else if (e.button === 2) mouseButton(handle, 1, 1);
+        if (e.button === 0) emu.mouseButton(0, 1);
+        else if (e.button === 2) emu.mouseButton(1, 1);
     });
     document.addEventListener('mouseup', (e) => {
         if (document.pointerLockElement !== canvas) return;
-        if (e.button === 0) mouseButton(handle, 0, 0);
-        else if (e.button === 2) mouseButton(handle, 1, 0);
+        if (e.button === 0) emu.mouseButton(0, 0);
+        else if (e.button === 2) emu.mouseButton(1, 0);
     });
     // Pointer Lock 中の右クリックメニュー抑止
     canvas.addEventListener('contextmenu', (e) => {
@@ -704,7 +994,7 @@ NP2KaiModule({
         try {
             // 新規 = 前の束を完全に閉じてから (機械リセット込み — 前のゲームが左画面で
             // 走り続けない)。追加 (＋追加ボタン経由のみ) は重ね展開で機械もそのまま。
-            if (!append) closeBundle();
+            if (!append) await closeBundle();
             runStatusEl.textContent = `Loading ${file.name}…`;
             if (/\.(lzh|zip)$/i.test(file.name)) {
                 mergeEntries(await extractArchiveToFs(file, true));   // /run/ クリアは上で実施済
@@ -716,11 +1006,10 @@ NP2KaiModule({
                     runStatusEl.textContent = `Cannot extract: ${file.name} — ${res.reason}`;
                     return;
                 }
-                mergeEntries(writeEntriesToRun(res.files));
+                mergeEntries(await writeEntriesToRun(res.files));
             } else if (isExecName(file.name)) {
-                ensureRunDir();
                 const data = new Uint8Array(await file.arrayBuffer());
-                M.FS.writeFile('/run/' + file.name, data);
+                await emu.writeRun(file.name, data);
                 mergeEntries([{ name: file.name, data, mtime: file.lastModified ? new Date(file.lastModified) : null }]);
             } else if (append) {
                 // ＋Add 限定: 任意の単体ファイルを /run に重ねる (Save したセーブの読み戻し /
@@ -731,13 +1020,12 @@ NP2KaiModule({
                         `Not a DOS 8.3 (ASCII) name: ${file.name} — rename and retry`;
                     return;
                 }
-                ensureRunDir();
                 const data = new Uint8Array(await file.arrayBuffer());
                 // 既存エントリと大文字小文字だけ違う名前は既存側の表記に揃える (MEMFS は
                 // case-sensitive なので、素直に書くと同名異 case のファイルが 2 つできる)。
                 const prior = loadedEntries.find((e) => e.name.toLowerCase() === file.name.toLowerCase());
                 const rel = prior ? prior.name : file.name;
-                M.FS.writeFile('/run/' + rel, data);
+                await emu.writeRun(rel, data);
                 mergeEntries([{ name: rel, data, mtime: file.lastModified ? new Date(file.lastModified) : null }]);
             } else {
                 runStatusEl.textContent =
@@ -778,11 +1066,8 @@ NP2KaiModule({
     }
 
     // ---- アーカイブを Emscripten FS に展開 ----
-    // /run/ 配下に全ファイルを書き出す (実行ごとに上書き想定)。
-    function ensureRunDir() {
-        try { M.FS.mkdir('/run'); } catch (_) { /* 既存 */ }
-    }
-    // /run 配下を再帰削除 (サブディレクトリ対応のため unlink だけでは不足)。
+    // (/run の mkdir は emu.writeRun / emu.clearRun が必要時に行う)
+    // /run 配下を再帰削除 (サブディレクトリ対応のため unlink だけでは不足)。emu.clearRun が使う。
     function rmrf(path) {
         let st;
         try { st = M.FS.stat(path); } catch (_) { return; }
@@ -796,13 +1081,7 @@ NP2KaiModule({
             try { M.FS.unlink(path); } catch (_) {}
         }
     }
-    function clearRunDir() {
-        ensureRunDir();
-        for (const e of M.FS.readdir('/run')) {
-            if (e === '.' || e === '..') continue;
-            rmrf('/run/' + e);
-        }
-    }
+    async function clearRunDir() { await emu.clearRun(); }
 
     // 機械をページ読込直後と同じ待機状態 (自己起動 HELLO ディスク) に戻す。
     // 直前まで走っていたゲーム/常駐 TSR はこのリセットで消える。staged image は
@@ -829,7 +1108,7 @@ NP2KaiModule({
         if (musicAwaitingStart) return 0;   // 音が出るまでは 0:00
         return musicElapsedMs + (musicState === 'playing' ? performance.now() - musicAnchorMs : 0);
     }
-    function resetToIdle() {
+    async function resetToIdle() {
         if (currentPoll && pollDosExit._stop) pollDosExit._stop();   // exit 監視を停止
         emuFrozen = false;          // 凍結したまま reset すると HELLO が描かれない
         musicState = 'stopped';
@@ -837,18 +1116,18 @@ NP2KaiModule({
         musicElapsedMs = 0; musicAwaitingStart = false;   // 経過時間もリセット
         hideEngineFiles = false;
         if (machineAtIdle) return;
-        insertFdd(handle, '/tmp/boot.d88', 0, 0);   // 失敗しても reset で BIOS 待機になるだけ
-        setPmdIrq(0);               // snd86opt を既定に戻す (reset 前)
-        reset(handle);
-        setBeepMute(0);             // 起動音を通常に戻す (音楽セッションでミュートしていた場合)
+        await emu.insertFdd('/tmp/boot.d88', 0, 0);   // 失敗しても reset で BIOS 待機になるだけ
+        await emu.setPmdIrq(0);     // snd86opt を既定に戻す (reset 前)
+        await emu.reset();
+        await emu.setBeepMute(0);   // 起動音を通常に戻す (音楽セッションでミュートしていた場合)
         machineAtIdle = true;
     }
 
     // 開いている束を完全に閉じる: 機械リセット + /run クリア + UI を初期状態 (歓迎文) へ。
     // 「✕ 閉じる」と新規オープンの前処理で共用する。
-    function closeBundle() {
-        resetToIdle();
-        clearRunDir();
+    async function closeBundle() {
+        await resetToIdle();
+        await clearRunDir();
         loadedEntries = []; loadedArchives = []; selectedEntry = null; selectedRecipe = null;
         focusedEntry = null;
         currentDir = '';
@@ -885,24 +1164,18 @@ NP2KaiModule({
     // 区切りは '/' 前提 (呼び出し側で正規化済)。サブディレクトリも再現。data==null は skip。
     // 書き出したエントリ (name=正規化相対パス) を返す。DOS は大小を区別しないので、case の
     // 吸収は C 側 dos_path_to_host の case-insensitive リゾルバに任せる (原ケースのまま保持)。
-    function writeEntriesToRun(entries) {
-        ensureRunDir();
-        const written = [], skipped = [];
+    async function writeEntriesToRun(entries) {
+        const written = [], skipped = [], toStage = [];
         for (const ent of entries) {
             if (ent.data == null) {            // 未対応メソッド (例: -lh1-) → skip して継続
                 skipped.push(`${sjisName(ent.name)} (${ent.method || '?'})`);
                 continue;
             }
             const rel = ent.name.replace(/^\/+/, '');
-            const parts = rel.split('/');
-            let dir = '/run';
-            for (let k = 0; k < parts.length - 1; k++) {
-                dir += '/' + parts[k];
-                try { M.FS.mkdir(dir); } catch (_) { /* 既存 */ }
-            }
-            M.FS.writeFile('/run/' + rel, ent.data);
+            toStage.push({ rel, data: ent.data });
             written.push({ name: rel, data: ent.data, mtime: ent.mtime });
         }
+        await emu.stage(toStage);             // /run へ一括書き込み (親ディレクトリも作成)
         if (skipped.length) {
             console.warn(`未対応メソッドで ${skipped.length} エントリを skip: ${skipped.join(', ')}`);
         }
@@ -915,10 +1188,10 @@ NP2KaiModule({
         const entries = /\.zip$/i.test(file.name)
             ? await qbArchive.parseZip(bytes)
             : qbArchive.parseLzh(bytes);
-        if (!append) clearRunDir();
+        if (!append) await clearRunDir();
         // 書庫名の '\' 区切りを SJIS 対応で '/' に正規化 (ダメ文字の誤分割を防ぐ)。
         for (const e of entries) if (e.name) e.name = dosPathToSlash(e.name);
-        return writeEntriesToRun(entries);
+        return await writeEntriesToRun(entries);
     }
 
     // ---- Phase 3 ローダ: COM / EXE image を staging → loader.d88 で起動 ----
@@ -948,6 +1221,72 @@ NP2KaiModule({
     let hideEngineFiles  = false;   // 一覧から PMD86.COM/PMP.COM を隠すか (音楽セッション中だけ true)
     // np2kai_dos_get_exit(int* code) — JS では HEAP に書き込み番地を渡す
     const dosGetExitFn = M.cwrap('np2kai_dos_get_exit', 'number', ['number']);
+
+    // ---- emu ファサード (継ぎ目): closure はエミュレータをこの窓口だけで触る ----
+    // ローカル版 (= ?worker=1 でない従来パス) は M を直接ラップ。後で worker 版に差し替えられるよう
+    // 全メソッド async (worker 版はメッセージ往復で非同期になるため)。段階的に拡張中 (いまは起動フロー)。
+    // docs/audio_worker_migration.md 段階1 (その場ファサード化・挙動不変)。
+    const emu = {
+        async writeFile(path, bytes) { M.FS.writeFile(path, bytes); },
+        async writeRun(rel, data) {                       // /run/<rel> へ書く (親ディレクトリも作る)
+            try { M.FS.mkdir('/run'); } catch (_) {}
+            const parts = rel.split('/');
+            let dir = '/run';
+            for (let k = 0; k < parts.length - 1; k++) { dir += '/' + parts[k]; try { M.FS.mkdir(dir); } catch (_) {} }
+            M.FS.writeFile('/run/' + rel, data);
+        },
+        async stage(items) { for (const it of items) await emu.writeRun(it.rel, it.data); },  // [{rel,data}] 一括
+        async clearRun() {                                // /run 配下を再帰削除 (rmrf はクロージャの再帰ヘルパ)
+            try { M.FS.mkdir('/run'); } catch (_) {}
+            for (const e of M.FS.readdir('/run')) { if (e !== '.' && e !== '..') rmrf('/run/' + e); }
+        },
+        async scanRun() {                                 // /run 配下を再帰列挙 → [{name,size,mtimeMs}] (raw)
+            const out = [];
+            const walk = (dir, prefix) => {
+                let ents; try { ents = M.FS.readdir(dir); } catch (_) { return; }
+                for (const e of ents) {
+                    if (e === '.' || e === '..') continue;
+                    const p = dir + '/' + e;
+                    let st; try { st = M.FS.stat(p); } catch (_) { continue; }
+                    if (M.FS.isDir(st.mode)) walk(p, prefix + e + '/');
+                    else out.push({ name: prefix + e, size: st.size, mtimeMs: +st.mtime });
+                }
+            };
+            walk('/run', '');
+            return out;
+        },
+        async readRun(rel) { try { return M.FS.readFile('/run/' + rel); } catch (_) { return null; } },
+        async insertFdd(path, drive, ro) { return insertFdd(handle, path, drive, ro ? 1 : 0); },
+        async reset() { reset(handle); },
+        async setPmdIrq(v) { return setPmdIrq(v); },
+        async setBeepMute(v) { return setBeepMute(v); },
+        async enableMidiNow() { return enableMidiNow(handle); },
+        async stageImage(bytes, cmdline, label, isExe) {
+            const ptr = M._malloc(bytes.length); M.HEAPU8.set(bytes, ptr);
+            const r = (isExe ? dosStageExe : dosStageCom)(ptr, bytes.length, cmdline || '', label || '');
+            M._free(ptr); return r;
+        },
+        async stageScript(bytes, label) {
+            const ptr = M._malloc(bytes.length); M.HEAPU8.set(bytes, ptr);
+            const r = dosStageScript(ptr, bytes.length, label || ''); M._free(ptr); return r;
+        },
+        async stageBatch(bytes, label) {
+            const ptr = M._malloc(bytes.length); M.HEAPU8.set(bytes, ptr);
+            const r = dosStageBatch(ptr, bytes.length, label || ''); M._free(ptr); return r;
+        },
+        async stageMusic() { return dosStageMusic(); },
+        async musicPlay(song) { return dosMusicPlay(song); },
+        async getExit() {
+            const p = M._malloc(4); const exited = dosGetExitFn(p);
+            const code = M.getValue(p, 'i32'); M._free(p);
+            return { exited: !!exited, code };
+        },
+        // 入力 (fire-and-forget。戻り値を使わないので await 不要)。handle はここで前置。
+        keyDown(code)         { keyDown(handle, code); },
+        keyUp(code)           { keyUp(handle, code); },
+        mouseMove(dx, dy)     { mouseMove(handle, dx, dy); },
+        mouseButton(btn, st)  { mouseButton(handle, btn, st); },
+    };
 
     // ---- MIDI 遅延 on-demand ロード ----
     // MIDI ドライバ (MIDDRV/MMD 等) を使うレシピを Run した時だけ、soundfont (SF2) を取得して
@@ -1019,8 +1358,8 @@ NP2KaiModule({
             runStatusEl.textContent = `MIDI: soundfont ready (${(buf.length / 1048576).toFixed(1)} MB) — preparing…`;
             // CWD (= data dir /tmp) 直下に soundfont.sf2 を置く。C 側 midimod_create (qb_tsf.c) が
             // tsf_load_filename("soundfont.sf2") で読む。
-            M.FS.writeFile('/tmp/soundfont.sf2', buf);
-            const ok = enableMidiNow(handle);   // TSF で SF2 ロード (次の reset で結線)
+            await emu.writeFile('/tmp/soundfont.sf2', buf);
+            const ok = await emu.enableMidiNow();   // TSF で SF2 ロード (次の reset で結線)
             midiLoadState = ok ? 'ready' : 'failed';
             if (!ok) console.warn('[midi] soundfont ロード失敗 (soundfont.sf2 配置を確認)');
             return !!ok;
@@ -1041,8 +1380,8 @@ NP2KaiModule({
         // 毎 Run、pristine な内容を同一パスへ書き直して A: に挿入 (前 Run でゲストがディスクへ
         // 書いた変更を持ち越さない + 固定パス上書きなので MEMFS に積み上がらない)。
         // 挿入失敗は throw → Run ハンドラの catch がステータス行に表示する。
-        M.FS.writeFile('/tmp/loader.d88', loaderDiskCached);
-        const r = insertFdd(handle, '/tmp/loader.d88', 0, 0);
+        await emu.writeFile('/tmp/loader.d88', loaderDiskCached);
+        const r = await emu.insertFdd('/tmp/loader.d88', 0, 0);
         if (r !== 0) throw new Error(`loader.d88 insert failed (r=${r})`);
         emuFrozen = false;       // 新セッション = まっさら (凍結/前の音楽セッションを引き継がない)
         musicSessionUp = false;  // 音楽セッション確立は playMusic が reset 後に立て直す
@@ -1057,35 +1396,33 @@ NP2KaiModule({
         // 「音楽セッションのみ IRQ12」は撤去範囲が広すぎ IRQ12 必須のドライバを巻き添えにしていた)。
         // snd86opt は board bind (reset) 時に読まれるので reset の前に設定する。
         // forcePmdIrq が non-null なら上書き (qbDebug.snd86irq / 将来 IRQ12 非対応ドライバ用)。
-        setPmdIrq(forcePmdIrq !== null ? forcePmdIrq : 1);
-        reset(handle);
+        await emu.setPmdIrq(forcePmdIrq !== null ? forcePmdIrq : 1);
+        await emu.reset();
         // 起動音 (ピポ) は音楽セッションのブートでだけ消す。ゲーム起動は当時どおり鳴らす
         // (beepcfg.vol は render 時参照なので reset 後でも間に合う)。
-        setBeepMute(musicBoot ? 1 : 0);
+        await emu.setBeepMute(musicBoot ? 1 : 0);
         machineAtIdle = false;   // ゲーム実行開始 — 以後の resetToIdle は実リセットする
     }
 
     // 現在 polling 中のハンドル (Stop ボタンで強制中断する用)。
-    let currentPoll = null;   // 実行中の poll: { tick, codePtr } | null
+    let currentPoll = null;   // 実行中の poll: { tick, busy } | null
     function pollDosExit(onExit) {
-        // 万一前の poll が生きていたら確実に止める (再入時のタイマ/ヒープリーク防止)。
-        if (currentPoll) {
-            clearInterval(currentPoll.tick);
-            M._free(currentPoll.codePtr);
-            currentPoll = null;
-        }
-        // exit code 用に 4B (i32) を HEAP に確保して polling。100ms 間隔。
-        const codePtr = M._malloc(4);
-        const self = { tick: 0, codePtr };
+        // 万一前の poll が生きていたら確実に止める (再入時のタイマリーク防止)。
+        if (currentPoll) { clearInterval(currentPoll.tick); currentPoll = null; }
+        const self = { tick: 0, busy: false };
         function stopPolling(code) {
             if (currentPoll !== self) return;  // 既に停止済 (二重停止防止)
             clearInterval(self.tick);
-            M._free(self.codePtr);
             currentPoll = null;
             onExit(code);
         }
-        self.tick = setInterval(() => {
-            if (dosGetExitFn(codePtr)) stopPolling(M.getValue(codePtr, 'i32'));
+        // exit code は emu.getExit() で取得 (ローカルは HEAP、worker はメッセージ往復)。
+        // busy で多重往復を防ぐ。100ms 間隔。
+        self.tick = setInterval(async () => {
+            if (self.busy) return;
+            self.busy = true;
+            try { const r = await emu.getExit(); if (currentPoll === self && r.exited) stopPolling(r.code); }
+            finally { self.busy = false; }
         }, 100);
         currentPoll = self;
         // Stop ボタンが叩く用のフックを保存
@@ -1100,34 +1437,22 @@ NP2KaiModule({
     let fsSig = new Map();     // name(/run 相対) -> "size:mtimeMs" (最後に同期した FS 状態)
     let runSyncTimer = null;
 
-    function scanRun() {        // /run 配下の通常ファイルを再帰列挙 {name,size,mtimeMs}
-        const out = [];
-        (function walk(dir, prefix) {
-            let ents;
-            try { ents = M.FS.readdir(dir); } catch (_) { return; }
-            for (const e of ents) {
-                if (e === '.' || e === '..') continue;
-                const path = dir + '/' + e;
-                let st;
-                try { st = M.FS.stat(path); } catch (_) { continue; }
-                if (M.FS.isDir(st.mode)) walk(path, prefix + e + '/');
-                // 音楽セッション中だけ、こちらが /run へ注入した PMD エンジン (PMD86.COM/PMP.COM)
-                // を一覧から隠す。ゲーム同梱の pmd86.com (東方旧作等) を巻き込まないよう
-                // hideEngineFiles でスコープを音楽セッションに限定する。
-                else if (hideEngineFiles && HIDDEN_RUN_NAMES.has(e.toUpperCase())) { /* 隠す */ }
-                else out.push({ name: prefix + e, size: st.size, mtimeMs: +st.mtime });
-            }
-        })('/run', '');
-        return out;
+    async function scanRun() {  // emu.scanRun (raw) + hideEngineFiles フィルタ。
+        // 音楽セッション中だけ、こちらが /run へ注入した PMD エンジン (PMD86.COM/PMP.COM) を一覧から隠す。
+        // ゲーム同梱の pmd86.com (東方旧作等) を巻き込まないよう hideEngineFiles で音楽セッションに限定。
+        const all = await emu.scanRun();
+        return hideEngineFiles
+            ? all.filter((f) => !HIDDEN_RUN_NAMES.has(baseName(f.name).toUpperCase()))
+            : all;
     }
 
-    function fsSnapshot() {     // run 開始時の FS 状態を「同期済み」として記録 (差分の基準)
+    async function fsSnapshot() {  // run 開始時の FS 状態を「同期済み」として記録 (差分の基準)
         fsSig = new Map();
-        for (const f of scanRun()) fsSig.set(f.name, f.size + ':' + f.mtimeMs);
+        for (const f of await scanRun()) fsSig.set(f.name, f.size + ':' + f.mtimeMs);
     }
 
-    function syncRunDir() {     // 差分だけ loadedEntries に反映。変化があれば再描画
-        const scan = scanRun();
+    async function syncRunDir() {  // 差分だけ loadedEntries に反映。変化があれば再描画
+        const scan = await scanRun();
         const names = new Set();
         let changed = false;
         for (const f of scan) {
@@ -1135,8 +1460,8 @@ NP2KaiModule({
             const sig = f.size + ':' + f.mtimeMs;
             if (fsSig.get(f.name) === sig) continue;     // 開始時から不変 → 触らない (原 mtime 保持)
             fsSig.set(f.name, sig);
-            let data;
-            try { data = M.FS.readFile('/run/' + f.name); } catch (_) { continue; }
+            const data = await emu.readRun(f.name);
+            if (data == null) continue;
             const mtime = f.mtimeMs ? new Date(f.mtimeMs) : null;
             const i = loadedEntries.findIndex((e) => e.name === f.name);
             if (i >= 0) { loadedEntries[i].data = data; loadedEntries[i].mtime = mtime; }  // 同一性保持
@@ -1158,7 +1483,9 @@ NP2KaiModule({
         return changed;
     }
 
-    function startRunSync() { stopRunSync(); fsSnapshot(); runSyncTimer = setInterval(syncRunDir, 1000); }
+    let syncBusy = false;       // async polling の多重実行を防ぐ (worker 版は往復で時間がかかりうる)
+    async function syncRunTick() { if (syncBusy) return; syncBusy = true; try { await syncRunDir(); } finally { syncBusy = false; } }
+    async function startRunSync() { stopRunSync(); await fsSnapshot(); runSyncTimer = setInterval(syncRunTick, 1000); }
     function stopRunSync()  { if (runSyncTimer) { clearInterval(runSyncTimer); runSyncTimer = null; } }
 
     // staging 後の共通処理: loader.d88 を A: に挿入してリセット → /run ライブ反映 → exit polling。
@@ -1167,10 +1494,10 @@ NP2KaiModule({
         await loadLoaderDisk();
         runStatusEl.textContent = `${label}: running`;
         stopButton.hidden = false;
-        startRunSync();                 // 実行中の /run 変化を一覧へライブ反映
-        pollDosExit((code) => {
+        await startRunSync();           // 実行中の /run 変化を一覧へライブ反映
+        pollDosExit(async (code) => {
             stopRunSync();
-            syncRunDir();               // 終了直前の書き込みを最終取り込み
+            await syncRunDir();         // 終了直前の書き込みを最終取り込み
             runStatusEl.textContent = code === -1
                 ? `${label}: stopped`
                 : `${label}: exited (code ${code})`;
@@ -1180,12 +1507,7 @@ NP2KaiModule({
     }
 
     async function stageAndRunImage(bytes, cmdline, label, isExe) {
-        // image を C ヒープに転送して stage する
-        const ptr = M._malloc(bytes.length);
-        M.HEAPU8.set(bytes, ptr);
-        const stageFn = isExe ? dosStageExe : dosStageCom;
-        const r = stageFn(ptr, bytes.length, cmdline || '', label || '');
-        M._free(ptr);
+        const r = await emu.stageImage(bytes, cmdline, label, isExe);
         if (r !== 0) throw new Error(`stage_${isExe ? 'exe' : 'com'} failed r=${r}`);
         await runStaged(label);
     }
@@ -1197,10 +1519,7 @@ NP2KaiModule({
         const scriptStr = seq.map((c) => c.name + '\t' + (c.args || '')).join('\n') + '\n';
         const bytes = new Uint8Array(scriptStr.length);
         for (let i = 0; i < scriptStr.length; i++) bytes[i] = scriptStr.charCodeAt(i) & 0xff;
-        const ptr = M._malloc(bytes.length);
-        M.HEAPU8.set(bytes, ptr);
-        const r = dosStageScript(ptr, bytes.length, label || '');
-        M._free(ptr);
+        const r = await emu.stageScript(bytes, label);
         if (r !== 0) throw new Error(`stage_script failed r=${r}`);
         await runStaged(label);
     }
@@ -1211,10 +1530,7 @@ NP2KaiModule({
         const progStr = qbBatScript.serializeStatements(stmts);
         const bytes = new Uint8Array(progStr.length);
         for (let i = 0; i < progStr.length; i++) bytes[i] = progStr.charCodeAt(i) & 0xff;
-        const ptr = M._malloc(bytes.length);
-        M.HEAPU8.set(bytes, ptr);
-        const r = dosStageBatch(ptr, bytes.length, label || '');
-        M._free(ptr);
+        const r = await emu.stageBatch(bytes, label);
         if (r !== 0) {
             // C 側の容量上限 (文数 96 / cmd 48 / echo 2KB 等) 超過は JS で事前検査して
             // いない → throw せず false を返し、呼び元が ① 単一起動へフォールバックする。
@@ -1246,9 +1562,8 @@ NP2KaiModule({
         }
         // 毎再生 /run へ書き直す (reset を跨いでも内容は不変・固定パスなので積み上がらない)。
         // scanRun が HIDDEN_RUN_NAMES でフィルタするので一覧には出ない。
-        ensureRunDir();
-        M.FS.writeFile('/run/PMD86.COM', pmdEngineCache.pmd86);
-        M.FS.writeFile('/run/PMP.COM',   pmdEngineCache.pmp);
+        await emu.writeRun('PMD86.COM', pmdEngineCache.pmd86);
+        await emu.writeRun('PMP.COM',   pmdEngineCache.pmp);
     }
 
     // 曲を再生する。音楽セッション (PMD86 常駐) が既に在れば曲だけ差し替え (再起動なし)、
@@ -1361,11 +1676,11 @@ NP2KaiModule({
     document.getElementById('player-close').addEventListener('click', closePlayer);
     playerModalEl.addEventListener('click', (e) => { if (e.target === playerModalEl) closePlayer(); });
 
-    stopButton.addEventListener('click', () => {
+    stopButton.addEventListener('click', async () => {
         // exit 監視の停止だけでなく機械もリセット — 「止まった」が見た目どおりになる
         // (旧実装は監視停止のみで、ゲーム/TSR は左画面で走り続けていた)。
         // /run のセーブ類は onExit の syncRunDir が取り込み済み。
-        resetToIdle();
+        await resetToIdle();
         stopButton.blur();
     });
 
@@ -1457,12 +1772,12 @@ NP2KaiModule({
         pickerAppend = true; fileInput.accept = '';  // ＋Add は単体ファイルも受けるので無フィルタ
         fileInput.click();                           // 同じ /run/ に重ねて展開 (HD インストール)
     });
-    closeRunBtn.addEventListener('click', () => {
+    closeRunBtn.addEventListener('click', async () => {
         // 破壊的 (ゲーム停止 + 取り出したファイル/セーブ消滅) なので確認を挟む。
         // ドロップ新規はあえて確認なし: ファイルを選んで落とすのは十分意図的な操作で、
         // 毎回ダイアログを挟むと「書庫→即プレイ」のお手軽さが削れる。
         if (!confirm(`「${loadedArchives.join(' + ')}」を閉じます。\n実行中のゲームは停止し、取り出したファイル (セーブ含む) は消えます。`)) return;
-        closeBundle();
+        await closeBundle();
         runStatusEl.textContent = 'Closed';
     });
 
@@ -1680,7 +1995,7 @@ NP2KaiModule({
         if (KEY_PREVENT_DEFAULT.has(e.code)) e.preventDefault();
         if (pressed.has(e.code)) return;     // OS のオートリピートは無視
         pressed.add(e.code);
-        keyDown(handle, code);
+        emu.keyDown(code);
     });
 
     window.addEventListener('keyup', (e) => {
@@ -1692,7 +2007,7 @@ NP2KaiModule({
         if (KEY_PREVENT_DEFAULT.has(e.code)) e.preventDefault();
         if (!pressed.has(e.code)) return;
         pressed.delete(e.code);
-        keyUp(handle, code);
+        emu.keyUp(code);
     });
 
     // ---- ゲームパッド入力 (Gamepad API → キー変換) ----
@@ -1729,10 +2044,10 @@ NP2KaiModule({
         // エッジ検出して keyDown/keyUp (同 NKEY をキーボードと同時押ししていた場合、
         // 片方の解放で keyUp が先行するが、実害は「押し直せば済む」程度なので許容)
         for (const k of want) {
-            if (!padPressed.has(k)) { padPressed.add(k); keyDown(handle, k); }
+            if (!padPressed.has(k)) { padPressed.add(k); emu.keyDown(k); }
         }
         for (const k of [...padPressed]) {
-            if (!want.has(k)) { padPressed.delete(k); keyUp(handle, k); }
+            if (!want.has(k)) { padPressed.delete(k); emu.keyUp(k); }
         }
     }
 
@@ -1754,6 +2069,8 @@ NP2KaiModule({
     const getReg16    = M.cwrap('np2kai_debug_get_reg16',    'number', ['number', 'number']);
     const setFmgen    = M.cwrap('np2kai_set_fmgen',          'number', ['number']);
     const setMul      = M.cwrap('np2kai_set_clock_multiple', 'number', ['number']);
+    const setVol      = M.cwrap('np2kai_set_vol',  null,     ['number','number','number','number']);
+    const getVol      = M.cwrap('np2kai_get_vol',  'number', ['number']);
     const midiBytes   = M.cwrap('np2kai_debug_serial_midi_bytes',  'number', ['number']);
     const midiActive  = M.cwrap('np2kai_debug_serial_midi_active', 'number', ['number']);
     const midiFxFn    = M.cwrap('np2kai_debug_midi_fx',            null,     ['number']);
@@ -1812,6 +2129,44 @@ NP2KaiModule({
         // FM 音源エンジンの A/B 切替。fmgen(1)=fmgen(既定) / fmgen(0)=opngen。
         // 次の Run (reset) から反映 → 同じ FM ゲームを再実行して聴き比べる。
         fmgen:  (on=1) => `usefmgen=${setFmgen(on ? 1 : 0)} (1=fmgen/0=opngen) — 次の Run から反映。同じゲームを再実行して聴き比べてください`,
+        // パート別音量バランスの live 調整 (症状②: リズムがメロより前に出すぎ)。各 0..128。
+        // 引数なし = 現在値を表示。例: qbDebug.vol({rhythm: 80}) でリズムだけ引いて即聴き比べ
+        // (reset 不要、鳴っている曲にそのまま反映)。次の Run でも維持されます (np2cfg を更新)。
+        vol: (o) => {
+            const cur = () => ({ fm: getVol(0), ssg: getVol(1), rhythm: getVol(2), adpcm: getVol(3), master: getVol(4) });
+            if (o === undefined) return cur();
+            const g = (k) => (o[k] === undefined ? -1 : (o[k] | 0));
+            setVol(g('fm'), g('ssg'), g('rhythm'), g('adpcm'));
+            return cur();
+        },
+        // 音声/エミュ進行の計測ハーネス。曲を再生しながら呼ぶと、症状①(揺れ・スキップ)が
+        // 「音声コールバックの遅刻 (cbLate)」由来か「エミュの追いつけなさ (emuSaturated)」由来かを
+        // 数値で切り分ける。引数 true でカウンタをリセット。本丸の規模 (AudioWorklet/Worker 化) を実測で決める。
+        audioStats: (reset) => {
+            const s = audioStats;
+            const durS = Math.max((performance.now() - s.since) / 1000, 0.001);
+            const out = {
+                '計測時間': durS.toFixed(1) + 's',
+                '─ 音声CB(メインスレッド) ─': '',
+                'CB発火数': s.cb,
+                '遅刻CB(>1.5x=スキップ疑い)': `${s.cbLate} (${(s.cbLate / durS).toFixed(2)}/s)`,
+                '期待/最大間隔': `${s.cbExpectMs.toFixed(1)} / ${s.cbGapMaxMs.toFixed(1)} ms`,
+                'fill 平均/最大': `${(s.fillSumMs / (s.cb || 1)).toFixed(2)} / ${s.fillMaxMs.toFixed(2)} ms`,
+                '─ run_frame(rAF) ─': '',
+                'rAF数': s.raf,
+                'コマ落ち(>25ms)': `${s.rafSlowCount} (${(s.rafSlowCount / durS).toFixed(2)}/s)`,
+                '最大rAF間隔': s.rafDtMaxMs.toFixed(1) + 'ms',
+                'エミュ飽和(追いつけず)': `${s.emuSaturated} (${(s.emuSaturated / durS).toFixed(2)}/s)`,
+                'FB変換 平均/最大': `${(s.fbSumMs / (s.raf || 1)).toFixed(2)} / ${s.fbMaxMs.toFixed(2)} ms`,
+            };
+            if (reset) {
+                s.cb = s.cbLate = s.cbGapMaxMs = s.fillSumMs = s.fillMaxMs = s.lastCbMs = 0;
+                s.raf = s.rafSlowCount = s.rafDtMaxMs = s.emuSaturated = s.fbSumMs = s.fbMaxMs = s.lastRafMs = 0;
+                s.since = performance.now();
+            }
+            try { console.table(out); } catch (_) { console.log(out); }
+            return out;
+        },
         // 86 ボードの割り込み線の上書き。既定は全ブート IRQ12 (de-facto 標準)。snd86irq(0)=既定 IRQ へ、
         // snd86irq(1)=IRQ12 明示、snd86irq()=既定 (IRQ12) に戻す。設定後に対象ゲームを Run (reset) して反映。
         snd86irq: (v) => { forcePmdIrq = (v === undefined ? null : (v ? 1 : 0)); return `forcePmdIrq=${forcePmdIrq} (null=既定IRQ12/1=IRQ12/0=既定IRQ) — 次の Run から反映`; },
@@ -2000,7 +2355,7 @@ NP2KaiModule({
     window.addEventListener('blur', () => {
         for (const c of pressed) {
             const code = PC98_KEYMAP[c];
-            if (code !== undefined) keyUp(handle, code);
+            if (code !== undefined) emu.keyUp(code);
         }
         pressed.clear();
     });
@@ -2021,6 +2376,27 @@ NP2KaiModule({
         const g = ((p >>  5) & 0x3f) << 2;
         const b = ( p        & 0x1f) << 3;
         RGB565_LUT[p] = (0xff << 24) | (b << 16) | (g << 8) | r;
+    }
+
+    // framebuffer (w×h、bpp=2:RGB565 / 4:RGBA、bytes=ソースバイト列) を canvas に描く。両モード共通の
+    // 描画 (DOM・メインスレッド)。local は M.HEAPU8 の subarray、worker は postMessage のバイト列を渡す。
+    // emu.start(onFrame) の onFrame コールバックとして使う。
+    function drawFrame(w, h, bpp, bytes) {
+        if (w <= 0 || h <= 0) return;
+        if (offscreen.width !== w || offscreen.height !== h) {
+            offscreen.width = w; offscreen.height = h; fitCanvas(w, h);
+        }
+        const imgData = offCtx.createImageData(w, h);
+        const dst = imgData.data;
+        if (bpp === 2) {
+            const src = new Uint16Array(bytes.buffer, bytes.byteOffset, w * h);
+            const dst32 = new Uint32Array(dst.buffer);
+            for (let i = 0; i < w * h; i++) dst32[i] = RGB565_LUT[src[i]];
+        } else if (bpp === 4) {
+            dst.set(new Uint8Array(bytes.buffer, bytes.byteOffset, w * h * 4));
+        }
+        offCtx.putImageData(imgData, 0, 0);
+        ctx.drawImage(offscreen, 0, 0, canvas.width, canvas.height);   // 物理 px へ nearest 拡大
     }
 
     // ---- エミュレーション駆動ループ (wall-clock catch-up) ----
@@ -2046,6 +2422,14 @@ NP2KaiModule({
     function frame(now) {
         // パッド入力をエミュレータ実行前にサンプリング (ポーリング型 API のため毎フレーム)
         pollGamepads();
+        // rAF ケイデンスの計測: 25ms 超 = コマ落ち。メインスレッドのジャンク度合いの指標。
+        if (audioStats.lastRafMs) {
+            const dt = now - audioStats.lastRafMs;
+            if (dt > audioStats.rafDtMaxMs) audioStats.rafDtMaxMs = dt;
+            if (dt > 25) audioStats.rafSlowCount++;
+        }
+        audioStats.lastRafMs = now;
+        audioStats.raf++;
         // 音楽の一時停止: エミュレータごと凍結する (run_frame を進めない = 位置保持・無音)。
         // nextDue を現在時刻に張り付けて、再開時に catch-up が暴発しないようにする。
         if (emuFrozen) { nextDue = now; requestAnimationFrame(frame); return; }
@@ -2068,46 +2452,22 @@ NP2KaiModule({
         // 大幅遅延 (タブ復帰など) で何百ステップも溜まる事故を防ぐため、
         // 上限に達したら時計をリセットして「諦めて現在時刻基準でやり直す」。
         if (steps === MAX_CATCHUP && now > nextDue) {
+            audioStats.emuSaturated++;   // エミュが追いつけず backlog を捨てた = 音声が枯れる源
             nextDue = now + MS_PER_STEP;
         }
         // 自動クロック: 評価間隔ごとに負荷から multiple を調整 (OFF 時は即 return)。
         autoClock.tick();
 
+        const _fb0 = performance.now();
         const fbPtr = getFb(handle, pW, pH, pBpp);
-
         if (fbPtr) {
-            const w   = M.getValue(pW,   'i32');
-            const h   = M.getValue(pH,   'i32');
-            const bpp = M.getValue(pBpp, 'i32');
-
-            if (w > 0 && h > 0) {
-                // オフスクリーンのサイズが変わったらメインキャンバスも更新
-                if (offscreen.width !== w || offscreen.height !== h) {
-                    offscreen.width  = w;
-                    offscreen.height = h;
-                    fitCanvas(w, h);
-                }
-
-                // RGB16 (5-6-5) → RGBA32 をオフスクリーンに描画
-                const imgData = offCtx.createImageData(w, h);
-                const dst = imgData.data;
-
-                if (bpp === 2) {
-                    const src  = new Uint16Array(M.HEAPU8.buffer, fbPtr, w * h);
-                    const dst32 = new Uint32Array(dst.buffer);
-                    for (let i = 0; i < w * h; i++) {
-                        dst32[i] = RGB565_LUT[src[i]];
-                    }
-                } else if (bpp === 4) {
-                    const src = new Uint8Array(M.HEAPU8.buffer, fbPtr, w * h * 4);
-                    dst.set(src);
-                }
-
-                offCtx.putImageData(imgData, 0, 0);
-                // 物理ピクセルサイズのメインキャンバスへニアレストネイバーで拡大
-                ctx.drawImage(offscreen, 0, 0, canvas.width, canvas.height);
-            }
+            const w = M.getValue(pW, 'i32'), h = M.getValue(pH, 'i32'), bpp = M.getValue(pBpp, 'i32');
+            if (w > 0 && h > 0) drawFrame(w, h, bpp, M.HEAPU8.subarray(fbPtr, fbPtr + w * h * bpp));
         }
+        // framebuffer 変換+描画がメインスレッドを占有する時間 (音声コールバックの遅刻要因)
+        const _fbMs = performance.now() - _fb0;
+        audioStats.fbSumMs += _fbMs;
+        if (_fbMs > audioStats.fbMaxMs) audioStats.fbMaxMs = _fbMs;
 
         requestAnimationFrame(frame);
     }
@@ -2118,3 +2478,4 @@ NP2KaiModule({
     showFatal('QuuBee init error: ' + e);
     console.error(e);
 });
+}  // end else (?worker=1 でない従来パス。worker パスは initWorkerMode)
