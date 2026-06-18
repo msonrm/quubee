@@ -1,0 +1,8 @@
+# Cloudflare Pages headers.
+# SharedArrayBuffer (音声リング = AudioWorklet との共有) と将来の Web Worker 音声経路は
+# cross-origin isolation を要求する。COOP/COEP を全パスに付与する。
+# 全アセットは同一オリジン取得なので COEP: require-corp で読み込みは壊れない。
+# 参照: docs/audio_worker_migration.md (Stage 0)
+/*
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Embedder-Policy: require-corp

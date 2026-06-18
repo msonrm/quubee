@@ -101,6 +101,16 @@ int np2kai_set_audio_rate(uint32_t rate);
 __attribute__((visibility("default")))
 int np2kai_set_fmgen(int on);
 
+/* パート別音量バランスの実行時調整 (FM/SSG/Rhythm/ADPCM、各 0..128、負値=据え置き)。
+ * np2cfg を更新し、生きている fmgen インスタンスにも opna_reset と同じ dB 換算で即反映する
+ * (reset を待たず live A/B 可)。症状: リズムがメロより前に出すぎ等のミックス調整用。 */
+__attribute__((visibility("default")))
+void np2kai_set_vol(int fm, int ssg, int rhythm, int adpcm);
+
+/* 現在のパート別音量 (which: 0=fm 1=ssg 2=rhythm 3=adpcm 4=master) を 0..128 で返す。 */
+__attribute__((visibility("default")))
+uint32_t np2kai_get_vol(int which);
+
 /* 起動音 (PC-98 の「ピポ」= BEEP) のミュート。音楽セッションのブートでだけ消す用途
  * (pipo は BEEP・PMD 曲は FM で別音源)。mute!=0 で 0 に、mute=0 で復帰。戻り値 = 設定後の beep 音量。 */
 __attribute__((visibility("default")))

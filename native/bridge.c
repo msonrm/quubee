@@ -4,11 +4,17 @@
 #include <string.h>
 #include <unistd.h>   /* chdir: POSIX cwd を NP2kai の curpath と揃える */
 
+#include <math.h>         /* pow: パート別音量バランスの dB 換算 (opna_reset と同式) */
 #include <pccore.h>
 #include <dosio.h>
 #include <scrnmng.h>
 #include <soundmng.h>
 #include <sound/beep.h>   /* beepcfg.vol — 起動音 (BEEP) ミュート用 */
+#include <sound/fmboard.h>            /* g_opna[], OPNA_MAX — パート別音量の live 反映用 */
+#include <sound/opna.h>              /* OPNA.fmgen */
+#if defined(SUPPORT_FMGEN)
+#include <sound/fmgen/fmgen_fmgwrap.h>  /* OPNA_SetVolume* (extern "C") */
+#endif
 #include <mousemng.h>
 #include <keystat.h>
 #include <ia32/cpu.h>
@@ -410,6 +416,50 @@ int np2kai_set_audio_rate(uint32_t rate) {
 int np2kai_set_fmgen(int on) {
 	np2cfg.usefmgen = on ? 1 : 0;
 	return np2cfg.usefmgen;
+}
+
+/* --- パート別音量バランスの実行時調整 (症状②: リズムがメロより前に出すぎ) ---
+ * fmgen の各パート音量は opna_reset が np2cfg.vol_* から直接 dB 設定する (fmboard_updatevolume
+ * 経由ではない: opnalist 未 populate で opna_fmgen_setallvolume*_linear が no-op のため)。よって
+ * np2cfg を書き換えるだけでは「次の reset」まで効かない。ここでは np2cfg を更新した上で、生きている
+ * g_opna[].fmgen インスタンスにも opna_reset と同じ dB 換算で即反映する (reset を待たず live A/B 可)。
+ * 引数は 0..128 (np2 既定スケール)。負値はそのパート据え置き (= 部分更新)。fmgen 側 ADPCM の音量は
+ * opna_reset:128 と同じく np2cfg.vol_pcm 経由。 */
+static int qb_vol_to_db(int v) {
+	if (v < 0) v = 0; else if (v > 128) v = 128;
+	return (int)(pow((double)v / 128, 0.12) * (20 + 192) - 192);  /* = opna_reset:126-129 と同式 */
+}
+
+void np2kai_set_vol(int fm, int ssg, int rhythm, int adpcm) {
+	if (fm     >= 0) np2cfg.vol_fm     = (UINT8)(fm     > 128 ? 128 : fm);
+	if (ssg    >= 0) np2cfg.vol_ssg    = (UINT8)(ssg    > 128 ? 128 : ssg);
+	if (rhythm >= 0) np2cfg.vol_rhythm = (UINT8)(rhythm > 128 ? 128 : rhythm);
+	if (adpcm  >= 0) np2cfg.vol_pcm    = (UINT8)(adpcm  > 128 ? 128 : adpcm);
+#if defined(SUPPORT_FMGEN)
+	{
+		int i;
+		for (i = 0; i < OPNA_MAX; i++) {
+			void *fg = g_opna[i].fmgen;
+			if (!fg) continue;
+			if (fm     >= 0) OPNA_SetVolumeFM(fg,          qb_vol_to_db(np2cfg.vol_fm));
+			if (ssg    >= 0) OPNA_SetVolumePSG(fg,         qb_vol_to_db(np2cfg.vol_ssg));
+			if (rhythm >= 0) OPNA_SetVolumeRhythmTotal(fg, qb_vol_to_db(np2cfg.vol_rhythm));
+			if (adpcm  >= 0) OPNA_SetVolumeADPCM(fg,       qb_vol_to_db(np2cfg.vol_pcm));
+		}
+	}
+#endif
+}
+
+/* which: 0=fm 1=ssg 2=rhythm 3=adpcm(=vol_pcm) 4=master。現在の np2cfg 値 (0..128) を返す。 */
+uint32_t np2kai_get_vol(int which) {
+	switch (which) {
+		case 0:  return np2cfg.vol_fm;
+		case 1:  return np2cfg.vol_ssg;
+		case 2:  return np2cfg.vol_rhythm;
+		case 3:  return np2cfg.vol_pcm;
+		case 4:  return np2cfg.vol_master;
+		default: return 0;
+	}
 }
 
 /* 起動音 (PC-98 の「ピポ」) のミュート。pipo は BEEP (スピーカ)、PMD 音楽は FM (OPNA) と別音源
