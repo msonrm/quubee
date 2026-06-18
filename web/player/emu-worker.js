@@ -23,6 +23,7 @@ let c = {};
 
 // run ループ
 let running = false;
+let paused = false;             // 一時停止 (music pause)。tick がフレームを進めない = 位置保持・無音
 const TARGET_HZ   = 56;
 const MS_PER_STEP = 1000 / TARGET_HZ;
 const MS_PER_FRAME = 1000 / 56.42;   // 音声駆動時の wall-clock フレーム周期 (PC-98 24kHz VSYNC、映像の滑らかさ)
@@ -84,6 +85,32 @@ function readTree(dir) {                       // /run ライブ反映用: {rel:
     return out;
 }
 
+// /run/<rel> へ書く (親ディレクトリも作る)。local emu.writeRun と対応。
+function writeRunFile(rel, data) {
+    try { M.FS.mkdir('/run'); } catch (_) {}
+    const parts = rel.split('/');
+    let dir = '/run';
+    for (let k = 0; k < parts.length - 1; k++) { dir += '/' + parts[k]; try { M.FS.mkdir(dir); } catch (_) {} }
+    M.FS.writeFile('/run/' + rel, data);
+}
+
+// /run を走査して [{name, size, mtimeMs}] (ライブ反映用、原ケース保持)。local emu.scanRun と対応。
+function scanRunTree() {
+    const out = [];
+    function walk(path, prefix) {
+        let ents; try { ents = M.FS.readdir(path); } catch (_) { return; }
+        for (const e of ents) {
+            if (e === '.' || e === '..') continue;
+            const p = path + '/' + e;
+            let st; try { st = M.FS.stat(p); } catch (_) { continue; }
+            if (M.FS.isDir(st.mode)) walk(p, prefix + e + '/');
+            else out.push({ name: prefix + e, size: st.size, mtimeMs: +st.mtime });
+        }
+    }
+    walk('/run', '');
+    return out;
+}
+
 // ---- run ループ ----
 function postFrame() {
     const fbPtr = c.getFb(handle, pW, pH, pBpp);
@@ -102,21 +129,27 @@ function ringFill() { return (Atomics.load(audioCtrl, 0) - Atomics.load(audioCtr
 
 // 1 ブロック (s_samples) を pcmlock → int16→float32 でリングへ書く。
 // pcmlock 直前に sound_sync が CPU クロックにロックステップでブロックを満たしているので top-up ≈0。
+let audioActiveReported = false;   // 「実際に音が鳴り始めた」を main へ 1 度通知する用 (音楽プレイヤーの計時開始)
 function drainBlockToRing() {
     c.audioFill(handle, fillPtr, bufsize);              // pcmlock → fillPtr に int16 stereo (bufsize frames)
     const src = new Int16Array(M.HEAPU8.buffer, fillPtr, bufsize * 2);
     let w = Atomics.load(audioCtrl, 0);
+    let peak = 0;
     for (let i = 0; i < bufsize; i++) {
         const idx = (w & audioMask) * 2;
-        audioData[idx]     = src[i * 2]     / 32768;
-        audioData[idx + 1] = src[i * 2 + 1] / 32768;
+        const l = src[i * 2], r = src[i * 2 + 1];
+        audioData[idx]     = l / 32768;
+        audioData[idx + 1] = r / 32768;
+        const a = l < 0 ? -l : l; if (a > peak) peak = a;
         w = (w + 1) | 0;
     }
     Atomics.store(audioCtrl, 0, w);
+    if (!audioActiveReported && peak > 1000) { audioActiveReported = true; postMessage({ type: 'audioActive' }); }
 }
 
 function tick() {
     if (!running) return;
+    if (paused) { setTimeout(tick, 30); return; }   // 一時停止: フレームを進めない (位置保持・無音)
     if (audioOn && audioCtrl) {
         // 映像と音を両立: フレームは wall-clock (~56.42fps = PC-98 VSYNC) で「ばらして」進め
         // (5 フレーム一気だと映像がブロックレート≈12fps に落ちて見える)、音はリング fill の
@@ -228,6 +261,9 @@ onmessage = (ev) => {
         case 'writeFile': M.FS.writeFile(m.path, m.bytes); reply(m.id, { ok: true }); break;
         case 'mkdir': try { M.FS.mkdir(m.path); } catch (_) {} reply(m.id, { ok: true }); break;
         case 'clearRun': clearRun(); reply(m.id, { ok: true }); break;
+        case 'writeRun': writeRunFile(m.rel, m.data); reply(m.id, { ok: true }); break;
+        case 'stage': for (const it of (m.items || [])) writeRunFile(it.rel, it.data); reply(m.id, { ok: true }); break;
+        case 'scanRun': reply(m.id, { files: scanRunTree() }); break;
         case 'readTree': reply(m.id, { files: readTree(m.path || '/run') }); break;
         case 'readFile': {
             let bytes = null;
@@ -239,7 +275,7 @@ onmessage = (ev) => {
 
         // ライフサイクル
         case 'insertFdd': reply(m.id, { r: c.insertFdd(handle, m.path, m.drive, m.readonly ? 1 : 0) }); break;
-        case 'reset': c.reset(handle); reply(m.id, { ok: true }); break;
+        case 'reset': audioActiveReported = false; c.reset(handle); reply(m.id, { ok: true }); break;
 
         // ステージング (生バイトを HEAP 経由で)
         case 'stageCom': reply(m.id, { r: withHeapBytes(m.bytes, (p, n) => c.stageCom(p, n, m.cmdline || '', m.label || '')) }); break;
@@ -247,7 +283,7 @@ onmessage = (ev) => {
         case 'stageScript': reply(m.id, { r: withHeapBytes(m.bytes, (p, n) => c.stageScript(p, n, m.label || '')) }); break;
         case 'stageBatch': reply(m.id, { r: withHeapBytes(m.bytes, (p, n) => c.stageBatch(p, n, m.label || '')) }); break;
         case 'stageMusic': reply(m.id, { r: c.stageMusic() }); break;
-        case 'musicPlay': reply(m.id, { r: c.musicPlay(m.song) }); break;
+        case 'musicPlay': audioActiveReported = false; reply(m.id, { r: c.musicPlay(m.song) }); break;
 
         case 'getExit': {
             const p = M._malloc(4);
@@ -267,6 +303,7 @@ onmessage = (ev) => {
             break;
         }
 
+        case 'setPaused': paused = !!m.on; break;         // 一時停止 (music pause)
         case 'audioOn':                                   // Stage 1c: 音声駆動の開始/停止
             audioOn = !!m.on;
             if (audioOn) { nextDue = performance.now(); sampleDebt = 0; }  // ペース時計をリセット
