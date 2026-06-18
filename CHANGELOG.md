@@ -1,5 +1,41 @@
 # CHANGELOG
 
+## [emulator を Web Worker へ移行し FM 音楽の揺れを根治 — worker を既定化] — 2026-06-19
+
+ユーザー報告「FM 音楽のテンポの揺れ・フレームが詰まるスキップ」を根治。`qbDebug.audioStats()` の実機計測で
+真因を特定: 音声配信(ScriptProcessor バッファ)は無事で、**emulator が rAF 律速でメインスレッド飽和し、
+楽音の cadence(ノートのタイミング)が不均一になる**こと。コア載せ替えでも過負荷対策でも直らず、
+**emulator を専用スレッド(Web Worker)へ移すのが唯一の根治**だった。
+
+### アーキテクチャ
+- **Stage 0**: cross-origin isolation。`web/_headers`(Cloudflare、COOP/COEP) + `tools/devserver.js`
+  (ローカルは emrun がヘッダを出せないため)。SharedArrayBuffer(音声リング)の前提を最初に確定。
+- **`web/player/emu-worker.js`**: NP2kai を Worker で駆動。framebuffer は postMessage transfer で main へ、
+  音声は**音声駆動 production**(リング空きでゲートして DAC にロック = drift しない)で SAB リングへ。
+- **`web/player/emu-audio-worklet.js`**: 音声スレッドで SAB リングを読む consumer(SPSC、2の冪+ビットマスク)。
+- **emu ファサード**: closure の emulator 接点を `emu.*` 経由に段階リファクタ(起動/FS/入力/制御/描画ループ)。
+  `emu.start(onFrame)`、共有 `drawFrame()`。各カテゴリ完了ごとに従来パスで実機回帰確認。
+- **モード対応 closure**: トップを `async main()` に統一、`makeStubM()`(worker 時のローカル初期化を無害化)+
+  `makeWorkerEmu()`(emu I/F を worker メッセージで実装)で `QB_USE_WORKER ? worker : local` に差し替え。
+  共有 UI(フィラー/ビューア/音楽プレイヤー/MIDI/Save/pause/gamepad/計時)が両モードで動く。
+
+### 既定化(対応環境のみ・自動フォールバック)
+- `QB_USE_WORKER` = SAB + `crossOriginIsolated` + AudioWorklet が揃う環境で**既定 ON**。非対応(古いブラウザ/
+  ヘッダ未適用ホスト)/`?local`/`?worker=0` は従来パス(メインスレッド)に**自動フォールバック**。起動時に console へ
+  どちらで動くか表示。本番(Cloudflare Pages の `_headers`)で訪問者は自動 worker。
+
+### 効果(ブラウザ実機検証済)
+- **映像滑らか・音滑らか・揺れ根治・OPNA リズム鳴・東方/PMD .M 動作・pause/gamepad/音楽プレイヤー計時**すべて両モード。
+- **バックグラウンド再生**(タブ背面でも音が続く = Worker は rAF throttle を受けない)— 決定的な副産物で、
+  「作業しながら当時の BGM を浴びる」という"文化の再体験"の質を上げた。実機 CPU とサウンドチップのクロック一体感の回復。
+- 従来パス(`?local`)は emu-local で挙動不変。ユーザー実使用で「快適さが全然違う」。
+
+### 副産物
+- パート別音量バランス API(`np2kai_set_vol`/`get_vol`、`qbDebug.vol()`、live 反映、`tools/vol_test.js`)。
+- 計測ハーネス `qbDebug.audioStats()`(音声 CB の遅刻 / エミュ飽和を分離して切り分け)。
+
+詳細・残は [docs/audio_worker_migration.md](docs/audio_worker_migration.md)。残 = 下げ側のみの適応クロック(任意・低スペック保険、現状 multiple=20 固定)。
+
 ## [ザルバールの本編 FM 音楽が無音化する回帰を根治 — 86 ボード IRQ12 を全ブート既定に] — 2026-06-17
 
 ユーザー報告: 「ザルバール (zarfw.lzh) のオープニングの数秒は音が鳴るが、タイトル/本編の FM 音楽が
