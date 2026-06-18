@@ -121,12 +121,17 @@ const qbVerbose = () => typeof window !== 'undefined' &&
     (window.QB_VERBOSE || /[?&]debug\b/.test(location.search));
 const qbChatter = /^\[[a-z]/;
 
-// ---- Stage 1 (音声スレッド再設計): ?worker=1 で emulator を Web Worker に載せる ----
-// 既定 (フラグ無し) は下の従来パス (メインスレッドで NP2kai を走らせる) のまま = 回帰ゼロ。
-// docs/audio_worker_migration.md 参照。Stage 1a-0 = worker でブート画面 (HELLO) を表示するだけ
-// (フィラー/入力/音声は後続の増分)。これで Worker 内 Emscripten・COEP・framebuffer 転送・main 描画の
-// 一番新しい部分を丸ごと検証する。
-const QB_USE_WORKER = /[?&]worker\b/.test(location.search);
+// ---- emulator を Web Worker で走らせるか (既定 = 対応環境なら ON) ----
+// FM 音楽の揺れ根治のため emulator を専用スレッドへ。SharedArrayBuffer(音声リング)+cross-origin
+// isolation(COOP/COEP)+AudioWorklet が揃う環境でだけ worker、揃わない (古いブラウザ・ヘッダ未適用の
+// ホスト) 時は自動でメインスレッドの従来パスにフォールバック。?local / ?worker=0 で明示的に従来パスへ。
+// docs/audio_worker_migration.md 参照。
+const QB_USE_WORKER = !/[?&](local|worker=0)\b/.test(location.search)
+    && typeof Worker !== 'undefined'
+    && typeof SharedArrayBuffer !== 'undefined'
+    && self.crossOriginIsolated === true
+    && typeof AudioWorklet !== 'undefined';
+try { console.log('QuuBee: ' + (QB_USE_WORKER ? 'worker' : 'main-thread') + ' mode'); } catch (_) {}
 
 // worker モード用のスタブ M。closure 冒頭のローカル初期化 (cwrap 定義・create・font/rhythm 書き込み等) を
 // 無害に空回りさせる (実体は worker 側)。create だけ truthy を返して `if (!handle)` を通す。emu は
