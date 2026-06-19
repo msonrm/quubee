@@ -259,31 +259,34 @@ async function makeWorkerEmu() {
         M.FS.writeFile('/tmp/2608_' + nm + '.wav', data);               // opngen A/B 用
     }
 
-    // ---- AudioContext を先に作って rate を確定させる ----
-    // np2kai_create より前に samplingrate を反映させる必要があるため。
-    // 48000 をリクエスト、得られた実 rate を使う。サポート外の値だと sound_create が
-    // 失敗するので、未対応値の場合は 44100 にフォールバック。
-    const SUPPORTED_RATES = new Set([11025, 22050, 44100, 48000, 88200, 96000, 176400, 192000]);
-    let audioCtx = null;
-    try {
-        audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000 });
-    } catch (_) {
-        try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
-        catch (_2) { audioCtx = null; }
-    }
-    let audioRate = audioCtx ? audioCtx.sampleRate : 0;
-    if (!SUPPORTED_RATES.has(audioRate)) {
-        // 近い値に丸めて再生成
-        const candidates = [48000, 44100, 96000, 88200, 22050, 11025];
-        const fallback = candidates.find(r => Math.abs(r - audioRate) / audioRate < 0.05) || 44100;
+    // ---- AudioContext を先に作って rate を確定させる (従来パス = メインスレッド音声のみ) ----
+    // np2kai_create より前に samplingrate を反映させる必要があるため。48000 をリクエストし、
+    // 得られた実 rate を使う。サポート外の値だと sound_create が失敗するので 44100 にフォールバック。
+    // worker モードでは音声 (AudioContext + rate 設定) は makeWorkerEmu / worker 側が持つので、
+    // ここでは作らない (作っても未使用の AudioContext が suspended のまま残るだけ・rate 設定は stub M の no-op)。
+    let audioCtx = null, audioRate = 0;
+    if (!QB_USE_WORKER) {
+        const SUPPORTED_RATES = new Set([11025, 22050, 44100, 48000, 88200, 96000, 176400, 192000]);
         try {
-            if (audioCtx) audioCtx.close();
-            audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: fallback });
-            audioRate = audioCtx.sampleRate;
-        } catch (_) { audioRate = 44100; }
-    }
-    if (audioRate && SUPPORTED_RATES.has(audioRate)) {
-        M.ccall('np2kai_set_audio_rate', 'number', ['number'], [audioRate]);
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000 });
+        } catch (_) {
+            try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
+            catch (_2) { audioCtx = null; }
+        }
+        audioRate = audioCtx ? audioCtx.sampleRate : 0;
+        if (!SUPPORTED_RATES.has(audioRate)) {
+            // 近い値に丸めて再生成
+            const candidates = [48000, 44100, 96000, 88200, 22050, 11025];
+            const fallback = candidates.find(r => Math.abs(r - audioRate) / audioRate < 0.05) || 44100;
+            try {
+                if (audioCtx) audioCtx.close();
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: fallback });
+                audioRate = audioCtx.sampleRate;
+            } catch (_) { audioRate = 44100; }
+        }
+        if (audioRate && SUPPORTED_RATES.has(audioRate)) {
+            M.ccall('np2kai_set_audio_rate', 'number', ['number'], [audioRate]);
+        }
     }
 
     const handle = M.ccall('np2kai_create', 'number', [], []);
