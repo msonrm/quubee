@@ -32,6 +32,8 @@ let nextDue = 0;
 let samplesPerFrame = 48000 / 56.42;   // run_frame 1 回が進める音声サンプル数 (init で rate から)
 let sampleDebt = 0;             // 「ブロック分のフレームを走らせてから pcmlock」用の蓄積
 let lastFbPost = 0;             // framebuffer post のスロットリング
+let lastAdvanceMs = 0;          // 音声駆動中に最後にフレームを進めた時刻 (consumer 停止の検知用)
+const STALL_MS = 1500;          // この時間 consumer がリングを排出しないと steady-tick で映像だけ救う
 
 // 音声リング (Stage 1c)。main が SAB を確保し init で渡す。SPSC: ctrl[0]=writeIdx, ctrl[1]=readIdx。
 let audioSab = null, audioCtrl = null, audioData = null, audioCap = 0, audioMask = 0;
@@ -167,6 +169,15 @@ function tick() {
             nextDue += MS_PER_FRAME;
             n++;
         }
+        if (n > 0) { lastAdvanceMs = now; }
+        else if (lastAdvanceMs && now - lastAdvanceMs > STALL_MS && now >= nextDue) {
+            // リングが満杯のまま STALL_MS 進まない = consumer (worklet/DAC) が排出していない
+            // (gesture 前の suspended・context 中断・worklet 不発)。映像が固まらないよう steady-tick で
+            // 1 フレームだけ進める (音は据え置き)。consumer が復帰しリングに空きが出れば次ループで通常同期へ戻る。
+            c.runFrame(handle);
+            nextDue = now + MS_PER_FRAME;
+            lastAdvanceMs = now;
+        }
         if (n === maxCatch && now > nextDue) nextDue = now;   // 大幅遅延はリセット
     } else {
         // pre-audio (boot/曲ロード中、または AudioContext 未 resume) は steady tick で進める。
@@ -186,6 +197,7 @@ function startLoop() {
     if (running) return;
     running = true;
     nextDue = performance.now();
+    lastAdvanceMs = performance.now();   // stall 検知の基準時刻 (audioOn が既に true のケース用)
     tick();
 }
 
@@ -306,7 +318,7 @@ onmessage = (ev) => {
         case 'setPaused': paused = !!m.on; break;         // 一時停止 (music pause)
         case 'audioOn':                                   // Stage 1c: 音声駆動の開始/停止
             audioOn = !!m.on;
-            if (audioOn) { nextDue = performance.now(); sampleDebt = 0; }  // ペース時計をリセット
+            if (audioOn) { nextDue = performance.now(); sampleDebt = 0; lastAdvanceMs = performance.now(); }  // ペース時計 + stall 検知をリセット
             break;
 
         default: console.warn('emu-worker: unknown message', m.type);

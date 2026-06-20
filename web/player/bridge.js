@@ -168,13 +168,20 @@ async function makeWorkerEmu() {
     // 音声: SAB リング + AudioWorklet consumer
     const RING_FRAMES = 16384;
     const ringSab = new SharedArrayBuffer(8 + RING_FRAMES * 2 * 4);
-    let audioCtx = null, audioRate = 48000;
+    let audioCtx = null, audioRate = 48000, audioReady = false;
     try {
         audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000 });
         audioRate = audioCtx.sampleRate;
         await audioCtx.audioWorklet.addModule('player/emu-audio-worklet.js');
         new AudioWorkletNode(audioCtx, 'emu-audio', { processorOptions: { sab: ringSab, ringFrames: RING_FRAMES }, outputChannelCount: [2] }).connect(audioCtx.destination);
-    } catch (e) { console.warn('worker audio setup failed:', e); }
+        audioReady = true;                       // consumer (worklet) が確実に繋がった時だけ true
+    } catch (e) {
+        // 音声セットアップ失敗 (worklet ファイルの取りこぼし等)。**audioOn を立てない**ことで
+        // worker を steady-tick (無音だが映像は進む) に留める。ここで audioOn を立てると、リングを
+        // 排出する consumer が居ないまま worker tick が「リング空き待ち」でフレームを進めず、映像ごと
+        // 永久に固まる (ローカル経路は rAF が音声と独立なので無音で走り続ける = それに揃える)。
+        console.warn('worker audio setup failed — 無音で続行します (映像は動きます):', e);
+    }
     const resumeAudio = () => { if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume().catch(() => {}); };
     window.addEventListener('pointerdown', resumeAudio);
     window.addEventListener('keydown', resumeAudio);
@@ -191,7 +198,11 @@ async function makeWorkerEmu() {
         dataFiles.push({ path: '/tmp/2608_' + nm.toUpperCase() + '.WAV', bytes: rb });
         dataFiles.push({ path: '/tmp/2608_' + nm + '.wav', bytes: rb });
     }
-    await call({ type: 'init', coreUrl, audioRate, dataFiles, audioSab: ringSab, ringFrames: RING_FRAMES });
+    const initReply = await call({ type: 'init', coreUrl, audioRate, dataFiles, audioSab: ringSab, ringFrames: RING_FRAMES });
+    if (initReply && initReply.error) {          // np2kai_create 失敗等を握りつぶさず表示 (local の showFatal に揃える)
+        showFatal('worker: ' + initReply.error);
+        throw new Error(initReply.error);        // 以降の boot disk 挿入 (handle=0) へ進ませない
+    }
     const bootRes = await fetch('assets/np2kai_boot.d88');
     if (bootRes.ok) {
         const bytes = new Uint8Array(await bootRes.arrayBuffer());
@@ -222,7 +233,16 @@ async function makeWorkerEmu() {
         mouseMove(dx, dy)    { worker.postMessage({ type: 'mouseMove', dx, dy }); },
         mouseButton(btn, st) { worker.postMessage({ type: 'mouseButton', btn, state: st }); },
         setPaused(p)         { worker.postMessage({ type: 'setPaused', on: p }); },
-        start(onFrame) { onFrameCb = onFrame; resumeAudio(); worker.postMessage({ type: 'run', on: true }); worker.postMessage({ type: 'audioOn', on: true }); },
+        // 汎用 C 呼び出し (qbDebug のライブ制御/取得用)。ctl=副作用のみ fire-and-forget、query=戻り値を Promise で。
+        ctl(fn, argTypes, args, prependHandle) { worker.postMessage({ type: 'call', fn, argTypes: argTypes || [], args: args || [], prependHandle: !!prependHandle }); },
+        query(fn, ret, argTypes, args, prependHandle) { return call({ type: 'call', fn, ret, argTypes: argTypes || [], args: args || [], prependHandle: !!prependHandle }).then(m => m.r); },
+        start(onFrame) {
+            onFrameCb = onFrame; resumeAudio();
+            worker.postMessage({ type: 'run', on: true });
+            // 音声 consumer が繋がった時だけ音声駆動。失敗時 (audioReady=false) は steady-tick で無音続行
+            // (映像は進む)。これで worklet ロード事故が「全体ハング」でなく「無音」に劣化する。
+            worker.postMessage({ type: 'audioOn', on: audioReady });
+        },
     };
     return emuObj;
 }
@@ -2252,6 +2272,60 @@ async function makeWorkerEmu() {
             return `watching text row ${row} for ${durationSec}s — キーで本編へ進めてください`;
         }
     };
+
+    // ---- worker モードの qbDebug 配線 ----
+    // worker モード (既定) では M はスタブ (cwrap=noop) なので、上の qbDebug 定義は全部 0/no-op に
+    // なってしまう。NP2kai 本体は worker スレッドにあるので、デバッグ面を実態に合わせて張り替える:
+    //   - ライブ音源/クロック制御 (vol/fmgen/midifx/multiple/xms) は worker へ転送して**実際に効かせる**。
+    //     setter は fire-and-forget で即値 (説明文字列) を返す。getter (vol()/midi()/memprobe()/xms()) は
+    //     worker 往復になるので **Promise を返す** (コンソールでは await してください)。
+    //   - 同期取得が要るメモリ/レジスタ/FS インスペクタ (cs/regs/dump/textVram/ls 等) は worker スレッド外
+    //     から同期で引けないので、黙って 0 を返さず正直に「?local で」と案内する。
+    if (QB_USE_WORKER) {
+        const NA = () => '⚠ worker モードでは利用不可。?local を付けて再読み込みしてください ' +
+                         '(メモリ/レジスタ/FS の同期参照は worker スレッド外から取得できないため)';
+        const ctl = (fn, at, a, ph) => emu.ctl(fn, at, a, ph);
+        const q   = (fn, ret, at, a, ph) => emu.query(fn, ret, at, a, ph);
+        Object.assign(window.qbDebug, {
+            // --- ライブ制御 (worker へ転送して実効) ---
+            fmgen: (on = 1) => { ctl('np2kai_set_fmgen', ['number'], [on ? 1 : 0]);
+                return `usefmgen=${on ? 1 : 0} (1=fmgen/0=opngen) — 次の Run から反映。同じゲームを再実行して聴き比べてください`; },
+            vol: (o) => {
+                if (o !== undefined) {
+                    const g = (k) => (o[k] === undefined ? -1 : (o[k] | 0));
+                    ctl('np2kai_set_vol', ['number', 'number', 'number', 'number'], [g('fm'), g('ssg'), g('rhythm'), g('adpcm')]);
+                }
+                return Promise.all([0, 1, 2, 3, 4].map(i => q('np2kai_get_vol', 'number', ['number'], [i])))
+                    .then(([fm, ssg, rhythm, adpcm, master]) => ({ fm, ssg, rhythm, adpcm, master }));   // await してください
+            },
+            midifx: (on) => { ctl('np2kai_debug_midi_fx', ['number'], [on ? 1 : 0]); return on ? 'GS effects ON' : 'GS effects OFF'; },
+            multiple: (m) => {
+                if (m === undefined) return `multiple=${autoClock.cur} (worker: 手動固定のみ・autoclock 非対応)`;
+                autoClock.enabled = false; autoClock.cur = m | 0;
+                ctl('np2kai_set_clock_multiple', ['number'], [m | 0]);
+                return `multiple=${m | 0} に固定 (worker)`;
+            },
+            autoclock: () => '⚠ worker モードでは autoclock 非対応 (フレームペースは worker が管理)。' +
+                             '倍率を上げたいときは qbDebug.multiple(N) で固定してください',
+            midi: () => Promise.all([
+                q('np2kai_debug_serial_midi_active', 'number', ['number'], [], true),
+                q('np2kai_debug_serial_midi_bytes',  'number', ['number'], [], true),
+            ]).then(([a, b]) => ({ active: !!a, bytes: b })),
+            memprobe: () => Promise.all([0, 1, 2].map(i => q('np2kai_debug_memprobe', 'number', ['number', 'number'], [i], true)))
+                .then(([xms, ems, emmOpen]) => ({ xms, ems, emmOpen })),
+            xms: (on) => {
+                if (on !== undefined) ctl('np2kai_xms_enable', ['number'], [on ? 1 : 0], true);
+                return Promise.all([0, 1, 2, 3].map(i => q('np2kai_xms_stat', 'number', ['number', 'number'], [i], true)))
+                    .then(([en, handles, used, free]) => ({ enabled: !!en, handles, usedKB: (used / 1024) | 0, freeKB: (free / 1024) | 0 }));
+            },
+            // --- 同期取得インスペクタ (worker 外から引けない → 正直に案内) ---
+            cs: NA, linear: NA, pc: NA, regs: NA, dump: NA, dumpHere: NA,
+            gdcMode1: NA, textdisp: NA, grphdisp: NA, int21Stats: NA, int21Reset: NA,
+            sample: NA, textVram: NA, watchTextdisp: NA, watchTextRow: NA,
+            fs: undefined, ls: NA, read: NA, readSize: NA,
+            audioStats: () => '⚠ worker モードの音声/フレーム計測は未対応 (計測は worker スレッド内で行われます)',
+        });
+    }
 
     // ウィンドウフォーカス喪失時に全キーを解放 (スタックキー防止)
     window.addEventListener('blur', () => {

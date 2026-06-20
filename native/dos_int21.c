@@ -560,20 +560,23 @@ static uint8_t  g_softkey_buf[24]; /* 直近ソフトキーの発行文字列 (N
 
 /* scan コードのソフトキーに対し、install されたテーブルから発行文字列を g_softkey_buf に展開。
  * 返り値 = 文字列長 (0 = ソフトキーでない or 未 install or 定義空)。
- * 編集キー scan: 0x35..0x3f を 0 起点スロットに、ファンクションキー scan: 0x62..0x6b を f1..f10 に。 */
+ * 編集キー scan: 0x36..0x3f を 0 起点スロットに、ファンクションキー scan: 0x62..0x6b を f1..f10 に。 */
 static int softkey_fill(uint8_t scan) {
     if (!g_fkeytbl_lin) return 0;
     uint32_t emit;
+    int maxbytes;                                  /* スロット内で発行文字列が占める領域 (跨ぎ読み防止) */
     if (scan >= 0x62 && scan <= 0x6b) {            /* f1-f10 (通常): 16byte スロット、発行文字列は +6 */
         emit = g_fkeytbl_lin + (uint32_t)(scan - 0x62) * QB_FKEY_SLOT_BYTES + 6;
+        maxbytes = QB_FKEY_SLOT_BYTES - 6;         /* スロット末尾までの 10 byte */
     } else if (scan >= 0x36 && scan <= 0x3f) {     /* 編集キー: 並び順 RLUP/RLDN/INS/DEL/↑/←/→/↓/CLR/HELP */
         /* scan 0x36(RLUP)=slot0 起点。カーソルは ↑0x3a→slot4 / ←0x3b→5 / →0x3c→6 / ↓0x3d→7。 */
         emit = g_fkeytbl_lin + QB_XKEY_BASE_OFF + (uint32_t)(scan - 0x36) * QB_XKEY_SLOT_BYTES;
+        maxbytes = QB_XKEY_SLOT_BYTES;             /* 編集キーは 6 byte スロット (隣スロットへ食み出さない) */
     } else {
         return 0;
     }
     int n = 0;
-    for (int i = 0; i < QB_FKEY_SLOT_BYTES && n < (int)sizeof(g_softkey_buf); i++) {
+    for (int i = 0; i < maxbytes && n < (int)sizeof(g_softkey_buf); i++) {
         uint8_t b = mem[emit + i];
         if (b == 0) break;
         g_softkey_buf[n++] = b;

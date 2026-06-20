@@ -1,5 +1,38 @@
 # CHANGELOG
 
+## [コードレビュー修正 — worker 音声失敗時のフリーズ防止 + worker モードの qbDebug ライブ制御配線] — 2026-06-21
+
+「ここまでのコードをレビューして変なところがないか」点検し、worker 既定化 (2026-06-19) で入った非対称・
+堅牢性ギャップを修正した。**回帰ゼロ** (vz/vz_cursor/audio_rate/vol/sgr/batch/sft/exec_env/touhou/pmd/
+xms/rhythm/find_sjis/wildcard_find 全 PASS)。
+
+### 🔴 worker で音声初期化が失敗すると映像ごと固まるのを防止 (`web/player/bridge.js`, `emu-worker.js`)
+worker tick は「音声リングに空きがある間だけ」run_frame を進める設計 (DAC 同期で drift 防止)。だが
+`makeWorkerEmu` は AudioWorklet のロード失敗時 (catch で warn するだけ・`audioCtx` を null にしない) でも
+`start()` が `audioOn` を無条件に立てていたため、リングを排出する consumer が居ないままリングが満杯になり
+**run_frame が止まって映像ごと永久に固まる** (worklet ファイルの取りこぼし等のデプロイ事故で全体ハングに直結。
+ローカル経路は rAF が音声と独立なので無音で走り続ける)。修正 = `audioReady` フラグを追加し worklet が確実に
+繋がった時だけ `audioOn` を立てる (失敗時は steady-tick で無音だが映像は動く=ローカルの劣化挙動に一致)。
+あわせて `emu-worker.js` に**ウォッチドッグ**を追加: consumer が 1.5s リングを排出しなければ steady-tick で
+映像だけ救い、復帰後に通常の音声同期へ戻る (gesture 前 suspended / context 中断にも効く・通常再生では不発)。
+
+### 🟠 worker 既定モードで qbDebug のライブ制御が死んでいたのを配線 (`web/player/bridge.js`)
+worker 時は M がスタブ (cwrap=noop) のため `qbDebug.vol`/`fmgen`/`midifx`/`multiple`/`xms`/`midi`/`memprobe`
+が**黙って no-op / 0 を返していた** (最近追加した音量バランス調整が既定モードで無反応)。worker facade に汎用
+`ctl` (fire-and-forget) / `query` (Promise) を追加し、これらライブ制御を worker へ転送して実際に効かせる
+(setter は即時、getter は Promise を返すので await)。同期取得が必須のメモリ/レジスタ/FS インスペクタ
+(`cs`/`regs`/`dump`/`textVram`/`ls` 等) は worker スレッド外から引けないので、黙って 0 を返さず「?local で
+再読み込みを」と正直に案内する。ローカル経路は不変。
+
+### 🟠 worker が np2kai_create 失敗を握りつぶしていたのを surfacing (`web/player/bridge.js`)
+init reply の `error` を拾って `showFatal` + throw (handle=0 で boot disk 挿入へ進ませない)。ローカルの
+`if (!handle) showFatal` に揃えた。
+
+### 🟡 INT DCh softkey_fill のスロット跨ぎ over-read + コメント訂正 (`native/dos_int21.c`, Wasm 再ビルド)
+ソフトキー発行文字列の読み取り上限が常に 16byte だったのを実スロット長 (編集キー 6byte / fキー 10byte) に
+し、定義文字列が NUL 終端されていない場合の隣スロット食み出しを解消。コメント `0x35..0x3f` → 実コードの
+`0x36..0x3f` に訂正。挙動不変 (VZ 定義は NUL 終端で実害は無かった)。
+
 ## [VZ Editor 対応 — Illegal mode! 根治 + INT DCh でカーソル/編集キー] — 2026-06-20
 
 PC-98 版 VZ Editor (Ver1.60) がブラウザで起動・編集できるようになった。BSD-3 で公開された
