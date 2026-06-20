@@ -40,8 +40,10 @@
 #define QB_TRAMP_HALT_LOOP      0xFEE30u  /* F000:EE30 */
 /* "未使用の software INT" 用の素の IRET スタブ (NOP なしで biosfunc を呼ばない、
  * ただ単に IRET して戻る)。同じ NOP+IRET だと毎回 biosfunc 経由になり重い + ログが
- * 騒がしい + UNIMPL 警告が出るので別経路。 */
-#define QB_TRAMP_IRET_STUB      0xFEE40u  /* F000:EE40 — 1 byte: 0xCF */
+ * 騒がしい + UNIMPL 警告が出るので別経路。0xEE40..0xEE4F の 16 byte を全部 0xCF で
+ * 埋めた「パッド」で、各未使用ベクタは vec&0x0F のバイトを指す (隣接ベクタが別 offset に
+ * なり VZ Editor の checkhard を通す。詳細は dos_loader.c の install_trampolines)。 */
+#define QB_TRAMP_IRET_STUB      0xFEE40u  /* F000:EE40 — 16 byte IRET パッド (0xCF×16) */
 /* XMS/EMS 需要プローブ (2026-06-05)。INT 2Fh / INT 67h を IRET スタブから「NOP+IRET で
  * C フックを踏みログ」に格上げする計測器用。応答は従来通り「未インストール」を保つ
  * (レジスタ不変) ので回帰ゼロ。将来 XMS/EMS を HLE する時の entry 足場にもなる。 */
@@ -58,6 +60,10 @@
  * far CALL するので NOP + RETF。C フック (qb_dos_batch_next_hook) が文テーブルを解釈し
  * AX=1 + DX=path_off + CX=tail_off (次の EXEC) か AX=0 (列が尽きた → 4Ch) を返す。 */
 #define QB_TRAMP_BATCH_NEXT     0xFEE90u  /* F000:EE90 */
+/* INT DCh (PC-98 ファンクション/編集キー定義 BIOS)。VZ Editor 等が getkeytbl(CL=0Ch)/
+ * setkey(CL=0Dh) で「キー定義テーブル」を取得/設定する。エディタでカーソル/編集キーが
+ * 動くにはこの再定義が要る (キー押下時に定義文字列を発行する仕組み)。NOP + IRET。 */
+#define QB_TRAMP_INTDC          0xFEEA0u  /* F000:EEA0 */
 
 /* PSP/COM のロードセグメント (PSP 自体もここに置く)。
  * EXE は PSP の直後 (256 byte = 16 paragraphs 先) に image を配置する慣例。 */
@@ -181,6 +187,10 @@ int qb_dos_int21_hook(void);
 
 /* INT 20h (DOS exit ショートカット) (0xFEE20 で biosfunc から呼ばれる)。常に 1。 */
 int qb_dos_int20_hook(void);
+
+/* INT DCh (PC-98 ファンクション/編集キー定義 BIOS) (0xFEEA0 で biosfunc から呼ばれる)。
+ * CL=0Ch get / 0Dh set。AX=tblmode, DS:DX=テーブル。常に 1 を返す。 */
+int qb_dos_intdc_hook(void);
 
 /* XMS/EMS 需要プローブのフック (0xFEE50 / 0xFEE60 で biosfunc から呼ばれる)。検出だけして
  * ログ+カウントし、レジスタは変えず (= 未インストール応答を維持) 1 を返す。 */

@@ -1117,6 +1117,10 @@ void qb_dos_install_trampolines(void) {
     /* INT 29h (DOS 高速文字出力): NOP + IRET。C フックで AL を tty へ流す。 */
     put_trampoline(QB_TRAMP_INT29);
 
+    /* INT DCh (PC-98 ファンクション/編集キー定義 BIOS): NOP + IRET。
+     * C フックが getkeytbl/setkey を処理する (VZ Editor 等のカーソル/編集キー)。 */
+    put_trampoline(QB_TRAMP_INTDC);
+
     /* XMS ドライバ entry: far CALL で踏まれるので NOP + RETF (0xCB)。NOP が biosfunc を踏む。 */
     poke8(QB_TRAMP_XMS_ENTRY + 0, 0x90);  /* NOP */
     poke8(QB_TRAMP_XMS_ENTRY + 1, 0xCB);  /* RETF */
@@ -1130,9 +1134,18 @@ void qb_dos_install_trampolines(void) {
     poke8(QB_TRAMP_HALT_LOOP + 1, 0xEB);
     poke8(QB_TRAMP_HALT_LOOP + 2, 0xFD);
 
-    /* IRET-only スタブ: 0xCF (IRET)。未使用 software INT 0x22..0xFF を全部
-     * これに向けて、未実装ドライバ呼び出しを安全に nop 化する。 */
-    poke8(QB_TRAMP_IRET_STUB, 0xCF);
+    /* IRET-only スタブ: 0xCF (IRET) を 16 バイト並べた「パッド」。未使用 software INT
+     * 0x22..0xFF をこのパッドの "vec & 0x0F" バイトに向けて、未実装ドライバ呼び出しを
+     * 安全に nop 化する (全バイトが裸 IRET なので挙動は同一)。
+     *   なぜ 1 バイト共有でなくパッドか: 全ベクタを同一 offset に向けると、隣接 2 本の
+     *   ベクタ offset が一致する。VZ Editor の checkhard は INT DCh と INT DDh のベクタ
+     *   offset が等しいと「Illegal mode!」で起動を拒否する (実機では DCh/DDh は別々の
+     *   BIOS ルーチンを指し offset が異なる)。低位ニブルで分散させれば隣接ベクタは必ず
+     *   別 offset になり、この種の「2 ベクタが別物か」検査を忠実に通せる。パッドは
+     *   QB_TRAMP_IRET_STUB(0xFEE40) スロット内 (次の INT2F 0xFEE50 まで 16 byte) に収まる。 */
+    for (uint32_t i = 0; i < 16; i++) {
+        poke8(QB_TRAMP_IRET_STUB + i, 0xCF);
+    }
 }
 
 /* 環境セグメントを seg:0000 に構築する。実機 DOS 互換レイアウト:
@@ -1382,7 +1395,9 @@ int qb_dos_loader_start_hook(void) {
                      | ((uint32_t)mem[a+2] << 16)
                      | ((uint32_t)mem[a+3] << 24);
         if (cur == 0) {
-            set_ivt(v, 0xF000, (uint16_t)(QB_TRAMP_IRET_STUB & 0xFFFF));
+            /* 低位ニブルで IRET パッド内に分散 → 隣接ベクタ (DCh/DDh 等) が必ず別 offset。
+             * VZ Editor の checkhard (INT DCh==DDh なら Illegal mode!) を忠実に通すため。 */
+            set_ivt(v, 0xF000, (uint16_t)((QB_TRAMP_IRET_STUB + (v & 0x0F)) & 0xFFFF));
         }
     }
 
@@ -1395,6 +1410,10 @@ int qb_dos_loader_start_hook(void) {
      * これで送るため、IRET スタブのままだと画面消去が効かずテキストが残る (上のループで
      * 一旦スタブ化された分を上書き)。 */
     set_ivt(0x29, 0xF000, (uint16_t)(QB_TRAMP_INT29 & 0xFFFF));
+
+    /* INT DCh を専用フックへ (上のループで一旦 IRET パッドにされた分を上書き)。
+     * VZ Editor 等がキー定義テーブルを設定し、カーソル/編集キーを有効化する。 */
+    set_ivt(0xDC, 0xF000, (uint16_t)(QB_TRAMP_INTDC & 0xFFFF));
     g_probe_xms = g_probe_ems = g_probe_emm_open = 0;  /* この Run の計測をリセット */
     qb_xms_reset();   /* XMS ハンドル表を Run 毎にクリア + プールを CPU_EXTMEM から再計算 */
 

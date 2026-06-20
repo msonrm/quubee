@@ -513,7 +513,13 @@ static inline uint32_t lin(uint16_t seg, uint16_t off) {
 #define QB_KB_TAIL     0x526u
 #define QB_KB_COUNT    0x528u
 
-static int kb_available(void) { return mem[QB_KB_COUNT] != 0; }
+/* INT DCh ソフトキー発行文字列の残量 (定義は後述)。kb_available が「入力あり」に含める。 */
+static int      g_softkey_len;
+static int      g_softkey_pos;
+
+static int kb_available(void) {
+    return (g_softkey_pos < g_softkey_len) || mem[QB_KB_COUNT] != 0;
+}
 
 /* 1 エントリ dequeue。空なら -1。bios18.c:keyget() と同じ巻き戻し規則。 */
 static int kb_get_word(void) {
@@ -530,6 +536,83 @@ static int kb_get_word(void) {
 static void kb_flush(void) {
     poke16(QB_KB_HEAD, peek16(QB_KB_TAIL));
     mem[QB_KB_COUNT] = 0;
+}
+
+/* ===== INT DCh: PC-98 ファンクション/編集キー定義テーブル =====================================
+ * VZ Editor 等は INT DCh setkey (CL=0Dh, DS:DX=テーブル) で自前のキー定義表を BIOS に流し込む。
+ * テーブル = [ファンクションキー N本 × 16byte][編集キー 11本 × 6byte] (KTBLSZ レイアウト)。
+ * 各ソフトキー (f1-f10 / カーソル・編集キー) を押すと、定義された「発行文字列」がキーバッファ
+ * 相当として DOS 入力に流れる。bios09 はソフトキーを (char=0x00, scan=高位) として enqueue する
+ * だけ (定義文字列を出さない) ので、我々が DOS CON ドライバとして発行文字列に翻訳する。
+ *   - g_fkeytbl_lin : 直近 setkey で渡されたテーブルの linear addr (0 = 未 install)
+ *   - 押下キー (char=0x00, scan) → softkey_fill が該当スロットの発行文字列を g_softkey_buf へ。 */
+static uint32_t g_fkeytbl_lin;     /* 0 = 未 install */
+static uint16_t g_fkeytbl_mode;
+static uint8_t  g_softkey_buf[24]; /* 直近ソフトキーの発行文字列 (NUL 終端まで)。len/pos は上で宣言済 */
+
+/* 編集/ファンクションキーのテーブル先頭オフセット。標準レイアウト (KTBLSZ) は
+ * ファンクションキー 20本 (f1-f10 ×2: 通常/SHIFT) × 16byte の後ろに編集キー。 */
+#define QB_FKEY_SLOT_BYTES   16
+#define QB_FKEY_COUNT        20
+#define QB_XKEY_BASE_OFF     (QB_FKEY_COUNT * QB_FKEY_SLOT_BYTES)   /* 編集キー群の先頭 */
+#define QB_XKEY_SLOT_BYTES   6
+#define QB_KTBL_STD_SIZE     (QB_XKEY_BASE_OFF + 11 * QB_XKEY_SLOT_BYTES)  /* = 386 */
+
+/* scan コードのソフトキーに対し、install されたテーブルから発行文字列を g_softkey_buf に展開。
+ * 返り値 = 文字列長 (0 = ソフトキーでない or 未 install or 定義空)。
+ * 編集キー scan: 0x35..0x3f を 0 起点スロットに、ファンクションキー scan: 0x62..0x6b を f1..f10 に。 */
+static int softkey_fill(uint8_t scan) {
+    if (!g_fkeytbl_lin) return 0;
+    uint32_t emit;
+    if (scan >= 0x62 && scan <= 0x6b) {            /* f1-f10 (通常): 16byte スロット、発行文字列は +6 */
+        emit = g_fkeytbl_lin + (uint32_t)(scan - 0x62) * QB_FKEY_SLOT_BYTES + 6;
+    } else if (scan >= 0x36 && scan <= 0x3f) {     /* 編集キー: 並び順 RLUP/RLDN/INS/DEL/↑/←/→/↓/CLR/HELP */
+        /* scan 0x36(RLUP)=slot0 起点。カーソルは ↑0x3a→slot4 / ←0x3b→5 / →0x3c→6 / ↓0x3d→7。 */
+        emit = g_fkeytbl_lin + QB_XKEY_BASE_OFF + (uint32_t)(scan - 0x36) * QB_XKEY_SLOT_BYTES;
+    } else {
+        return 0;
+    }
+    int n = 0;
+    for (int i = 0; i < QB_FKEY_SLOT_BYTES && n < (int)sizeof(g_softkey_buf); i++) {
+        uint8_t b = mem[emit + i];
+        if (b == 0) break;
+        g_softkey_buf[n++] = b;
+    }
+    g_softkey_len = n;
+    g_softkey_pos = 0;
+    return n;
+}
+
+/* DOS コンソール入力の 1 バイト取り出し。-1 = 入力なし。
+ * 発行文字列が残っていれば優先。なければバッファから dequeue し、ソフトキー (char=0x00) は
+ * install 済テーブルの発行文字列に翻訳して 1 バイト目を返す。通常キーは文字コードをそのまま。 */
+static int dos_next_input_byte(void) {
+    if (g_softkey_pos < g_softkey_len)
+        return g_softkey_buf[g_softkey_pos++];
+    int w = kb_get_word();
+    if (w < 0) return -1;
+    uint8_t ch   = (uint8_t)(w & 0xFF);
+    uint8_t scan = (uint8_t)((w >> 8) & 0xFF);
+    if (ch == 0x00 && softkey_fill(scan))
+        return g_softkey_buf[g_softkey_pos++];
+    return ch;
+}
+
+/* INT DCh ハンドラ (0xFEEA0 トランポリン → biosfunc 経由)。
+ * CL=0Dh: キー定義テーブルを install (linear を保持)。CL=0Ch: 現テーブルを DS:DX へ複製。
+ * その他 CL (fkey 行表示 on/off 等) は良性 no-op。レジスタ・フラグは変えない。 */
+int qb_dos_intdc_hook(void) {
+    uint8_t cl = (uint8_t)(CPU_CX & 0xFF);
+    uint32_t tbl = lin(CPU_DS, CPU_DX);
+    if (cl == 0x0D) {                       /* set key table */
+        g_fkeytbl_lin  = tbl;
+        g_fkeytbl_mode = (uint16_t)CPU_AX;
+        g_softkey_len = g_softkey_pos = 0;  /* 切替時に古い発行文字列を破棄 */
+    } else if (cl == 0x0C) {                /* get key table → DS:DX へ現テーブル (未 install は 0) */
+        for (uint32_t i = 0; i < QB_KTBL_STD_SIZE; i++)
+            mem[tbl + i] = g_fkeytbl_lin ? mem[g_fkeytbl_lin + i] : 0;
+    }
+    return 1;
 }
 
 /* CPU リダイレクト時の「dispatch tail の FLAGS 書き戻しを skip」フラグ。
@@ -1039,9 +1122,9 @@ static void int21_06_direct_io(void) {
     /* DL = 0xFF: STDIN を非ブロッキングで読む (あれば ZF=0 AL=char、なければ ZF=1 AL=0)
      * その他  : DL を出力。06h は仕様上ブロックしない (kbhit 相当)。 */
     if (CPU_DL == 0xFF) {
-        int w = kb_get_word();
-        if (w < 0) { CPU_AL = 0; CPU_FLAG |= Z_FLAG; }
-        else       { CPU_AL = (uint8_t)(w & 0xFF); CPU_FLAG &= ~Z_FLAG; }
+        int b = dos_next_input_byte();
+        if (b < 0) { CPU_AL = 0; CPU_FLAG |= Z_FLAG; }
+        else       { CPU_AL = (uint8_t)b; CPU_FLAG &= ~Z_FLAG; }
     } else {
         tty_putc(CPU_DL);
         CPU_FLAG &= ~Z_FLAG;
@@ -1052,7 +1135,7 @@ static void int21_06_direct_io(void) {
  * CPU_IP を NOP に巻き戻し IRQ 処理へ譲って (bios18.c AH=00h と同手法) -1 を返す。
  * 呼び出し側は -1 のとき AL を設定せず即 return すること。 */
 static int dos_getch_block(void) {
-    int w = kb_get_word();
+    int w = dos_next_input_byte();
     if (w < 0) {
         /* **IF を立てる (実 DOS の STI 相当)**: INT 21h 命令が IF をクリアした状態で
          * 再ポーリングすると、キーボード IRQ が発火できず 0x502 バッファが永久に
@@ -2293,6 +2376,11 @@ void qb_dos_tty_reset(void) {
     g_la_buf = 0;
     g_la_len = 0;
     g_0c_flushing = 0;   /* AH=0Ch flush ラッチ (再ポーリング途中での中断対策) */
+    /* INT DCh キー定義テーブルも Run 毎にクリア (前 image の再定義を持ち越さない) */
+    g_fkeytbl_lin = 0;
+    g_fkeytbl_mode = 0;
+    g_softkey_len = 0;
+    g_softkey_pos = 0;
 }
 
 int qb_dos_int21_hook(void) {
