@@ -1,5 +1,37 @@
 # CHANGELOG
 
+## [音楽のピッチが高い回帰を根治 — set_audio_rate が無効化されていた] — 2026-06-20
+
+ユーザー報告「音楽のピッチがちょっと高い。Super Depth を YouTube と比較で確認、**Beep も MIDI も FM も**
+一様に発音周波数が高い」。実測で真因を特定し根治(ブラウザ実機で修正後の音をユーザー確認済み)。
+
+### 真因
+エンジンが**常に既定 44100 で音を生成**していた。`np2kai_set_audio_rate(48000)` が一切効かず:
+- `np2kai_create` 内の **`initload()`→`pccore_setdefault()`** が np2cfg を既定構造体に丸ごと戻し
+  **samplingrate を 44100 にリセット**する。`set_audio_rate` は create より**前**に呼ばれる(bridge.js の
+  main/worker 両方)ため、指定値が initload に上書きされていた。
+- さらに **`soundmng_create` 先頭の `if (s_opened) return 0;` ガード**で sound は最初の 1 回しか rate を確定
+  しない。その「最初」が create 内の `pccore_reset→sound_init→sound_create` で、そこが 44100 に固定 → 以後の
+  reset でも `s_rate` は不変。
+- 結果エンジンは永久に 44100。**AudioContext が 48000 の端末**(モダン Chrome の多く・要求も `{sampleRate:48000}`)
+  では再生 48000 / 生成 44100 で **48000/44100 ≒ 約 1.5 半音 高く**鳴る。FM/beep/MIDI(TSF)は全て
+  `np2cfg.samplingrate` を共有(TSF も `qb_vermouth.c` で `midimod_create(np2cfg.samplingrate)`)ので一様に高い。
+- 44100 端末では生成=再生で偶然正しく鳴っていたため長く見逃されていた。切り分けの決め手は **MIDI(TSF) も
+  高い**点(TSF はノート絶対音高なので、高い=共有 samplingrate 段の不整合以外あり得ない)。
+
+### 修正
+`native/bridge.c` に `static uint32_t s_req_audio_rate` を追加。`np2kai_set_audio_rate` が要求レートを退避し、
+`np2kai_create` の **initload() 直後**(最初の sound 作成より前)で `if (s_req_audio_rate) np2cfg.samplingrate =
+s_req_audio_rate;` と再適用。これでエンジン = AudioContext レートになりピッチが一致する。
+
+### 検証
+- `tools/audio_rate_test.js` 新設(恒久回帰): `set_audio_rate(R)` → `get_rate==R` を 44100/48000/22050/96000 で
+  確認、initload に上書きされないことを保証(4/4。修正前は全部 44100)。
+- ピッチ実測(一時診断): 同曲を 44100/48000 で鳴らし支配周波数の Hz 比を測定 → 修正後はレート不変(≒1.0)。
+- 回帰: vol/pmd/rhythm/sgr/batch すべて PASS。**ブラウザ実機でユーザーが修正後の音程を確認(2026-06-20)**。
+- 残: AudioContext が非対応レートを返す稀な端末では set_audio_rate がスキップされ既定 44100 のまま再生と食い違う
+  (TODO の「worker パスの audio rate フォールバック欠落」保留メモと同根。対応レートなら本修正で解決)。
+
 ## [emulator を Web Worker へ移行し FM 音楽の揺れを根治 — worker を既定化] — 2026-06-19
 
 ユーザー報告「FM 音楽のテンポの揺れ・フレームが詰まるスキップ」を根治。`qbDebug.audioStats()` の実機計測で

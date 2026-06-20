@@ -53,6 +53,11 @@ static char s_data_dir[MAX_PATH];
  * 現行の MIDI 経路 (RS-MIDI -X1) は create 後の np2kai_enable_midi_now() を使い、この flag の
  * create 時分岐 (下記) は通らない。create 時分岐は将来の -X0 MPU 直叩き対応のための足場。 */
 static int s_midi_enable = 0;
+/* JS が要求した出力サンプルレート。np2kai_create の initload() が np2cfg を既定 (samplingrate=44100)
+ * に丸ごと戻すため、create 内 (initload 直後) でこの値を再適用しないと set_audio_rate が一切効かない
+ * (sound は soundmng_create の s_opened ガードで最初の 1 回しか rate を確定できず、それが create 内の
+ * pccore_reset→sound_init で 44100 に固定される)。0 = 未指定 (既定のまま)。np2kai_set_audio_rate で設定。 */
+static uint32_t s_req_audio_rate = 0;
 
 int np2kai_set_data_dir(const char *path) {
 	if (!path) return -1;
@@ -118,6 +123,11 @@ np2kai_handle np2kai_create(void) {
 	mousemng_initialize();
 
 	initload();           /* sets default np2cfg via pccore_setdefault() */
+	/* set_audio_rate (create より前に JS が呼ぶ) を再適用する。initload が np2cfg を既定構造体に
+	 * 戻し samplingrate=44100 にするため、ここで戻さないと create 内の最初の sound 作成 (pccore_reset
+	 * →sound_init→soundmng_create、s_opened ガードで一度きり) が常に 44100 で固定され、AudioContext が
+	 * 48000 の端末で全音源が ~1.5 半音高く再生される (Beep/MIDI/FM 一様に高い真因)。 */
+	if (s_req_audio_rate) np2cfg.samplingrate = s_req_audio_rate;
 	np2cfg.fddequip = 0x03; /* equip drives A and B so diskdrv_* functions accept them */
 	/* マスター音量。【重要】vol_master が実際に効くのは opngen/beep/psg(opngen)/cs4231 等の
 	 * 整数合成経路だけで、既定の fmgen には届かない: fmgen の音量は opna_reset が vol_fm で直接
@@ -405,7 +415,8 @@ int np2kai_set_audio_rate(uint32_t rate) {
 	default:
 		return -1;
 	}
-	np2cfg.samplingrate = rate;
+	s_req_audio_rate     = rate;   /* create の initload を生き残らせるため退避 */
+	np2cfg.samplingrate  = rate;   /* create 後に呼ばれた場合用 (即時反映先) */
 	return 0;
 }
 
