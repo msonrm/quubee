@@ -1,5 +1,41 @@
 # CHANGELOG
 
+## [VZ Editor 対応 — Illegal mode! 根治 + INT DCh でカーソル/編集キー] — 2026-06-20
+
+PC-98 版 VZ Editor (Ver1.60) がブラウザで起動・編集できるようになった。BSD-3 で公開された
+本物のソース (vcraftjp/VZEditor、原作 中村満 c.mos) を読み、推測でなく実機契約どおりに正直実装。
+**1 つの INT DCh 実装で VZ + みゅあっぷ98 (MUAP) の両エディタでカーソルが動く**=「フルスクリーン
+テキストエディタは同じ互換クラス」の実証 (MUAP の MML エディタ CAL.COM の既知カーソル課題も無償解決)。
+きっかけは「似た思想のものを発見」(MS-DOS Player) からの周辺調査。
+
+### Illegal mode! の根治 (`native/dos_loader.{c,h}`)
+VZ.COM はバナー直後に `checkhard` (VZ ソース scrn98.asm) で **INT DCh と INT DDh のベクタ offset が
+等しいと CY=1 → "Illegal mode!"** で起動を拒否する (実機では DCh/DDh は別々の BIOS ルーチンを指し
+offset が異なる)。我々は未使用 software INT 0x22..0xFF を**全部同一の IRET スタブ**に向けていたため
+一致していた。IRET スタブを 16byte パッド (0xEE40..0xEE4F = 0xCF×16) にし、各ベクタを
+`EE40 + (vec & 0x0F)` に分散 → 隣接ベクタは必ず別 offset。挙動は全部「裸 IRET」のまま=ゼロ回帰。
+「2 ベクタが別物か」を見る検査全般に効く忠実化。
+
+### INT DCh (PC-98 ファンクション/編集キー定義 BIOS) を実装
+`native/dos_int21.c` + 新トランポリン `0xFEEA0` + patch 01 の biosfunc dispatch (`case 0xFEEA0`)。
+VZ は `setkey` (INT DCh CL=0Dh) で**自前のキー定義テーブルを BIOS に流し込み**、各ソフトキー
+(f1-f10 / カーソル・編集キー) を押すと定義文字列 (`0x7F`=FKEYCODE + コード) が発行される仕組みに
+依存する。INT DCh を no-op スタブにしていたため、カーソルキーが bios09 の char=0x00 のまま誤解釈され
+(エディタのステータス行に全角Ｃ/Ｐ)、移動できなかった。CL=0Ch (get) / 0Dh (set) を実装し、DOS コンソール
+入力 (`int21_06` / `dos_getch_block` が新 `dos_next_input_byte` 経由) が install されたテーブルを引いて
+ソフトキーを発行文字列に翻訳して 1 バイトずつ返すようにした。編集キーの並びは
+**RLUP/RLDN/INS/DEL/↑/←/→/↓/CLR/HELP** (scan 0x36 起点、slot = scan−0x36。VZ のテーブルを一時 dump して
+実レイアウトを確定し、当初 −0x35 の off-by-one で Right が下・Left が右に scramble していたのを修正)。
+カーソル: ↑0x3a→slot4 / ←0x3b→5 / →0x3c→6 / ↓0x3d→7。**非対応ゲームは setkey を呼ばず
+テーブル未 install → 従来どおり char 返却=ゼロ回帰**。
+
+### 検証 / 残ギャップ
+ブラウザ実機 T3 確認 (VZ + MUAP のカーソル移動、ユーザー)。恒久回帰 `tools/vz_test.js` (Illegal mode
+不発) + `tools/vz_cursor_test.js` (VZ 実起動→README.DOC→↑↓←→ で行:桁が動く)。VZ.COM / DEF / README は
+BSD-3 で `tools/testdata` に同梱 (CREDITS 記載)。全回帰 PASS (batch/touhou/exec_env/xms/sft/pmd)。
+**残 (未着手)**: ① JED (jed194n.lzh) は別機構でカーソル不可 (要調査)。② VZ のファンクションキー行
+(F1-F10 ラベル) が画面に出ない (キー発行自体は機能、ラベル表示のみ未=装飾。MUAP は自前で表示)。
+
 ## [音楽のピッチが高い回帰を根治 — set_audio_rate が無効化されていた] — 2026-06-20
 
 ユーザー報告「音楽のピッチがちょっと高い。Super Depth を YouTube と比較で確認、**Beep も MIDI も FM も**

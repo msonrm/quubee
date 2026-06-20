@@ -1,5 +1,24 @@
 # QB 作業状況
 
+## ✅ VZ Editor 対応 (テキストエディタ互換クラス) — 完成・デプロイ済 (2026-06-20)
+
+PC-98 版 VZ Editor がブラウザで起動・編集できるように。BSD-3 公開ソース (vcraftjp/VZEditor) を読んで
+推測でなく実機契約どおりに正直実装。**ブラウザ実機 T3 確認済み**。1 つの修正で VZ + みゅあっぷ98 (MUAP)
+の両エディタが点灯 = 「フルスクリーンエディタは同じ互換クラス」の実証 (MUAP CAL.COM の既知カーソル課題も
+無償解決)。
+
+- **Illegal mode! 根治**: VZ の checkhard は INT DCh と INT DDh のベクタ offset が等しいと起動拒否する。
+  未使用 INT を全部同一 IRET スタブに向けていたため一致 → IRET スタブを 16byte パッド化し各ベクタを
+  `EE40+(vec&0x0F)` に分散 (`native/dos_loader.{c,h}`)。挙動は裸 IRET のままゼロ回帰。
+- **INT DCh (ファンクション/編集キー定義 BIOS) を実装**: VZ は setkey(CL=0Dh)で自前キー定義表を流し込み、
+  ソフトキーが定義文字列(`0x7F`+コード)を発行する仕組みに依存。CL=0Ch/0Dh を実装し、DOS コンソール入力が
+  install 表を引いてソフトキーを翻訳 (`native/dos_int21.c` + トランポリン 0xFEEA0 + patch 01)。編集キー並び
+  RLUP/RLDN/INS/DEL/↑/←/→/↓/CLR/HELP (slot = scan−0x36)。非対応ゲームは表未 install で従来どおり=ゼロ回帰。
+- 恒久回帰: `tools/vz_test.js` (Illegal mode 不発) + `tools/vz_cursor_test.js` (↑↓←→ で行:桁が動く)。
+  VZ.COM/DEF/README は BSD-3 で `tools/testdata` に同梱。詳細 CHANGELOG 2026-06-20。
+- **残 (未着手)**: ① JED (jed194n.lzh) は別機構でカーソル不可 (要調査=エディタクラスの次の一手)。
+  ② VZ のファンクションキー行 (F1-F10 ラベル) が画面に出ない (発行自体は機能・ラベル表示のみ未=装飾)。
+
 ## ✅ PMD (.M) FM 音楽再生 — 完成 (2026-06-16)
 
 東方旧作 BGM 等の PC-98 同人 FM 音楽 `.M`(PMD)をブラウザで再生可能に(NEC BIOS / MS-DOS 不使用)。
