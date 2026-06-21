@@ -23,9 +23,14 @@ void qb_dos_tty_reset(void);
  * (dos_loader.c) が echo 文の作者メッセージを表示するのに使う。 */
 void qb_dos_tty_write(const uint8_t *bytes, int len);
 
-/* ホスト (ブラウザ) の IME で確定した Shift-JIS バイト列をゲストの DOS 文字入力 FIFO に注入する。
- * dos_next_input_byte がキーバッファより優先して 1 バイトずつ返す (FEP 確定文字列の流し込み相当)。 */
+/* ホスト (ブラウザ) の IME で確定した Shift-JIS バイト列をゲストの注入 FIFO に積む。FIFO は
+ * inject_pump で実 BIOS キーバッファ (0x502) へペース供給され、BIOS INT 18h / DOS 文字入力 /
+ * AH=0Ah が一律に受け取る (FEP 確定文字列の流し込み相当)。 */
 void qb_dos_inject_input(const uint8_t *bytes, int len);
+
+/* 注入 FIFO→BIOS キーバッファ (0x502) のペース供給を 1 回行う。BIOS INT 18h 直読みアプリ向けに
+ * np2kai_run_frame から毎フレーム呼ぶ (DOS 文字入力経路は dos_next_input_byte が自前で補充する)。 */
+void qb_dos_inject_pump(void);
 
 /* DTA (Disk Transfer Address) の get/set。EXEC の親/子 DTA 退避・復元に dos_loader.c
  * が使う (DTA は本来プロセスごとだが我々は 1 本しか持たないため明示的に切り替える)。 */

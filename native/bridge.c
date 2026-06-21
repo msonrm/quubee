@@ -254,8 +254,10 @@ void np2kai_eject_hdd(np2kai_handle h, int drive) {
 	LOGD("np2kai_eject_hdd: drive=%d", drive);
 }
 
+extern void qb_dos_inject_pump(void);   /* dos_int21.c: ホスト IME 注入 FIFO→BIOS キーバッファ補充 */
 void np2kai_run_frame(np2kai_handle h) {
 	if (!h) return;
+	qb_dos_inject_pump();   /* BIOS INT 18h 直読みアプリにも注入が届くよう 0x502 を毎フレーム補充 */
 	pccore_exec(TRUE);
 }
 

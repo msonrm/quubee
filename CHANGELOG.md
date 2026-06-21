@@ -1,5 +1,23 @@
 # CHANGELOG
 
+## [ホスト IME 注入を BIOS INT 18h 直読みアプリにも届かせる — 0x502 キーバッファ経由に一本化] — 2026-06-21
+
+ホスト IME 入力 (同日実装) はゲストの DOS 文字入力専用 FIFO に積んでいたため、**BIOS INT 18h を直読みする
+アプリ**(VZ Editor 起動時の「新規ファイルですか？(Y/N)」プロンプト等)や **DOS AH=0Ah 行入力**には届かず、
+ツールバーから答えられなかった (物理キーは 0x502 経由なので効く=切り分けの決め手・ユーザー報告)。真因は
+注入 FIFO が、BIOS INT 18h (`bios18.c keyget`) と DOS 文字入力 (`kb_get_word`) が共に読む**実 BIOS キー
+バッファ 0x502 とは別物**だったこと。
+
+修正 = 注入 FIFO を **0x502 へペース供給** (`inject_pump`: 投入時 + `np2kai_run_frame` 毎 + `dos_next_input_byte`
+毎)。0x502 は 16 エントリと小さいので 1 枠残して埋め、溢れは FIFO に保持し次回補充 (boot 前は保留して不正
+番地書き込みを防止)。`dos_next_input_byte` の専用 FIFO 直読みは廃止し **全経路を 0x502 に一本化** → BIOS
+INT 18h / DOS AH=01/06/07/08 / AH=0Ah が物理キーと同じ扱いで注入を受ける (FEP が確定文字列をキーバッファへ
+流すのと等価)。char=byte / scan=0 (文字コード判定アプリは OK、稀に scan を見るアプリは別途)。
+
+検証: `tools/ime_inject_bios_test.js` 新設 — INT 18h AH=00h を 0xFFFF リトライで読む合成 COM に「あ」(SJIS
+82 a0)+「Y」を注入しバイト完全一致を確認 (2 バイト SJIS のリード/トレイルも素通り)。既存 `ime_inject_test`
+(DOS 経路) も 0x502 経由で PASS、`vz_cursor_test` (INT DCh ソフトキー) 回帰なし。全回帰 PASS。
+
 ## [モバイル: 100vh → 100dvh でアドレスバー対策 + ソフトキーボードで入力欄を残す] — 2026-06-21
 
 Pixel 10 (Chrome) で「画面全体がアドレスバー分だけ下がり、下部の入力ツールバーが見えない/横向きで上が

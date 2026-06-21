@@ -533,6 +533,7 @@ static int inject_get(void) {
     g_inject_head = (g_inject_head + 1) % QB_INJECT_CAP;
     return b;
 }
+static void inject_pump(void);   /* 前方宣言: 実体は kb_put_word 定義後 */
 void qb_dos_inject_input(const uint8_t *bytes, int len) {
     for (int i = 0; i < len; i++) {
         int next = (g_inject_tail + 1) % QB_INJECT_CAP;
@@ -540,6 +541,7 @@ void qb_dos_inject_input(const uint8_t *bytes, int len) {
         g_inject_buf[g_inject_tail] = bytes[i];
         g_inject_tail = next;
     }
+    inject_pump();   /* 即座に BIOS キーバッファ (0x502) を補充 → 短文はゼロ遅延、全読み取り口へ届く */
 }
 
 static int kb_available(void) {
@@ -562,6 +564,35 @@ static void kb_flush(void) {
     poke16(QB_KB_HEAD, peek16(QB_KB_TAIL));
     mem[QB_KB_COUNT] = 0;
 }
+
+/* 1 エントリ enqueue (tail へ)。kb_get_word の逆。満杯 (16 エントリ) なら捨てる。 */
+static void kb_put_word(uint16_t word) {
+    if (mem[QB_KB_COUNT] >= 16) return;
+    uint16_t pos = peek16(QB_KB_TAIL);
+    poke16(pos, word);
+    uint16_t next = (uint16_t)(pos + 2);
+    if (next >= QB_KB_BUF_WRAP) next = QB_KB_BUF;
+    poke16(QB_KB_TAIL, next);
+    mem[QB_KB_COUNT]++;
+}
+
+/* 注入 FIFO のバイトを実 BIOS キーバッファ (0x502) へペース供給する。BIOS INT 18h (bios18.c keyget)・
+ * DOS 文字入力 (AH=01/06/07/08)・AH=0Ah 行入力はいずれも 0x502 を読むので、これで注入が**全読み取り口**
+ * へ物理キーと同じ扱いで届く (FEP が確定文字列をキーバッファへ流すのと等価)。char=byte / scan=0
+ * (文字コードで判定するアプリは OK・稀に scan を見るアプリは別途)。16 エントリしかないので 1 枠残して
+ * 埋め、溢れは FIFO に保持し次回補充。boot 前 (バッファ未初期化) は保留して不正番地書き込みを防ぐ。 */
+static void inject_pump(void) {
+    uint16_t tail = peek16(QB_KB_TAIL);
+    if (tail < QB_KB_BUF || tail >= QB_KB_BUF_WRAP) return;   /* キーバッファ未初期化 (boot 前) は保留 */
+    while (mem[QB_KB_COUNT] < 15) {
+        int b = inject_get();
+        if (b < 0) break;
+        kb_put_word((uint16_t)(b & 0xFF));
+    }
+}
+
+/* 毎フレーム呼ぶ補充口 (np2kai_run_frame から)。BIOS INT 18h 直読みアプリ向けに 0x502 を満たし続ける。 */
+void qb_dos_inject_pump(void) { inject_pump(); }
 
 /* ===== INT DCh: PC-98 ファンクション/編集キー定義テーブル =====================================
  * VZ Editor 等は INT DCh setkey (CL=0Dh, DS:DX=テーブル) で自前のキー定義表を BIOS に流し込む。
@@ -617,8 +648,7 @@ static int softkey_fill(uint8_t scan) {
 static int dos_next_input_byte(void) {
     if (g_softkey_pos < g_softkey_len)
         return g_softkey_buf[g_softkey_pos++];
-    int ib = inject_get();               /* ホスト IME 注入バイトをキーバッファより優先 */
-    if (ib >= 0) return ib;
+    inject_pump();                       /* 注入 FIFO→0x502 を補充してから読む (DOS 読みも 0x502 経由に一本化) */
     int w = kb_get_word();
     if (w < 0) return -1;
     uint8_t ch   = (uint8_t)(w & 0xFF);
