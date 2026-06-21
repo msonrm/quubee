@@ -397,6 +397,16 @@ void np2kai_key_up(np2kai_handle h, uint8_t pc98_keycode) {
 	keystat_keyup((REG8)(pc98_keycode & 0x7f));
 }
 
+/* ホスト (ブラウザ) の IME で確定したかな漢字混じり文字列を Shift-JIS バイト列で受け取り、
+ * ゲストの DOS 文字入力に注入する。FEP を持ち込まず、ユーザー自身の OS/ブラウザ IME で
+ * 日本語入力するための経路 (2026-06-21、ホスト側変換プロトタイプ)。受理したバイト数を返す。 */
+extern void qb_dos_inject_input(const uint8_t *bytes, int len);  /* dos_int21.c */
+int np2kai_inject_text(np2kai_handle h, const uint8_t *bytes, int len) {
+	if (!h || !bytes || len <= 0) return 0;
+	qb_dos_inject_input(bytes, len);
+	return len;
+}
+
 void np2kai_mouse_move(np2kai_handle h, int dx, int dy) {
 	if (!h) return;
 	qb_mouse_post_move(dx, dy);

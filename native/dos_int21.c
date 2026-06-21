@@ -517,8 +517,33 @@ static inline uint32_t lin(uint16_t seg, uint16_t off) {
 static int      g_softkey_len;
 static int      g_softkey_pos;
 
+/* ===== ホスト IME 注入 FIFO (2026-06-21) =====================================================
+ * ブラウザ (ホスト) の IME で確定したかな漢字混じり文字列を Shift-JIS バイト列にして
+ * np2kai_inject_text → qb_dos_inject_input で積み、DOS の文字入力 (dos_next_input_byte) が
+ * キーバッファより優先して 1 バイトずつ取り出す。実機で FEP が確定文字列をキー入力ストリームへ
+ * 流すのと等価で、ゲストには「FEP が確定した文字がタイプされた」と区別がつかない。FEP/辞書を
+ * 持ち込まずホスト IME で日本語入力するための経路 (docs: FEP/IME 検討)。 */
+#define QB_INJECT_CAP 1024
+static uint8_t g_inject_buf[QB_INJECT_CAP];
+static int     g_inject_head, g_inject_tail;
+static int inject_available(void) { return g_inject_head != g_inject_tail; }
+static int inject_get(void) {
+    if (g_inject_head == g_inject_tail) return -1;
+    int b = g_inject_buf[g_inject_head];
+    g_inject_head = (g_inject_head + 1) % QB_INJECT_CAP;
+    return b;
+}
+void qb_dos_inject_input(const uint8_t *bytes, int len) {
+    for (int i = 0; i < len; i++) {
+        int next = (g_inject_tail + 1) % QB_INJECT_CAP;
+        if (next == g_inject_head) break;   /* 満杯 → 残りは捨てる (次のポーリングで足りる) */
+        g_inject_buf[g_inject_tail] = bytes[i];
+        g_inject_tail = next;
+    }
+}
+
 static int kb_available(void) {
-    return (g_softkey_pos < g_softkey_len) || mem[QB_KB_COUNT] != 0;
+    return (g_softkey_pos < g_softkey_len) || inject_available() || mem[QB_KB_COUNT] != 0;
 }
 
 /* 1 エントリ dequeue。空なら -1。bios18.c:keyget() と同じ巻き戻し規則。 */
@@ -592,6 +617,8 @@ static int softkey_fill(uint8_t scan) {
 static int dos_next_input_byte(void) {
     if (g_softkey_pos < g_softkey_len)
         return g_softkey_buf[g_softkey_pos++];
+    int ib = inject_get();               /* ホスト IME 注入バイトをキーバッファより優先 */
+    if (ib >= 0) return ib;
     int w = kb_get_word();
     if (w < 0) return -1;
     uint8_t ch   = (uint8_t)(w & 0xFF);
@@ -2384,6 +2411,7 @@ void qb_dos_tty_reset(void) {
     g_fkeytbl_mode = 0;
     g_softkey_len = 0;
     g_softkey_pos = 0;
+    g_inject_head = g_inject_tail = 0;   /* ホスト IME 注入 FIFO も Run 毎にクリア (前 Run を持ち越さない) */
 }
 
 int qb_dos_int21_hook(void) {

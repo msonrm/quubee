@@ -230,6 +230,7 @@ async function makeWorkerEmu() {
         async getExit()              { return await call({ type: 'getExit' }); },
         keyDown(code)        { worker.postMessage({ type: 'key', down: 1, code }); },
         keyUp(code)          { worker.postMessage({ type: 'key', down: 0, code }); },
+        injectText(bytes)    { worker.postMessage({ type: 'injectText', bytes }); },   // SJIS バイト列 (ホスト IME)
         mouseMove(dx, dy)    { worker.postMessage({ type: 'mouseMove', dx, dy }); },
         mouseButton(btn, st) { worker.postMessage({ type: 'mouseButton', btn, state: st }); },
         setPaused(p)         { worker.postMessage({ type: 'setPaused', on: p }); },
@@ -567,6 +568,42 @@ async function makeWorkerEmu() {
         }
         flush();
         return out;
+    }
+
+    // Unicode → Shift-JIS エンコーダ (ホスト IME 注入用、2026-06-21 プロトタイプ)。外部テーブルを
+    // 持たず、ブラウザ内蔵の shift_jis デコーダ (decodeSjisText と同じ sjis インスタンス) を全 SJIS 域で
+    // 逆引きして Unicode→SJIS 表を遅延生成する (素性が decode と一致・依存ゼロ)。半角は ASCII (0x20-0x7E)
+    // と半角カナ (0xA1-0xDF)、全角は 2 バイト。表現できない文字は黙って捨てる。
+    let _sjisEnc = null;
+    function sjisEncoder() {
+        if (_sjisEnc) return _sjisEnc;
+        const map = new Map();
+        for (let b = 0x20; b <= 0x7e; b++) map.set(String.fromCharCode(b), [b]);
+        for (let b = 0xa1; b <= 0xdf; b++) {
+            const c = sjis.decode(Uint8Array.of(b));
+            if (c && c !== '�' && !map.has(c)) map.set(c, [b]);
+        }
+        const leads = [];
+        for (let l = 0x81; l <= 0x9f; l++) leads.push(l);
+        for (let l = 0xe0; l <= 0xfc; l++) leads.push(l);
+        for (const l of leads) for (let t = 0x40; t <= 0xfc; t++) {
+            if (t === 0x7f) continue;
+            const c = sjis.decode(Uint8Array.of(l, t));
+            if (c && c.length === 1 && c !== '�' && !map.has(c)) map.set(c, [l, t]);
+        }
+        _sjisEnc = map;
+        return map;
+    }
+    function encodeSjis(str) {
+        const map = sjisEncoder();
+        const out = [];
+        for (const ch of str) {
+            const b = map.get(ch);
+            if (b) out.push(...b);
+            else if (ch === '¥') out.push(0x5c);   // ¥ → 0x5C
+            // 表現不能文字はスキップ (プロトタイプ)
+        }
+        return Uint8Array.from(out);
     }
 
     const isExecName = (n) => /\.(exe|com)$/i.test(n);
@@ -1159,6 +1196,12 @@ async function makeWorkerEmu() {
         // 入力 (fire-and-forget。戻り値を使わないので await 不要)。handle はここで前置。
         keyDown(code)         { keyDown(handle, code); },
         keyUp(code)           { keyUp(handle, code); },
+        injectText(bytes) {                          // SJIS バイト列 (ホスト IME) を DOS 文字入力へ注入
+            if (!bytes || !bytes.length) return;
+            const p = M._malloc(bytes.length); M.HEAPU8.set(bytes, p);
+            M.ccall('np2kai_inject_text', 'number', ['number', 'number', 'number'], [handle, p, bytes.length]);
+            M._free(p);
+        },
         mouseMove(dx, dy)     { mouseMove(handle, dx, dy); },
         mouseButton(btn, st)  { mouseButton(handle, btn, st); },
         setPaused(p)          { emuFrozen = p; },   // local: loop/audio が emuFrozen を読む
@@ -2389,6 +2432,37 @@ async function makeWorkerEmu() {
     // 60 だと体感やや速め (一部ゲームで音楽が走る) という報告に合わせて 56 を採用。
     emu.onAudioActive = markAudioActive;   // 音が鳴り始めたら音楽プレイヤーの計時を開始 (worker は audioActive msg 経由)
     emu.start(drawFrame);   // 駆動ループ開始 (loop 本体は emu.start に移設・モード固有)
+
+    // ---- 下部ツールバー: テキスト入力 (IME 可) を DOS 文字入力へ注入 (2026-06-21) ----
+    // FEP を持ち込まず、ブラウザ/OS の IME (や直接タイプ) で打った文字列を Shift-JIS にしてゲストへ注入する。
+    // ✎ トグルで入力欄を出し、IME で打って Enter で送信 (空欄で Enter = 改行)。入力欄にフォーカス中は
+    // inField ガードで通常キーがゲストへ行かない = 二重入力なし。エディタ (VZ/みゅあっぷ等) に流し込める。
+    // 入力欄は #stage 下部の通常フロー (index.html #input-bar) なので、将来ソフトキーボードやバーチャル
+    // パッドもこのツールバーへ自然に足せる。
+    (function setupImeInput() {
+        const toggle = document.getElementById('ime-toggle');
+        const inp    = document.getElementById('ime-input');
+        if (!toggle || !inp) return;
+        let composing = false;
+        inp.addEventListener('compositionstart', () => { composing = true; });
+        inp.addEventListener('compositionend',   () => { composing = false; });
+        inp.addEventListener('keydown', (e) => {
+            if (e.key !== 'Enter' || composing) return;   // IME 変換確定の Enter は送信に使わない
+            e.preventDefault();
+            if (inp.value) { emu.injectText(encodeSjis(inp.value)); inp.value = ''; }
+            else emu.injectText(Uint8Array.of(0x0d));      // 空欄 Enter = 改行 (CR) をゲストへ
+        });
+        toggle.addEventListener('click', () => {
+            const show = !inp.classList.contains('show');
+            inp.classList.toggle('show', show);
+            toggle.classList.toggle('on', show);
+            // ボタンにフォーカスを残さない: 残るとブラウザが Enter/Space を「ボタンのクリック」と解釈して
+            // 再トグルし、閉じたつもりが Enter で入力欄へ戻ってしまう。開いたら入力欄へ、閉じたら
+            // フォーカスをゲーム (body) へ返し、以後のキーは通常どおりゲストへ届く。
+            toggle.blur();
+            if (show) inp.focus();
+        });
+    })();
 
 })().catch(function (e) {
     showFatal('QuuBee init error: ' + e);

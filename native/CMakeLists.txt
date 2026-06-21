@@ -170,6 +170,7 @@ set(EXPORTED_FUNCTIONS
     _np2kai_get_framebuffer
     _np2kai_key_down
     _np2kai_key_up
+    _np2kai_inject_text
     _np2kai_mouse_move
     _np2kai_mouse_button
     _np2kai_set_audio_rate

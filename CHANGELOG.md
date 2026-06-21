@@ -1,5 +1,33 @@
 # CHANGELOG
 
+## [ホスト IME 日本語入力 (プロトタイプ) — FEP を持ち込まず OS/ブラウザ IME で DOS アプリへ入力] — 2026-06-21
+
+PC-98 用 FEP (ATOK/VJE/WX 等) は今や自由に再配布できるものが乏しく、辞書ライセンスの壁もある。そこで
+「ゲストに FEP を常駐させる」のでなく「**ホスト (ブラウザ/OS) の IME で確定した文字列を Shift-JIS にして
+ゲストの DOS 文字入力へ流し込む**」経路を新設した。実機で FEP が確定文字列をキー入力ストリームへ流すのと
+等価で、ゲストには「FEP がタイプした」と区別がつかない。FEP/辞書のライセンス問題を丸ごと回避でき、ユーザー
+自身の使い慣れた IME で日本語入力できる。きっかけは NP2 系開発者の X での FEP 言及からの周辺調査。
+
+### native: 注入 FIFO + np2kai_inject_text (`dos_int21.c` / `bridge.c` / 各 `.h` / `CMakeLists.txt`)
+確定文字列 (SJIS バイト列) を積む FIFO を新設し、`dos_next_input_byte` が**キーバッファより優先**して 1 バイト
+ずつ返す (`kb_available` も非空を「入力あり」に含める、Run 毎に `qb_dos_tty_reset` でクリア)。VZ も INT 21h
+文字入力 (AH=06/07/0A) でキーを読むのでこの経路で日本語が届く。INT DCh ソフトキー注入 (2026-06-20) の一般化。
+BIOS (INT 18h) 直読みアプリ向け注入は後日 (現状は DOS 文字入力経路のみ)。
+
+### JS: Unicode→Shift-JIS エンコーダ (外部テーブルなし) + 下部入力ツールバー (`bridge.js`/`emu-worker.js`/`index.html`)
+- `encodeSjis`: ブラウザ内蔵の `TextDecoder('shift_jis')` を全 SJIS 域で**逆引き**して Unicode→SJIS 表を遅延
+  生成 (`decodeSjisText` と同じ素性・依存ゼロ)。Save/＋Add で意図的に避けてきた SJIS エンコーダを、入力用途に
+  限ってここで導入。半角 (ASCII/半角カナ) と全角 2 バイトを網羅、表現不能文字はスキップ。
+- `emu.injectText(bytes)` を local/worker 両ファサードに追加 (worker は postMessage 経由)。
+- `#stage` 下部に常設の入力ツールバー (`#input-bar`)。**✎ トグル**で入力欄を展開/格納、IME で打って **Enter で
+  送信** (空欄 Enter = 改行 0x0D)。入力欄フォーカス中は `inField` ガードで通常キーがゲストへ行かない = 二重
+  入力なし。ツールバーは通常フロー要素なのでゲーム画面の上マージンが自然に減り、将来ソフトキーボード/
+  バーチャルパッドもここへ並べられる。スマホは入力欄タップで OS のソフトキーボードがそのまま出る。
+
+検証: `tools/ime_inject_test.js` 新設 — AH=07h で 6 バイト読む合成 COM に「日本語」(SJIS `93 fa 96 7b 8c ea`)
+を注入しバイト完全一致を確認。`encodeSjis` は node で日本語/ASCII/半角カナ/混在の正当性を確認。**ブラウザ実機
+で VZ への日本語入力をユーザー確認済 (worker 既定モード)**。回帰ゼロ。
+
 ## [CREDITS: font.bmp の埋め込みライセンス本文を 2 条項 → 修正 BSD (3 条項) に訂正] — 2026-06-21
 
 font.bmp 配布元 (SimK / Nekosan development team) が「とりあえず付けていたライセンス文書が誤って 2 条項 BSD に

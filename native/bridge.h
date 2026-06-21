@@ -82,6 +82,11 @@ void np2kai_key_down(np2kai_handle h, uint8_t pc98_keycode);
 __attribute__((visibility("default")))
 void np2kai_key_up(np2kai_handle h, uint8_t pc98_keycode);
 
+/* ホスト IME で確定した Shift-JIS バイト列をゲストの DOS 文字入力に注入する (FEP 不要の日本語入力)。
+ * 受理したバイト数を返す。bytes は SJIS 生バイト (2 バイト文字はリード+トレイルを順に)。 */
+__attribute__((visibility("default")))
+int np2kai_inject_text(np2kai_handle h, const uint8_t *bytes, int len);
+
 /* Mouse: 相対移動量を累積。PC-98 のマウス I/F は周期的に取り出して
  * カウンタをクリアする。Pointer Lock の movementX/Y をそのまま渡す想定。 */
 __attribute__((visibility("default")))

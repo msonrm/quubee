@@ -216,6 +216,7 @@ async function init(msg) {
     c.audioFill  = M.cwrap('np2kai_audio_fill', null, ['number', 'number', 'number']);
     c.keyDown    = M.cwrap('np2kai_key_down', null, ['number', 'number']);
     c.keyUp      = M.cwrap('np2kai_key_up',   null, ['number', 'number']);
+    c.injectText = M.cwrap('np2kai_inject_text', 'number', ['number', 'number', 'number']);
     c.mouseMove  = M.cwrap('np2kai_mouse_move',   null, ['number', 'number', 'number']);
     c.mouseButton= M.cwrap('np2kai_mouse_button', null, ['number', 'number', 'number']);
     c.insertFdd  = M.cwrap('np2kai_insert_fdd', 'number', ['number', 'string', 'number', 'number']);
@@ -266,6 +267,7 @@ onmessage = (ev) => {
 
         // 入力 (handle はここで前置)
         case 'key':   (m.down ? c.keyDown : c.keyUp)(handle, m.code); break;
+        case 'injectText': withHeapBytes(m.bytes, (p, n) => c.injectText(handle, p, n)); break;   // ホスト IME → SJIS 注入
         case 'mouseMove':   c.mouseMove(handle, m.dx, m.dy); break;
         case 'mouseButton': c.mouseButton(handle, m.btn, m.state); break;
 
