@@ -1,5 +1,19 @@
 # CHANGELOG
 
+## [ゲームパッドに L1→Ctrl / R1→Shift を追加 — 東方旧作と Super Depth をパッド単体で快適化] — 2026-06-21
+
+ユーザー要望で、東方旧作と Super Depth をゲームパッドだけで快適に遊べるよう割り当てを拡張 (`web/player/bridge.js`
+の `pollGamepads`、**JS のみ・Wasm 不変**)。
+
+東方旧作の操作 (ショット=Z/Space・ボム=X・**低速移動=Shift**・スキップ=Ctrl・ポーズ=ESC) のうち、既存の割り当て
+(button 0→Z / 1→X / 2→Space / 3→Enter / 9(Start)→ESC) で **Shift (低速移動) だけが欠けていた**。標準 mapping の
+**R1 (button 5)→Shift (NKEY 0x70)** を足して東方旧作がパッド単体で完結。あわせて **L1 (button 4)→Ctrl (NKEY 0x74)**
+も追加 (東方旧作には実は Ctrl スキップは無く TH06 以降の仕様だが、害ゼロなので残置)。Super Depth (左攻撃=Z/Space=
+button 0/2・右攻撃=X/Enter=button 1/3) は既存割り当てで元から完結していたため変更なし。NKEY コードは `PC98_KEYMAP`
+の ShiftLeft/Right=0x70・ControlLeft/Right=0x74 と同一なのでキーボードと同挙動でゲストに届く。ビューアモーダル中は
+全解放する既存ガードもそのまま。**ブラウザ実機で R1 低速移動を確認 (ユーザー)**。回帰テストは無し (Gamepad API は
+ポーリング型でヘッドレス不可)。
+
 ## [ia16-elf-gcc 製 EXE が起動できない (stage -9) を根治 — MZ reloc の負セグメントを 8086 16-bit ラップで解決] — 2026-06-21
 
 近年のモダンツールチェーンでビルドされた PC-98 homebrew が QuuBee で**起動段階ごと失敗**していた問題を根治。

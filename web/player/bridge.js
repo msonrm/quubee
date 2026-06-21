@@ -1977,11 +1977,15 @@ async function makeWorkerEmu() {
     // パッドは「キーの別名」として NKEY を直接注入する。標準 mapping 前提:
     //   十字キー (buttons 12-15) / 左スティック (axes 0,1) → カーソル
     //   ボタン 0(下)→Z  1(右)→X  2(左)→Space  3(上)→Enter  9(Start)→ESC
+    //   L1(4)→Ctrl (東方のメッセージスキップ)  R1(5)→Shift (東方の低速移動)
+    // 東方旧作: Z/Space=ショット, X=ボム, Shift=低速移動, Ctrl=スキップ, ESC=ポーズ。
+    // Super Depth: Z/Space=左攻撃 (button 0/2), X/Enter=右攻撃 (button 1/3)。
     // Gamepad API はイベントでなくポーリング型なので rAF ループ先頭で毎フレーム読む。
     // Chrome はボタンを一度押すまでパッドを列挙しない (= 接続直後は無反応で正常)。
     const PAD_DEADZONE = 0.5;
     const NKEY_UP = 0x3a, NKEY_LEFT = 0x3b, NKEY_RIGHT = 0x3c, NKEY_DOWN = 0x3d;
     const NKEY_Z = 0x29, NKEY_X = 0x2a, NKEY_SPACE = 0x34, NKEY_ENTER = 0x1c, NKEY_ESC = 0x00;
+    const NKEY_SHIFT = 0x70, NKEY_CTRL = 0x74;
     const padPressed = new Set();        // パッド由来で押下中の NKEY (キーボードとは独立管理)
 
     function pollGamepads() {
@@ -2000,6 +2004,8 @@ async function makeWorkerEmu() {
                 if (btn(1)) want.add(NKEY_X);
                 if (btn(2)) want.add(NKEY_SPACE);
                 if (btn(3)) want.add(NKEY_ENTER);
+                if (btn(4)) want.add(NKEY_CTRL);   // L1 → Ctrl (東方のメッセージスキップ)
+                if (btn(5)) want.add(NKEY_SHIFT);  // R1 → Shift (東方の低速移動)
                 if (btn(9)) want.add(NKEY_ESC);
             }
         }
