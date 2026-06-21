@@ -418,6 +418,17 @@ static inline uint16_t read_le16(const uint8_t *p) {
     return (uint16_t)p[0] | ((uint16_t)p[1] << 8);
 }
 
+/* MZ relocation エントリ (r_seg, r_off) → ロードモジュール先頭からの body オフセット。
+ * ia16-elf-gcc / 近年の GNU ia16 binutils は small-model EXE で r_seg に 0xFFFE のような
+ * 「負」セグメントを出し、実 8086 の seg:off 物理アドレスが 16-bit セグメント加算で
+ * 1MB ラップすることを前提にする (load_seg=0x0110 なら 0xFFFE→0x010E)。フラットに
+ * r_seg*16+r_off を取ると 0x10F2DC のような 1MB 超の値になり body 範囲チェックを誤判定して
+ * stage -9 (起動不能) になる。20-bit でマスクすれば実 DOS と同じ body 内オフセットが得られる
+ * (正規の小さな r_seg では no-op = 既存 EXE に回帰なし)。 */
+static inline uint32_t reloc_body_off(uint16_t r_seg, uint16_t r_off) {
+    return ((uint32_t)r_seg * 16u + r_off) & 0xFFFFFu;
+}
+
 int qb_dos_stage_com(const uint8_t *image, size_t size, const char *cmdline,
                      const char *name) {
     if (!image || size == 0) return -1;
@@ -495,7 +506,7 @@ int qb_dos_stage_exe(const uint8_t *image, size_t size, const char *cmdline,
             uint32_t rec = (uint32_t)e_lfarlc + (uint32_t)i * 4;
             uint16_t r_off = read_le16(image + rec);
             uint16_t r_seg = read_le16(image + rec + 2);
-            uint32_t lin   = (uint32_t)r_seg * 16 + r_off;
+            uint32_t lin   = reloc_body_off(r_seg, r_off);  /* 8086 16-bit セグメントラップ */
             if (lin + 1 >= body_bytes) return -9;
             uint16_t cur = (uint16_t)g_stage.buf[lin]
                          | ((uint16_t)g_stage.buf[lin + 1] << 8);
@@ -1591,7 +1602,7 @@ int qb_dos_exec_load(const uint8_t *image, size_t size, uint32_t file_bytes,
          * を通って他プログラム/PSP/IVT を書き換えてしまう)。rec+4<=size は上の行で保証済み。 */
         for (uint16_t i = 0; i < e_crlc; i++) {
             uint32_t rec = (uint32_t)e_lfarlc + (uint32_t)i * 4;
-            uint32_t tgt = (uint32_t)read_le16(image + rec + 2) * 16 + read_le16(image + rec);
+            uint32_t tgt = reloc_body_off(read_le16(image + rec + 2), read_le16(image + rec));
             if (tgt + 1 >= body_bytes) return -9;
         }
     } else {
@@ -1641,7 +1652,7 @@ int qb_dos_exec_load(const uint8_t *image, size_t size, uint32_t file_bytes,
         if (rec + 4 > size) return -8;
         uint16_t r_off = read_le16(image + rec);
         uint16_t r_seg = read_le16(image + rec + 2);
-        uint32_t a = load_lin + ((uint32_t)r_seg * 16 + r_off);
+        uint32_t a = load_lin + reloc_body_off(r_seg, r_off);  /* 8086 16-bit セグメントラップ */
         /* 壊れた/巨大な子 EXE の reloc で mem[] 配列外を踏まないよう必ずマスクする
          * (staging 経路や poke* と同じ流儀。poke16 が両バイトをマスクして書く)。 */
         uint16_t cur = (uint16_t)mem[a & QB_GUEST_MEM_MASK]
@@ -1788,7 +1799,7 @@ int qb_dos_overlay_load(const uint8_t *image, size_t size,
         if (e_crlc > 0 && (uint32_t)e_lfarlc + (uint32_t)e_crlc * 4 > size) return -8;
         for (uint16_t i = 0; i < e_crlc; i++) {
             uint32_t rec = (uint32_t)e_lfarlc + (uint32_t)i * 4;
-            uint32_t tgt = (uint32_t)read_le16(image + rec + 2) * 16 + read_le16(image + rec);
+            uint32_t tgt = reloc_body_off(read_le16(image + rec + 2), read_le16(image + rec));
             if (tgt + 1 >= body_bytes) return -9;
         }
     } else {
@@ -1806,7 +1817,7 @@ int qb_dos_overlay_load(const uint8_t *image, size_t size,
         uint32_t rec = (uint32_t)e_lfarlc + (uint32_t)i * 4;
         uint16_t r_off = read_le16(image + rec);
         uint16_t r_seg = read_le16(image + rec + 2);
-        uint32_t a = load_lin + ((uint32_t)r_seg * 16 + r_off);
+        uint32_t a = load_lin + reloc_body_off(r_seg, r_off);  /* 8086 16-bit セグメントラップ */
         uint16_t cur = (uint16_t)mem[a & QB_GUEST_MEM_MASK]
                      | ((uint16_t)mem[(a + 1) & QB_GUEST_MEM_MASK] << 8);
         poke16(a, (uint16_t)(cur + reloc_factor));

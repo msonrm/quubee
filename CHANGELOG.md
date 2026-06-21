@@ -1,5 +1,27 @@
 # CHANGELOG
 
+## [ia16-elf-gcc 製 EXE が起動できない (stage -9) を根治 — MZ reloc の負セグメントを 8086 16-bit ラップで解決] — 2026-06-21
+
+近年のモダンツールチェーンでビルドされた PC-98 homebrew が QuuBee で**起動段階ごと失敗**していた問題を根治。
+発端はユーザー報告 (yarufu/pc98 の ADV98.EXE = ChatGPT + Codex で開発された PC-98 16 色 ADV エンジン、
+`ia16-elf-gcc` ビルド)。ドロップして Run しても画面が真っ黒のまま何も起きなかった。
+
+真因は **MZ relocation の「負」セグメント値**。ADV98.EXE は reloc を 1 本だけ持ち `r_seg=0xFFFE,
+r_off=0xF2FC`。我々のローダ (`native/dos_loader.c`) はこれをフラットに `r_seg*16 + r_off = 0x10F2DC`
+(1.1MB) と計算し、「イメージ本体 (82KB) の外を指す」と判断して `qb_dos_stage_exe` が **-9 (起動不能)** を
+返していた。だが実機 8086 / MS-DOS はロードセグメントとの加算を**16-bit で行うのでラップする**:
+`(0x0110 + 0xFFFE) & 0xFFFF = 0x010E` となり、解決先は**イメージ内オフセット `0xF2DC`**。そこに格納された
+語は `0x0F65` = この EXE の初期 SS で、ごく正規の reloc だった。`FFFE:0020` という CS:IP もこのラップを
+前提にしたトリック。これは `ia16-elf-gcc` / 近年の GNU ia16 binutils が small-model EXE で出す負セグメント
+慣用で、当時の MASM / LSI-C 製 EXE は `r_seg` が小さく踏まなかったため今まで露見しなかった。
+
+修正 = `reloc_body_off(r_seg, r_off) = (r_seg*16 + r_off) & 0xFFFFF` ヘルパーを導入し、**stage / EXEC 子 /
+overlay の 3 経路 × (範囲検証 + 適用) = 計 6 箇所**を 8086 16-bit ラップに統一。正規の小さい `r_seg` では
+マスクは no-op なので既存 EXE への回帰はゼロ。検証 = `tools/exe_debug.js` で ADV98 がタイトルメニュー
+(はじめから / ロード / 終了) まで起動、**ブラウザ実機ではデータ同梱の自動読込で本編デモまで動作 (ユーザー
+確認)**。回帰 = exec_env / batch 19-0 / touhou 4-0 / vz / sft 全 PASS、bio100 triage 不変。`ia16-elf-gcc`
+製 PC-98 homebrew 全般に効く systemic fix。詳細は [[reference_ia16_exe_negative_reloc]]。
+
 ## [ホスト IME 注入を BIOS INT 18h 直読みアプリにも届かせる — 0x502 キーバッファ経由に一本化] — 2026-06-21
 
 ホスト IME 入力 (同日実装) はゲストの DOS 文字入力専用 FIFO に積んでいたため、**BIOS INT 18h を直読みする

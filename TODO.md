@@ -1,5 +1,16 @@
 # QB 作業状況
 
+## ✅ ia16-elf-gcc 製 EXE 起動 (MZ 負 reloc セグメント) — 根治・デプロイ済 (2026-06-21)
+
+モダンツールチェーン (`ia16-elf-gcc` / 近年の GNU ia16 binutils) でビルドされた PC-98 homebrew が
+**起動段階で stage -9 ごと失敗**していたのを根治。発端は yarufu/pc98 の ADV98.EXE (ChatGPT + Codex 製
+16 色 ADV エンジン) がドロップしても真っ黒で動かないというユーザー報告。真因 = MZ reloc の「負」セグメント
+(`r_seg=0xFFFE`) をフラットに `r_seg*16+r_off`=1.1MB と計算し body 範囲外と誤判定していた。実 8086 は
+load_seg との加算を 16-bit でラップ → image offset 0xF2DC (= 初期 SS の正規 reloc) に解決する。
+`reloc_body_off()`=`(r_seg*16+r_off)&0xFFFFF` で stage / EXEC 子 / overlay の 6 箇所を統一。正規の小さい
+`r_seg` では no-op で回帰ゼロ。**ブラウザ実機で ADV98 が本編デモまで自動起動 (ユーザー確認)**。詳細は
+CHANGELOG / [[reference_ia16_exe_negative_reloc]]。
+
 ## ✅ VZ Editor 対応 (テキストエディタ互換クラス) — 完成・デプロイ済 (2026-06-20)
 
 PC-98 版 VZ Editor がブラウザで起動・編集できるように。BSD-3 公開ソース (vcraftjp/VZEditor) を読んで
