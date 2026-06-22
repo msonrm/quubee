@@ -1,5 +1,32 @@
 # CHANGELOG
 
+## [hotfix: 制御フロー .bat (東方旧作 4 作) が起動しなくなった回帰を根治] — 2026-06-23
+
+ユーザー報告: 公開サイトで東方旧作 4 作 (TH02-05) が起動しなくなった (「たぶん .bat がだめ」)。
+kai_ts1.exe を自己展開させた後 game.bat を起動すると失敗。
+
+**真因 = 2026-06-22 の 0cc0ab0 (サブディレクトリ CWD 設定) の副作用**。`stage_shell_image`
+(ミニ COMMAND.COM をステージする関数) が、呼び出し側の **「表示ラベル」** をそのまま
+`qb_dos_stage_com` の name 引数に渡していた。0cc0ab0 で name から起動時 CWD を切り出す
+`stage_dir` が追加されたため、bridge.js が渡すラベル `"GAME.BAT (if/goto 分岐を実行時評価,
+N cmd)"` の中の **"if/goto" の '/' を区切りと誤認**し、起動時 CWD を `"GAME.BAT (if"` という
+存在しないディレクトリに設定。→ GAME.BAT が EXEC する本体の root 相対 open が全滅し、
+**制御フロー (if/goto) .bat = 東方旧作 4 作が全部起動不能**になっていた。
+
+ヘッドレス回帰 (`tools/batch_test.js` 等) が見逃したのは、テストハーネスが `/` を含まない
+clean な name (`'batch_test'`) を渡すため。bridge.js のラベルだけが "if/goto" を含む。
+6/11 にユーザー実機確認した後 0cc0ab0 がコミットされ、本日のデプロイで初めて本番に乗って顕在化した。
+
+修正 (`native/dos_loader.c` `stage_shell_image`): シェル (COMMAND.COM 相当) は常にルートで
+起動するのが正しい (`.bat` の cd は文インタプリタ `QB_BATCH_CD` が処理、EXEC される本体は
+root-absolute パス先頭 '\' で解決) ので、表示ラベルを stage に渡さず **name=NULL** でルート起動を
+保証 (batch ③ / script ② / music の全シェル経路に一律に効く)。回帰ガード = `tools/batch_test.js`
+サイクル 5 新設 (スラッシュ入りラベルで staging し root 相対 open が通ることを確認、`qb_dos_set_cwd_rel`
+は存在検証せず生文字列を g_cwd に入れるため bogus CWD なら open 失敗で確実に捕捉)。
+
+検証: build clean。batch (cycle 5 込み 21/0) / batscript / touhou (4/4 e2e) / subdir_cwd (6/0、0cc0ab0
+が救済した単一 image サブディレクトリ起動は不変) / pmd・pmd_session (music シェル) / exec_env / sft 全 PASS。
+
 ## [コードレビューで見つけた「直しても downside の無い」小修正をまとめて適用] — 2026-06-22
 
 現状コードの棚卸しレビュー (native C + web JS 全体) で見つかった、ASCII/通常ケースの挙動を一切

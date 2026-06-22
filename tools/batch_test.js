@@ -282,6 +282,43 @@ const FLIP = [
         chk(logs.slice(mark4).some((l) => /cd "\\sub" -> ok/.test(l)), '[batch] cd \\sub が ok ログ');
     }
 
+    // ---- サイクル 5: バッチの「表示ラベル」を name に渡しても起動時 CWD が壊れないこと (回帰) ----
+    // 0cc0ab0 で stage_shell_image が bridge.js の表示ラベル (例 "GAME.BAT (if/goto 分岐を実行時評価,
+    // 6 cmd)") を stage_com の name に渡し、stage_dir がラベル中の "if/goto" の '/' を区切りと誤認して
+    // 起動時 CWD を "GAME.BAT (if" 等の存在しないディレクトリに設定 → .bat が EXEC する本体の root 相対
+    // open が全滅 (制御フロー .bat = 東方旧作 4 作が全滅) する回帰があった。シェルは常にルートで起動する
+    // のが正しい (cd は文インタプリタが処理) ので、スラッシュ入りラベルでも root 相対 open が通ることを確認。
+    console.log('cycle 5: slash-containing batch label must not corrupt boot CWD (regression for 0cc0ab0)');
+    {
+        M.FS.writeFile('/run/MARK.DAT', new Uint8Array([0x4f, 0x4b]));   // root 直下 "OK" (cd しない)
+        const recipe5 = bat.parse([
+            '@echo off',
+            'openrel',
+            'if errorlevel 1 goto bad',
+            'echo OPENOK',
+            'goto end',
+            ':bad',
+            'echo OPENFAIL',
+            ':end',
+        ].join('\r\n') + '\r\n');
+        const stmts5 = bat.buildStatements(recipe5, ['OPENREL.COM'], '');
+        if (!stmts5) throw new Error('buildStatements returned null (5)');
+        const bytes5 = Buffer.from(bat.serializeStatements(stmts5), 'latin1');
+        const ptr5 = M._malloc(bytes5.length); M.HEAPU8.set(bytes5, ptr5);
+        // bridge.js が stageAndRunBatch で渡すのと同型の「表示ラベル」(スラッシュ "if/goto" 入り)
+        const label5 = 'GAME.BAT (if/goto 分岐を実行時評価, 1 cmd)';
+        r = M.ccall('np2kai_dos_stage_batch', 'number',
+            ['number', 'number', 'string'], [ptr5, bytes5.length, label5]);
+        M._free(ptr5);
+        chk(r === 0, `stage_batch r=${r} (5)`);
+        const mark5 = logs.length;
+        M.ccall('np2kai_reset', null, ['number'], [handle]);
+        for (let i = 0; i < 2200; i++) runFrame(handle);
+        const vram5 = vramText();
+        chk(vram5.includes('OPENOK') && !vram5.includes('OPENFAIL'),
+            'スラッシュ入りラベルでも CWD=root を保ち root 相対 open 成功 (0cc0ab0 回帰)');
+    }
+
     console.log(`\nbatch_test: pass=${pass} fail=${fail}`);
     if (fail) {
         console.log('---- 末尾ログ ----');

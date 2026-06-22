@@ -672,8 +672,17 @@ static int stage_shell_image(const shell_cmd_t *cmds, int n, const char *name,
 
     /* シェルを通常の COM として stage (cmdline 不要)。loader-start が 0x100:0x100 に展開する。
      * 中の qb_dos_reset_state が g_batch_active を 0 に戻すので、呼び出し側は stage 成功後に
-     * 文テーブルを設定して active を立てること。 */
-    return qb_dos_stage_com(img, pos, NULL, name);
+     * 文テーブルを設定して active を立てること。
+     *
+     * name は呼び出し側の「表示ラベル」(例 "GAME.BAT (if/goto 分岐を実行時評価, 6 cmd)") で
+     * あってパスではない。これを qb_dos_stage_com に渡すと stage_dir がラベル中の "if/goto" の
+     * '/' を区切りと誤認し、起動時 CWD を "GAME.BAT (if" 等の存在しないディレクトリに設定して
+     * しまう (→ .bat が EXEC する本体の相対 open が全滅 = 制御フロー .bat 全滅の原因)。
+     * シェル (COMMAND.COM 相当) は常にルートで起動するのが正しい: .bat の cd は文インタプリタ
+     * (QB_BATCH_CD) が処理し、EXEC される本体は root-absolute パス (先頭 '\') で解決するため。
+     * よって name は stage に渡さず NULL でルート起動を保証する (ラベルは呼び出し側の UI 専用)。 */
+    (void)name;
+    return qb_dos_stage_com(img, pos, NULL, NULL);
 }
 
 int qb_dos_stage_script(const char *script, size_t len, const char *name) {
