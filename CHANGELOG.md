@@ -12,9 +12,9 @@ BackSpace/Delete の押下をそのままエミュレータへ透過したら気
 透明な窓」という一貫したメンタルモデル。文字が入っていれば従来どおり欄内編集を優先する。
 
 実装 (`web/player/bridge.js`):
-- `IME_PASSTHROUGH_KEYS` = 矢印4 + Backspace + Delete + **Enter + Home + PageUp + PageDown + Insert**
-  (どれも空の単一行欄では no-op、PC-98 マッピング既存 = ARROW/BS/DEL/HOMECLR/ROLLUP/ROLLDOWN/INS/Enter)。
-  `Tab` (フォーカス移動) と `Escape` (blur) は空欄でも副作用があるため**意図的に除外**。
+- `IME_PASSTHROUGH_KEYS` = 矢印4 + Backspace + Delete + **Enter + Home + PageUp + PageDown + Insert + Tab**
+  (どれも空の単一行欄では no-op、PC-98 マッピング既存 = ARROW/BS/DEL/HOMECLR/ROLLUP/ROLLDOWN/INS/Enter/Tab)。
+  `Escape` (blur) は空欄でも副作用があるため**意図的に除外**。
 - グローバル `keydown`: `imePassThrough(e)` = `e.target.id==='ime-input' && value==='' && !e.isComposing &&
   IME_PASSTHROUGH_KEYS.has(e.code)` のとき `inField` ガードを抜けて `emu.keyDown(NKEY)` へ。
   透過キーは欄の既定動作を `preventDefault` で抑止 (BS/DEL は KEY_PREVENT_DEFAULT 外なので追加で抑止)。
@@ -25,8 +25,12 @@ BackSpace/Delete の押下をそのままエミュレータへ透過したら気
   injectText(CR) の上位互換 (BIOS キーバッファに CR が入るのは同じ + 生スキャンコードを読むメニュー/ゲームの
   「Enter で決定」にも届く)。**文字ありの Enter だけ** が input 要素側で `injectText(SJIS文字列)` を担い、
   `stopPropagation()` で透過経路へ渡さない (二重 Enter 防止)。IME 変換確定の Enter は従来どおり送信に使わない。
+- **Tab 追補 (同日・ユーザー報告)**: 当初 Tab は「フォーカスが逃げる副作用」を理由に除外していたが、欄を
+  構えている間はそれが逆に邪魔 (透明窓モードでは Tab はフォーカス移動でなくゲームキーであるべき)。input 要素の
+  keydown で**変換中でない Tab を常に `preventDefault`** してフォーカスを欄に留める + Tab を透過集合に追加し、
+  空欄なら実 Tab スキャンコード(`0x0f`)をゲストへ送る (文字ありは no-op で欄に留まるだけ)。
 
-「自然すぎて気持ち悪い」(ユーザー実機確認) = 透過 UI が存在を感じさせない狙いどおりの兆候。
+「自然すぎて気持ち悪い」(ユーザー実機確認・Tab 追補も同評) = 透過 UI が存在を感じさせない狙いどおりの兆候。
 キーボードイベントは DOM 依存でヘッドレス回帰が無い領域 (ブラウザ実機確認のみ)。
 
 ## [hotfix: 制御フロー .bat (東方旧作 4 作) が起動しなくなった回帰を根治] — 2026-06-23

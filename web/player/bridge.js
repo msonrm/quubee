@@ -106,14 +106,17 @@ const KEY_PREVENT_DEFAULT = new Set([
 
 // 下部 IME 入力欄が「空・変換中でない」ときだけゲストへ透過させる code。
 // いずれも空欄では欄内編集として無意味 (カーソルは先頭で動かず BS/DEL も消すものが無い、
-// Home/PageUp/PageDown は単一行欄で no-op、Insert は上書きトグルのみ) なので、わざわざ欄を
-// 閉じなくてもメニュー移動・決定やエディタ (VZ/みゅあっぷ) のカーソル/スクロール/行頭/挿入操作に
-// そのまま使える。文字が入っていれば従来どおり欄内編集を優先する (透過しない)。
+// Home/PageUp/PageDown は単一行欄で no-op、Insert は上書きトグルのみ、Tab は単一行欄を編集せず
+// 既定はフォーカス移動だけ) なので、わざわざ欄を閉じなくてもメニュー移動・決定やエディタ
+// (VZ/みゅあっぷ) のカーソル/スクロール/行頭/挿入/タブ操作にそのまま使える。文字が入っていれば
+// 従来どおり欄内編集を優先する (透過しない)。
 // Enter は「空欄 = 実 Enter スキャンコード(0x1c)」に一本化 (非空欄 Enter は SJIS 文字列送信で別扱い、
-// setupImeInput 参照)。Tab(フォーカス移動)/Escape(blur) は空欄でも副作用があるため含めない。
+// setupImeInput 参照)。Tab は欄にフォーカスがあると既定でフォーカスが逃げてしまうので、欄を構えている
+// 間は常にフォーカスを欄へ留める (setupImeInput で preventDefault) + 空欄なら実 Tab をゲストへ送る。
+// Escape(blur) は空欄でも副作用があるため含めない。
 const IME_PASSTHROUGH_KEYS = new Set([
     'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Backspace', 'Delete',
-    'Enter', 'Home', 'PageUp', 'PageDown', 'Insert',
+    'Enter', 'Home', 'PageUp', 'PageDown', 'Insert', 'Tab',
 ]);
 
 async function loadDisk(M, url, fsPath) {
@@ -2510,6 +2513,10 @@ async function makeWorkerEmu() {
         inp.addEventListener('compositionstart', () => { composing = true; });
         inp.addEventListener('compositionend',   () => { composing = false; });
         inp.addEventListener('keydown', (e) => {
+            // Tab は欄からフォーカスを逃がさない (既定のフォーカス移動を止める)。空欄ならグローバル
+            // 透過が実 Tab スキャンコード(0x0f)をゲストへ送り、文字ありなら no-op で欄に留まるだけ。
+            // 変換中は IME の候補選択に使われ得るので触らない。
+            if (e.key === 'Tab' && !composing) { e.preventDefault(); return; }
             // Enter は「文字あり = SJIS 文字列を送信」だけをここで担う。空欄 Enter は下のグローバル
             // 透過に委ね、実 Enter スキャンコード(0x1c)としてゲストへ届く (injectText(CR) より上位互換:
             // BIOS キーバッファに CR が入るのは同じで、加えて生スキャンコードを読むゲームにも届く)。
