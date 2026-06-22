@@ -1,5 +1,34 @@
 # CHANGELOG
 
+## [空の IME 入力欄でカーソル/編集キーをゲストへ透過 (空欄 = 透明なキーボード窓)] — 2026-06-23
+
+ユーザー案: 「下部のテキスト入力欄が**有効・フォーカス中・空**のときだけ、カーソルキーと
+BackSpace/Delete の押下をそのままエミュレータへ透過したら気持ちよくないか?」を実装。
+**JS のみ (Wasm 不変・次回ロードで反映)**。
+
+着想がきれいで、空欄では矢印/BS/DEL は欄内編集として **no-op** (カーソルは先頭で動かず、消すものも
+無い) なので、透過させても「打って送る」コア機能を一切壊さない。結果、**入力欄を構えたまま** メニュー
+移動やエディタ (VZ/みゅあっぷ) のカーソル操作ができる = 「空の IME バー = エミュレートされたキーボードへの
+透明な窓」という一貫したメンタルモデル。文字が入っていれば従来どおり欄内編集を優先する。
+
+実装 (`web/player/bridge.js`):
+- `IME_PASSTHROUGH_KEYS` = 矢印4 + Backspace + Delete + **Enter + Home + PageUp + PageDown + Insert**
+  (どれも空の単一行欄では no-op、PC-98 マッピング既存 = ARROW/BS/DEL/HOMECLR/ROLLUP/ROLLDOWN/INS/Enter)。
+  `Tab` (フォーカス移動) と `Escape` (blur) は空欄でも副作用があるため**意図的に除外**。
+- グローバル `keydown`: `imePassThrough(e)` = `e.target.id==='ime-input' && value==='' && !e.isComposing &&
+  IME_PASSTHROUGH_KEYS.has(e.code)` のとき `inField` ガードを抜けて `emu.keyDown(NKEY)` へ。
+  透過キーは欄の既定動作を `preventDefault` で抑止 (BS/DEL は KEY_PREVENT_DEFAULT 外なので追加で抑止)。
+- グローバル `keyup`: `if (inField(e) && !pressed.has(e.code)) return;` に変更。**透過したキーは `pressed` に
+  入っているので keyup も透過 = keydown の透過と過不足なく一致**し、押しっぱなしの取り残しが起きない。
+- **Enter 経路を統合**: 従来「空欄 Enter = `injectText(CR 0x0D)`」(BIOS キーバッファ直流し・**生スキャンコードを
+  読むゲームには届かない別経路**) を廃し、空欄 Enter は上のグローバル透過 (`keyDown 0x1c`) に一本化。
+  injectText(CR) の上位互換 (BIOS キーバッファに CR が入るのは同じ + 生スキャンコードを読むメニュー/ゲームの
+  「Enter で決定」にも届く)。**文字ありの Enter だけ** が input 要素側で `injectText(SJIS文字列)` を担い、
+  `stopPropagation()` で透過経路へ渡さない (二重 Enter 防止)。IME 変換確定の Enter は従来どおり送信に使わない。
+
+「自然すぎて気持ち悪い」(ユーザー実機確認) = 透過 UI が存在を感じさせない狙いどおりの兆候。
+キーボードイベントは DOM 依存でヘッドレス回帰が無い領域 (ブラウザ実機確認のみ)。
+
 ## [hotfix: 制御フロー .bat (東方旧作 4 作) が起動しなくなった回帰を根治] — 2026-06-23
 
 ユーザー報告: 公開サイトで東方旧作 4 作 (TH02-05) が起動しなくなった (「たぶん .bat がだめ」)。

@@ -104,6 +104,18 @@ const KEY_PREVENT_DEFAULT = new Set([
     'PageUp', 'PageDown', 'Home',
 ]);
 
+// 下部 IME 入力欄が「空・変換中でない」ときだけゲストへ透過させる code。
+// いずれも空欄では欄内編集として無意味 (カーソルは先頭で動かず BS/DEL も消すものが無い、
+// Home/PageUp/PageDown は単一行欄で no-op、Insert は上書きトグルのみ) なので、わざわざ欄を
+// 閉じなくてもメニュー移動・決定やエディタ (VZ/みゅあっぷ) のカーソル/スクロール/行頭/挿入操作に
+// そのまま使える。文字が入っていれば従来どおり欄内編集を優先する (透過しない)。
+// Enter は「空欄 = 実 Enter スキャンコード(0x1c)」に一本化 (非空欄 Enter は SJIS 文字列送信で別扱い、
+// setupImeInput 参照)。Tab(フォーカス移動)/Escape(blur) は空欄でも副作用があるため含めない。
+const IME_PASSTHROUGH_KEYS = new Set([
+    'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Backspace', 'Delete',
+    'Enter', 'Home', 'PageUp', 'PageDown', 'Insert',
+]);
+
 async function loadDisk(M, url, fsPath) {
     const res = await fetch(url);
     if (!res.ok) return false;
@@ -1970,9 +1982,15 @@ async function makeWorkerEmu() {
 
     const inField = (e) => e.target && (e.target.tagName === 'INPUT' ||
         e.target.tagName === 'TEXTAREA' || e.target.isContentEditable);
+    // 下部 IME 入力欄 (#ime-input) が「フォーカス中・空・変換中でない」ときの透過対象キー
+    // (IME_PASSTHROUGH_KEYS) だけをゲストへ通す。e.target が入力欄自身 = フォーカス中。
+    const imePassThrough = (e) => e.target && e.target.id === 'ime-input' &&
+        e.target.value === '' && !e.isComposing && IME_PASSTHROUGH_KEYS.has(e.code);
     window.addEventListener('keydown', (e) => {
-        // 入力欄 (Args 等) にフォーカス中はゲームへキーを送らない
-        if (inField(e)) return;
+        // 入力欄 (Args 等) にフォーカス中はゲームへキーを送らない。
+        // ただし空の IME 入力欄での透過対象キー (矢印/編集キー等) だけは例外で通す。
+        const passThru = imePassThrough(e);
+        if (inField(e) && !passThru) return;
         // 別窓ビューアを開いている間はゲームへキーを送らない (Esc で閉じる)
         if (!viewerModalEl.hidden) { if (e.key === 'Escape') { e.preventDefault(); closeViewer(); } return; }
         // 音楽プレイヤーポップアップを開いている間も同様 (Esc で閉じる。演奏は背後で続く)
@@ -1986,14 +2004,17 @@ async function makeWorkerEmu() {
         if (!isCtrlKey && (e.ctrlKey || e.metaKey || e.altKey)) return;
         const code = PC98_KEYMAP[e.code];
         if (code === undefined) return;
-        if (KEY_PREVENT_DEFAULT.has(e.code)) e.preventDefault();
+        // 透過時 (BS/DEL は KEY_PREVENT_DEFAULT 外) も欄の既定動作を抑止してゲストへ回す
+        if (passThru || KEY_PREVENT_DEFAULT.has(e.code)) e.preventDefault();
         if (pressed.has(e.code)) return;     // OS のオートリピートは無視
         pressed.add(e.code);
         emu.keyDown(code);
     });
 
     window.addEventListener('keyup', (e) => {
-        if (inField(e)) return;
+        // 入力欄にフォーカス中でも、keydown が透過したキー (= pressed に在る) は keyUp を送る。
+        // さもないとゲスト側で押しっぱなしになる。透過しなかったキーは従来どおり欄に委ねる。
+        if (inField(e) && !pressed.has(e.code)) return;
         if (!viewerModalEl.hidden) return;   // ビューア表示中はゲームへ送らない
         if (!playerModalEl.hidden) return;   // 音楽ポップアップ表示中も同様
         const code = PC98_KEYMAP[e.code];
@@ -2474,8 +2495,11 @@ async function makeWorkerEmu() {
 
     // ---- 下部ツールバー: テキスト入力 (IME 可) を DOS 文字入力へ注入 (2026-06-21) ----
     // FEP を持ち込まず、ブラウザ/OS の IME (や直接タイプ) で打った文字列を Shift-JIS にしてゲストへ注入する。
-    // ✎ トグルで入力欄を出し、IME で打って Enter で送信 (空欄で Enter = 改行)。入力欄にフォーカス中は
-    // inField ガードで通常キーがゲストへ行かない = 二重入力なし。エディタ (VZ/みゅあっぷ等) に流し込める。
+    // ✎ トグルで入力欄を出し、IME で打って Enter で送信。入力欄にフォーカス中は inField ガードで
+    // 通常キーがゲストへ行かない = 二重入力なし。エディタ (VZ/みゅあっぷ等) に流し込める。
+    // 例外として、欄が空・変換中でないときの矢印/BS/DEL/Enter/Home/PageUp/PageDown/Insert は
+    // imePassThrough でゲストへ透過する (空欄ではどれも欄内編集として無意味なので、欄を構えたまま
+    // メニュー移動・決定やエディタのカーソル操作ができる)。
     // 入力欄は #stage 下部の通常フロー (index.html #input-bar) なので、将来ソフトキーボードやバーチャル
     // パッドもこのツールバーへ自然に足せる。
     (function setupImeInput() {
@@ -2486,10 +2510,15 @@ async function makeWorkerEmu() {
         inp.addEventListener('compositionstart', () => { composing = true; });
         inp.addEventListener('compositionend',   () => { composing = false; });
         inp.addEventListener('keydown', (e) => {
+            // Enter は「文字あり = SJIS 文字列を送信」だけをここで担う。空欄 Enter は下のグローバル
+            // 透過に委ね、実 Enter スキャンコード(0x1c)としてゲストへ届く (injectText(CR) より上位互換:
+            // BIOS キーバッファに CR が入るのは同じで、加えて生スキャンコードを読むゲームにも届く)。
             if (e.key !== 'Enter' || composing) return;   // IME 変換確定の Enter は送信に使わない
+            if (!inp.value) return;                       // 空欄 Enter → グローバル透過 (keyDown 0x1c) に委ねる
             e.preventDefault();
-            if (inp.value) { emu.injectText(encodeSjis(inp.value)); inp.value = ''; }
-            else emu.injectText(Uint8Array.of(0x0d));      // 空欄 Enter = 改行 (CR) をゲストへ
+            e.stopPropagation();                          // 送信したら透過経路へ渡さない (二重 Enter 防止)
+            emu.injectText(encodeSjis(inp.value));
+            inp.value = '';
         });
         toggle.addEventListener('click', () => {
             const show = !inp.classList.contains('show');
