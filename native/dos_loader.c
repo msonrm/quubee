@@ -404,9 +404,14 @@ static void stage_cmdline(const char *cmdline) {
  * memset で 0 クリア済の前提。空/NULL なら未設定のまま (build_env が既定にフォールバック)。*/
 static void stage_name(const char *name) {
     if (!name || name[0] == '\0') return;
+    /* basename を切り出す (DBCS-aware: SJIS トレイルの 0x5C='\' を区切りと誤認しない。
+     * qb_dos_sft_note_load の basename スキャンと同じイディオム)。 */
     const char *base = name;
-    for (const char *q = name; *q; q++) {
-        if (*q == '/' || *q == '\\') base = q + 1;
+    for (const char *q = name; *q; ) {
+        uint8_t c = (uint8_t)*q;
+        if (((c >= 0x81 && c <= 0x9F) || (c >= 0xE0 && c <= 0xFC)) && q[1]) { q += 2; continue; }
+        q++;
+        if (c == '/' || c == '\\') base = q;
     }
     size_t i = 0;
     for (; base[i] && i + 1 < sizeof(g_stage.name); i++) {
@@ -423,19 +428,32 @@ static void stage_name(const char *name) {
  * cd してから実行した」状態で起動する (相対 open がそのディレクトリ基準で解決する)。 */
 static void stage_dir(const char *name) {
     if (!name) return;
-    /* 最後の区切りを探す。それより前がディレクトリ部。 */
+    /* 最後の区切りを探す。それより前がディレクトリ部。DBCS-aware: SJIS リードバイトの
+     * 次 (trail) は 0x5C='\' になり得るので対で飛ばし区切りと誤認しない。 */
     const char *last_sep = NULL;
-    for (const char *q = name; *q; q++) {
-        if (*q == '/' || *q == '\\') last_sep = q;
+    for (const char *q = name; *q; ) {
+        uint8_t c = (uint8_t)*q;
+        if (((c >= 0x81 && c <= 0x9F) || (c >= 0xE0 && c <= 0xFC)) && q[1]) { q += 2; continue; }
+        if (c == '/' || c == '\\') last_sep = q;
+        q++;
     }
     if (!last_sep) return;                 /* 区切り無し = ルート直下 (dir は空のまま) */
     size_t n = (size_t)(last_sep - name);  /* ディレクトリ部の長さ (末尾区切りを含まない) */
     size_t o = 0;
-    for (size_t i = 0; i < n && o + 1 < sizeof(g_stage.dir); i++) {
-        char c = name[i];
+    for (size_t i = 0; i < n && o + 1 < sizeof(g_stage.dir); ) {
+        uint8_t c = (uint8_t)name[i];
+        /* SJIS ペアは verbatim でコピー ('\\'→'/' 変換から除外。trail の 0x5C を壊さない) */
+        if (((c >= 0x81 && c <= 0x9F) || (c >= 0xE0 && c <= 0xFC)) && i + 1 < n) {
+            if (o + 2 >= sizeof(g_stage.dir)) break;
+            g_stage.dir[o++] = (char)c;
+            g_stage.dir[o++] = name[i + 1];
+            i += 2;
+            continue;
+        }
         if (c == '\\') c = '/';
+        i++;
         if (c == '/' && o == 0) continue;  /* 先頭スラッシュは落とす */
-        g_stage.dir[o++] = c;
+        g_stage.dir[o++] = (char)c;
     }
     while (o > 0 && g_stage.dir[o - 1] == '/') o--;   /* 末尾スラッシュを落とす */
     g_stage.dir[o] = '\0';

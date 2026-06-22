@@ -71,22 +71,6 @@ function clearRun() {
     catch (_) {}
 }
 
-function readTree(dir) {                       // /run ライブ反映用: {rel: bytes} を集める
-    const out = [];
-    function walk(path, prefix) {
-        let ents; try { ents = M.FS.readdir(path); } catch (_) { return; }
-        for (const e of ents) {
-            if (e === '.' || e === '..') continue;
-            const p = path + '/' + e;
-            let st; try { st = M.FS.stat(p); } catch (_) { continue; }
-            if (M.FS.isDir(st.mode)) walk(p, prefix + e + '/');
-            else out.push({ rel: prefix + e, size: st.size });
-        }
-    }
-    walk(dir, '');
-    return out;
-}
-
 // /run/<rel> へ書く (親ディレクトリも作る)。local emu.writeRun と対応。
 function writeRunFile(rel, data) {
     try { M.FS.mkdir('/run'); } catch (_) {}
@@ -278,7 +262,6 @@ onmessage = (ev) => {
         case 'writeRun': writeRunFile(m.rel, m.data); reply(m.id, { ok: true }); break;
         case 'stage': for (const it of (m.items || [])) writeRunFile(it.rel, it.data); reply(m.id, { ok: true }); break;
         case 'scanRun': reply(m.id, { files: scanRunTree() }); break;
-        case 'readTree': reply(m.id, { files: readTree(m.path || '/run') }); break;
         case 'readFile': {
             let bytes = null;
             try { bytes = M.FS.readFile(m.path); } catch (_) {}

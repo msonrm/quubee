@@ -1050,6 +1050,11 @@ async function makeWorkerEmu() {
         textPopoutBtn.hidden = true;
         textSaveBtn.hidden = true;
         viewedEntry = null;
+        // 音楽ポップアップを開いたまま束を閉じた場合の後始末 (UI のみ。再生セッション自体は
+        // resetToIdle が破棄済み)。closePlayer は使わない — あれは stopMusic 経由で
+        // setPaused(true) するため resetToIdle の setPaused(false) を打ち消し HELLO が凍る。
+        if (playerTimer) { clearInterval(playerTimer); playerTimer = null; }
+        playerModalEl.hidden = true;
         renderFileList();
     }
 
@@ -1440,6 +1445,10 @@ async function makeWorkerEmu() {
             if (loadedEntries[i] === selectedEntry) {
                 selectedEntry = null; selectedRecipe = null; runButton.disabled = true; runEntryEl.textContent = '—';
             }
+            if (loadedEntries[i] === focusedEntry) focusedEntry = null;   // 行背景の幽霊ハイライト防止
+            if (loadedEntries[i] === viewedEntry) {                       // Save の stale 書き込み防止
+                viewedEntry = null; textSaveBtn.disabled = true;
+            }
             loadedEntries.splice(i, 1);
             changed = true;
         }
@@ -1607,6 +1616,7 @@ async function makeWorkerEmu() {
 
     // ラベル付きで情報を流し込む (空でもフィールドは残す)。値はそのまま (作者の表記を尊重)。
     function openPlayer(music) {
+        releaseHeldKeys();                        // 押しっぱなしキーの取り残し防止 (keyup 参照)
         const meta = music && music.meta;
         pfFileEl.textContent     = sjisName(baseName(music.ent.name));
         pfDateEl.textContent     = music.ent.mtime ? fmtTime(music.ent.mtime) : '';   // 配布当時のタイムスタンプ
@@ -1851,6 +1861,7 @@ async function makeWorkerEmu() {
     });
     // いま表示している内容 (ファイル名 + テキスト or 画像) をそのまま大きくポップアップに写す。
     const openViewer = () => {
+        releaseHeldKeys();                        // 押しっぱなしキーの取り残し防止 (下記 keyup 参照)
         viewerBodyEl.classList.remove('prose');   // 宣言 (About) の散文モードを解除
         viewerTitleEl.textContent = textHeadEl.textContent;
         if (currentImage) {                       // 画像: canvas を大きく
@@ -1886,6 +1897,7 @@ async function makeWorkerEmu() {
     const ABOUT_TEXT = document.getElementById('about-text').textContent;
     let aboutShowing = false;
     const openAbout = () => {
+        releaseHeldKeys();                        // 押しっぱなしキーの取り残し防止 (keyup 参照)
         viewerTitleEl.textContent = 'QuuBee — 宣言 / Declaration';
         viewerBodyEl.textContent = '';
         // URL だけ実リンク化 (新規タブ)。それ以外はプレーンテキストのまま
@@ -1942,6 +1954,20 @@ async function makeWorkerEmu() {
     // 押されている code を追跡 (オートリピートで重複 keydown を送らない)
     const pressed = new Set();
 
+    // 保持中のキーを全部 keyUp してから追跡集合を空にする。モーダル (ビューア/音楽
+    // ポップアップ) を開く瞬間に呼ぶ — モーダル表示中は keydown/keyup がゲームへ届かず、
+    // キーを押したままモーダルを開いてモーダル中に離すと keyUp が伝わらずゲスト側で
+    // 押しっぱなしになり (以後そのキーが pressed に残って効かなくなる)、window blur まで
+    // 復帰しない。開いた時点で解放しておけばこの取り残しが起きない (ゲームパッドの
+    // 「モーダル中は全キー解放扱い」と同じ思想)。
+    function releaseHeldKeys() {
+        for (const codeName of pressed) {
+            const code = PC98_KEYMAP[codeName];
+            if (code !== undefined) emu.keyUp(code);
+        }
+        pressed.clear();
+    }
+
     const inField = (e) => e.target && (e.target.tagName === 'INPUT' ||
         e.target.tagName === 'TEXTAREA' || e.target.isContentEditable);
     window.addEventListener('keydown', (e) => {
@@ -1996,8 +2022,9 @@ async function makeWorkerEmu() {
 
     function pollGamepads() {
         const want = new Set();
-        // ビューア表示中はキーボード同様ゲームへ送らない (全キー解放扱い)
-        if (viewerModalEl.hidden && navigator.getGamepads) {
+        // モーダル (ビューア / 音楽ポップアップ) 表示中はキーボード同様ゲームへ送らない
+        // (want が空のままになり下のエッジ検出で padPressed が全解放される)
+        if (viewerModalEl.hidden && playerModalEl.hidden && navigator.getGamepads) {
             for (const gp of navigator.getGamepads()) {
                 if (!gp || !gp.connected) continue;
                 const btn = (i) => !!(gp.buttons[i] && gp.buttons[i].pressed);

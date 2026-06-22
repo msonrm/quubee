@@ -1,5 +1,48 @@
 # CHANGELOG
 
+## [コードレビューで見つけた「直しても downside の無い」小修正をまとめて適用] — 2026-06-22
+
+現状コードの棚卸しレビュー (native C + web JS 全体) で見つかった、ASCII/通常ケースの挙動を一切
+変えずに純粋な改善になる項目だけを選んで修正。挙動が変わりうる項目 (IOCTL/read のハンドル0 不整合、
+LZH Level 2 の終端誤検出) と、現状無害な将来向け硬化項目 (extractArchiveToFs の死んだ append 引数、
+到達不能 reloc チェック、qb_audio_fill の frames==s_samples 契約、beep mute の reset desync) は
+意図的に保留 (どれも今すぐの実害なし)。
+
+JS のみ (Wasm 不変・次回ロードで反映):
+- **モーダルを跨いだキー押しっぱなしを解消** (`web/player/bridge.js`): ゲームキーを押したまま
+  ビューア/音楽ポップアップ/About を開き、モーダル表示中に離すと `keyup` がゲストへ届かず
+  (モーダル中は keydown/keyup を素通しさせない設計のため)、そのキーがゲスト側で押しっぱなしになり
+  以後 `pressed` に残って効かなくなっていた (window blur まで復帰しない)。`releaseHeldKeys()` を新設し
+  各モーダルを開く瞬間に保持中キーを全 keyUp + 追跡集合クリア (ゲームパッドの「モーダル中は全解放」と
+  同じ思想)。モーダル中はどのみちキーがゲームに届かないので解放が正しい状態 = 無 downside。
+- **ゲームパッドが音楽ポップアップを無視していた**のを修正 (`pollGamepads`): キーボード経路は
+  ビューア/音楽の両モーダルを見るのに、パッドは `viewerModalEl.hidden` しか見ず音楽ポップアップ表示中も
+  ゲストへ入力が届いていた。`playerModalEl.hidden` も条件に追加し対称化 (条件が偽になれば既存の
+  エッジ検出で `padPressed` が全解放される)。
+- **書庫を閉じても音楽ポップアップのタイマー/モーダルが残る**のを修正 (`closeBundle`):
+  `playerTimer` (250ms interval) を停止しモーダルを隠す。`closePlayer` は使わない — あれは
+  `stopMusic`→`setPaused(true)` で `resetToIdle` の `setPaused(false)` を打ち消し HELLO 待機が凍るため、
+  UI (タイマー/モーダル) だけを片付ける (再生セッション自体は `resetToIdle` が破棄済み)。
+- **実行中に消えたファイルが `viewedEntry`/`focusedEntry` に残る**のを修正 (`syncRunDir`):
+  従来は `selectedEntry` だけクリアしていたため、表示中/Save 対象のファイルをゲームが消すと
+  Save が stale バイトを書け、一覧に幽霊ハイライトが残った。両者も対称にクリア (+Save ボタン無効化)。
+- **デッドコード `readTree` 削除** (`web/player/emu-worker.js`): ライブ反映は `scanRun`+`readFile` が
+  担っており、`readTree` メッセージは bridge.js から一度も送られていなかった (関数 + ハンドラを削除)。
+
+native (要 Wasm 再ビルド・実施済):
+- **`stage_name`/`stage_dir` の DBCS 非対称を解消** (`native/dos_loader.c`): 同ファイル内の他の全関数は
+  DBCS-aware (`qb_dos_sft_note_load` の basename スキャン等) なのに、この 2 関数だけパス分割が
+  バイト単位で、SJIS トレイルの 0x5C ("表"=0x95 0x5C 等) を区切り '\' と誤認していた。同じイディオム
+  (SJIS リードバイト 0x81-0x9F/0xE0-0xFC の次を対で飛ばす) に統一し、`stage_dir` の '\'→'/' 変換も
+  DBCS ペアを verbatim コピーに除外。**ASCII 名では分岐に入らず従来と完全同一** (無 downside)。
+  CLAUDE.md「サブディレクトリ CWD」項の残課題 (日本語名サブディレクトリの 0x5C 誤分割) の C 側を解消
+  (端から端の日本語名サブディレクトリ動作は JS→C のパス符号化都合で未実機確認・別途)。
+
+検証: `bash emscripten/build.sh` clean (patch 01-03 適用・exit 0)。ローダ系テスト 9/9 PASS
+(subdir_cwd / batch / batscript / exec_env / touhou / sft / find_sjis / create_sjis / wildcard_find)。
+bio100 triage 回帰ゼロ (CRASH=0・描画到達 24/31・動作確認 26/31、ベースライン一致。native 変更は
+ASCII 8.3 名コーパスでは literal no-op)。
+
 ## [サブディレクトリに在る image を直接起動すると起動時カレントがそこに設定されず Super Depth が起動しない — を根治] — 2026-06-22
 
 ユーザー報告: Super Depth をサブディレクトリに置くと起動しない。
