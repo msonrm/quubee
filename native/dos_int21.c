@@ -2090,6 +2090,15 @@ int qb_dos_chdir(const char *raw_dos) {
     return 0;
 }
 
+/* 論理カレントを /run 相対パスで直接設定する (検証なし)。g_cwd と同じ正規形を要求:
+ * '/' 区切り・先頭/末尾スラッシュ無し・'' = ルート。loader-start が image のサブ
+ * ディレクトリを「ユーザが cd した状態」として仕込むのに使う (dos_int21.h 参照)。 */
+void qb_dos_set_cwd_rel(const char *rel) {
+    if (!rel || rel[0] == '\0') { g_cwd[0] = '\0'; return; }
+    strncpy(g_cwd, rel, sizeof(g_cwd) - 1);
+    g_cwd[sizeof(g_cwd) - 1] = '\0';
+}
+
 /* AH=3Bh CHDIR。DS:DX = 目標パス (ASCIZ)。生バイトを読んで qb_dos_chdir に委譲する。 */
 static void int21_3b_chdir(void) {
     uint32_t base = lin(CPU_DS, CPU_DX);

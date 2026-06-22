@@ -44,6 +44,8 @@ static struct {
     size_t  file_bytes;         /* 元ファイルのバイト数 (EXE は header 込み。SFT エントリ用) */
     char    cmdline[128];       /* PSP[0x80] 領域に入る最大長 = 127 + 終端 */
     char    name[16];           /* image の basename (大文字、argv[0] 生成用) */
+    char    dir[160];           /* image が在る /run 相対ディレクトリ ('/' 区切り・スラッシュ
+                                 * 無し・'' = ルート)。loader-start が起動時 CWD に使う。 */
     int     ready;
 
     /* EXE 専用 (kind == QB_DOS_IMG_EXE のときのみ有効)。
@@ -414,6 +416,31 @@ static void stage_name(const char *name) {
     g_stage.name[i] = '\0';
 }
 
+/* image が在るディレクトリ部 (最後の区切りより前) を g_stage.dir に保持する。'/'/'\\' を
+ * '/' に正規化、先頭/末尾スラッシュは落とし、ディレクトリ無し (= ルート) なら空のまま。
+ * 大文字化はしない (MEMFS 上の実ディレクトリ名は書庫由来の元ケース。解決は case-insensitive)。
+ * loader-start がこれを起動時 CWD に使い、サブディレクトリ内の image を「実 DOS でユーザが
+ * cd してから実行した」状態で起動する (相対 open がそのディレクトリ基準で解決する)。 */
+static void stage_dir(const char *name) {
+    if (!name) return;
+    /* 最後の区切りを探す。それより前がディレクトリ部。 */
+    const char *last_sep = NULL;
+    for (const char *q = name; *q; q++) {
+        if (*q == '/' || *q == '\\') last_sep = q;
+    }
+    if (!last_sep) return;                 /* 区切り無し = ルート直下 (dir は空のまま) */
+    size_t n = (size_t)(last_sep - name);  /* ディレクトリ部の長さ (末尾区切りを含まない) */
+    size_t o = 0;
+    for (size_t i = 0; i < n && o + 1 < sizeof(g_stage.dir); i++) {
+        char c = name[i];
+        if (c == '\\') c = '/';
+        if (c == '/' && o == 0) continue;  /* 先頭スラッシュは落とす */
+        g_stage.dir[o++] = c;
+    }
+    while (o > 0 && g_stage.dir[o - 1] == '/') o--;   /* 末尾スラッシュを落とす */
+    g_stage.dir[o] = '\0';
+}
+
 static inline uint16_t read_le16(const uint8_t *p) {
     return (uint16_t)p[0] | ((uint16_t)p[1] << 8);
 }
@@ -441,6 +468,7 @@ int qb_dos_stage_com(const uint8_t *image, size_t size, const char *cmdline,
     g_stage.file_bytes = size;          /* COM はファイル全体 = image */
     stage_cmdline(cmdline);
     stage_name(name);
+    stage_dir(name);
     g_stage.ready = 1;
 
     qb_dos_reset_state();
@@ -518,6 +546,7 @@ int qb_dos_stage_exe(const uint8_t *image, size_t size, const char *cmdline,
 
     stage_cmdline(cmdline);
     stage_name(name);
+    stage_dir(name);
     g_stage.ready = 1;
     qb_dos_reset_state();
     fprintf(stderr,
@@ -1272,11 +1301,26 @@ static void build_env(uint16_t seg) {
     poke8(base + p++, 0x00);          /* 変数部末端 (空文字列) → 直前 NUL と合わせ "00 00" 成立 */
     poke8(base + p++, 0x01);          /* WORD: 後続文字列数 = 1 (LE) */
     poke8(base + p++, 0x00);
-    /* argv[0]: ステージした実 image 名から "A:\NAME.EXT" を作る (無ければ既定)。
-     * '\' を含むので、argv[0] からデータディレクトリを切り出すゲームも正常化する。 */
-    char path[32];
-    if (g_stage.name[0]) snprintf(path, sizeof(path), "A:\\%s", g_stage.name);
-    else                 snprintf(path, sizeof(path), "A:\\PROG.EXE");
+    /* argv[0]: ステージした実 image 名から "A:\[SUB\DIR\]NAME.EXT" を作る (無ければ既定)。
+     * サブディレクトリに在る image はその階層も含める (実 DOS のフルパス argv[0] と同じく
+     * 大文字・'\' 区切り)。'\' を含むので、argv[0] からデータディレクトリを切り出すゲームも
+     * 正常化する。 */
+    char path[192];
+    if (g_stage.name[0]) {
+        size_t o = 0;
+        path[o++] = 'A'; path[o++] = ':'; path[o++] = '\\';
+        for (size_t i = 0; g_stage.dir[i] && o + 1 < sizeof(path); i++) {
+            char c = g_stage.dir[i];
+            if (c == '/') c = '\\';                         /* '/' → '\\' */
+            else if (c >= 'a' && c <= 'z') c = (char)(c - 32);  /* 大文字化 */
+            path[o++] = c;
+        }
+        if (g_stage.dir[0] && o + 1 < sizeof(path)) path[o++] = '\\';  /* ディレクトリ/名の区切り */
+        for (size_t i = 0; g_stage.name[i] && o + 1 < sizeof(path); i++) path[o++] = g_stage.name[i];
+        path[o] = '\0';
+    } else {
+        snprintf(path, sizeof(path), "A:\\PROG.EXE");
+    }
     for (size_t i = 0; path[i] && p < cap - 1; i++) poke8(base + p++, (uint8_t)path[i]);
     poke8(base + p++, 0x00);          /* argv[0] 終端 (以降は memset 0) */
 }
@@ -1445,6 +1489,12 @@ int qb_dos_loader_start_hook(void) {
 
     /* 連続実行で前回の cursor 位置が残らないように tty を (0,0) に戻す */
     qb_dos_tty_reset();
+
+    /* image がサブディレクトリに在るなら、その場所を起動時カレントにする (実 DOS で
+     * ユーザが `cd SUBDIR` してから実行した状態の再現)。これが無いと、自分のデータを
+     * 相対パスで開くゲーム (Super Depth 等) がルート基準で探して見つけられず起動できない。
+     * qb_dos_tty_reset がルートへ戻した直後なので、ルート直下 image (dir 空) は no-op。 */
+    qb_dos_set_cwd_rel(g_stage.dir);
 
     /* 合成 SFT を再構築し、最上位 image の stale エントリを書く (実 DOS が EXEC の
      * open→close 後に残すものの再現。AH=52h 経由の SFT walker が正規終端を得る)。 */

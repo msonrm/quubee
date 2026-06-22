@@ -222,7 +222,7 @@ async function makeWorkerEmu() {
         async setPmdIrq(v)           { return (await call({ type: 'call', fn: 'np2kai_set_pmd_irq',  ret: 'number', argTypes: ['number'], args: [v] })).r; },
         async setBeepMute(v)         { return (await call({ type: 'call', fn: 'np2kai_set_beep_mute', ret: 'number', argTypes: ['number'], args: [v] })).r; },
         async enableMidiNow()        { return (await call({ type: 'call', fn: 'np2kai_enable_midi_now', ret: 'number', argTypes: ['number'], prependHandle: true, args: [] })).r; },
-        async stageImage(bytes, cmdline, label, isExe) { return (await call({ type: isExe ? 'stageExe' : 'stageCom', bytes, cmdline, label })).r; },
+        async stageImage(bytes, cmdline, path, isExe) { return (await call({ type: isExe ? 'stageExe' : 'stageCom', bytes, cmdline, path })).r; },
         async stageScript(bytes, label) { return (await call({ type: 'stageScript', bytes, label })).r; },
         async stageBatch(bytes, label)  { return (await call({ type: 'stageBatch', bytes, label })).r; },
         async stageMusic()           { return (await call({ type: 'stageMusic' })).r; },
@@ -1173,9 +1173,11 @@ async function makeWorkerEmu() {
         async setPmdIrq(v) { return setPmdIrq(v); },
         async setBeepMute(v) { return setBeepMute(v); },
         async enableMidiNow() { return enableMidiNow(handle); },
-        async stageImage(bytes, cmdline, label, isExe) {
+        async stageImage(bytes, cmdline, path, isExe) {
+            // path = image の /run 相対パス (例 "SDEPTH/SD.EXE")。C 側 stage_name/stage_dir が
+            // basename と起動時 CWD を切り出す (display label とは別: label は runStaged の UI 用)。
             const ptr = M._malloc(bytes.length); M.HEAPU8.set(bytes, ptr);
-            const r = (isExe ? dosStageExe : dosStageCom)(ptr, bytes.length, cmdline || '', label || '');
+            const r = (isExe ? dosStageExe : dosStageCom)(ptr, bytes.length, cmdline || '', path || '');
             M._free(ptr); return r;
         },
         async stageScript(bytes, label) {
@@ -1468,8 +1470,10 @@ async function makeWorkerEmu() {
         });
     }
 
-    async function stageAndRunImage(bytes, cmdline, label, isExe) {
-        const r = await emu.stageImage(bytes, cmdline, label, isExe);
+    async function stageAndRunImage(bytes, cmdline, label, isExe, path) {
+        // path = image の /run 相対パス (C 側の stage_name/stage_dir 用)。省略時は label を流用
+        // (従来挙動: ルート直下 ASCII 名なら label==path で等価)。label は UI 表示専用。
+        const r = await emu.stageImage(bytes, cmdline, path || label, isExe);
         if (r !== 0) throw new Error(`stage_${isExe ? 'exe' : 'com'} failed r=${r}`);
         await runStaged(label);
     }
@@ -1706,7 +1710,9 @@ async function makeWorkerEmu() {
             }
             const isExe = /\.exe$/i.test(target.name);
             runStatusEl.textContent = `Launching ${label}…`;
-            await stageAndRunImage(target.data, cmdline, label, isExe);
+            // target.name = /run 相対パス (例 "SDEPTH/SD.EXE")。C 側が起動時 CWD をその
+            // サブディレクトリに合わせる (サブディレクトリ起動のデータ相対 open 救済)。
+            await stageAndRunImage(target.data, cmdline, label, isExe, target.name);
         } catch (e) {
             runStatusEl.textContent = `ERROR: ${e.message}`;
             console.error(e);

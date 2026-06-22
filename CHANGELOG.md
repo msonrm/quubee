@@ -1,5 +1,47 @@
 # CHANGELOG
 
+## [サブディレクトリに在る image を直接起動すると起動時カレントがそこに設定されず Super Depth が起動しない — を根治] — 2026-06-22
+
+ユーザー報告: Super Depth をサブディレクトリに置くと起動しない。
+
+真因は **サブディレクトリに在る image を直接起動するとき、起動時カレントディレクトリ (`g_cwd`) を
+その image のディレクトリに合わせていなかったこと**。書庫はサブディレクトリ構造を保持して展開するので
+(`web/player/bridge.js` の `dosPathToSlash`/`writeEntriesToRun`)、ゲームがサブフォルダ配下に在る書庫は
+`/run/DEPTH/depth.exe` + データ群のように展開される。一方で Run のたびに `qb_dos_tty_reset` が
+`g_cwd` をルートへ戻す (`native/dos_int21.c`) だけで、起動 image のディレクトリへ CWD を合わせる処理が
+無かった。Super Depth の `depth.exe` は `depth.bos`/`depth.bgm` 等を相対パスで開くため、`g_cwd=""`(ルート)
+基準で `/run/depth.bos` を探して見つからず、データ読み込み段で起動失敗していた。
+
+これは半分は実 DOS の挙動でもある (実機でも `A:\>DEPTH\DEPTH.EXE` と打てば CWD はルートのままで失敗する。
+当時のユーザは `cd DEPTH` してから `DEPTH.EXE` を実行していた)。つまり欠けていたのは「ファイラから
+サブディレクトリ内の実行ファイルを Run した時に、実 DOS でユーザがやる `cd` 相当の CWD 設定を代行する」点。
+`.bat` 起動の `cd` 経路は既に `g_cwd` をサブディレクトリへ設定して正しく解決できている (東方等で実証済) ので、
+本修正は直接起動時にも**同じ `g_cwd` を自動で立てるだけ** = 実証済み経路と挙動的に等価。
+
+修正 (案A):
+- `native/dos_loader.c`: `g_stage` に `dir[]` を追加し、staging 時にパスからディレクトリ部を抽出する
+  `stage_dir()` を新設 (`qb_dos_stage_com`/`exe` の両方で呼ぶ)。`qb_dos_loader_start_hook` の
+  `qb_dos_tty_reset()` (CWD をルートへ戻す処理) の**直後**に `qb_dos_set_cwd_rel(g_stage.dir)` を呼んで
+  起動時 CWD をその場所に設定 (ルート直下は `dir` 空で no-op)。`build_env` の argv[0] も `A:\DEPTH\DEPTH.EXE`
+  のようにサブディレクトリ込みに整形 (実 DOS のフルパス argv[0] と同じ大文字・`\` 区切り。argv[0] から
+  自分のデータディレクトリを切り出すゲームのため)。
+- `native/dos_int21.c`/`.h`: `g_cwd` を /run 相対パスで直接設定する `qb_dos_set_cwd_rel()` を追加。
+- `web/player/bridge.js`: Run 経路で C の image 名引数に、従来の表示用 `label` ではなく **実 `/run` 相対パス
+  `target.name`** (例 `"DEPTH/depth.exe"`) を渡すよう配線 (C 側 `stage_name`/`stage_dir` が basename と CWD を
+  切り出す)。表示 `label` は `runStaged` の UI 用として分離。`emu-worker.js` の `stageCom`/`stageExe` も同様に更新。
+
+ルート直下起動は `dir` 空のため完全な no-op (回帰なし)。検証 = 恒久回帰 `tools/subdir_cwd_test.js` 新設
+(相対パスで自データを open する最小 COM を、サブディレクトリ起動 / ルート起動の 2 構成で stage して exit code と
+argv[0] を確認、6/0)。既存スイート全 PASS (exec_env / batscript 51 / batch 19 / touhou 4 / sft / xms / pmd 2 /
+find_sjis / wildcard_find / create_sjis)、bio100 triage ベースライン一致 (ALIVE20/RENDER4/EXIT0/CRASH0・
+描画到達24・動作確認26/31、triage は主 exe をルートで stage するため本変更は literal no-op)。
+**ブラウザ実機 T3 確認済 (2026-06-22、ユーザー)**: Super Depth を `DEPTH/` サブフォルダに入れた zip をドロップ →
+ファイラで `DEPTH/depth.exe` を Run で起動・プレイ可能。公開中の (更新前) サイトでは同 zip がエラー = 再現を確認。回帰なし。
+
+既知の限界: 日本語 (Shift-JIS 2 バイト) を含むサブディレクトリ名は、`stage_dir` がトレイルバイト 0x5C を区切りと
+誤認しうる (`stage_name` の既存挙動と同じ)。ASCII フォルダ名 (Super Depth の想定ケース) は完全動作。実タイトルで
+踏んだら `read_dos_rel`/`CHDIR` 同様 DBCS-aware に直す。
+
 ## [font.bmp の JIS 区8 (罫線) 欠落を補完 — VZ Editor の GAME (テトリス) の枠線を表示] — 2026-06-22
 
 ユーザー報告: VZ Editor の `GAME.BAT` で起動するテトリス風ゲームで、プレイフィールドの枠線が表示されない

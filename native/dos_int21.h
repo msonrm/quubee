@@ -48,4 +48,10 @@ void     qb_dos_fh_close_since(uint32_t snapshot);
  * 戻り値 0=成功 / 3=path not found。 */
 int qb_dos_chdir(const char *raw_dos);
 
+/* 論理カレント (g_cwd) を /run 相対パスで直接設定する (検証なし・呼び元が実在を保証)。
+ * rel = '/' 区切り・先頭/末尾スラッシュ無し ('' = ルート)。loader-start が、サブ
+ * ディレクトリに在る image を直接起動する時に「実 DOS でユーザが cd してから実行した」
+ * 状態を再現するために使う (qb_dos_tty_reset でルートへ戻された直後に呼ぶ)。 */
+void qb_dos_set_cwd_rel(const char *rel);
+
 #endif /* QB_DOS_INT21_H */

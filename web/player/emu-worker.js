@@ -292,8 +292,8 @@ onmessage = (ev) => {
         case 'reset': audioActiveReported = false; c.reset(handle); reply(m.id, { ok: true }); break;
 
         // ステージング (生バイトを HEAP 経由で)
-        case 'stageCom': reply(m.id, { r: withHeapBytes(m.bytes, (p, n) => c.stageCom(p, n, m.cmdline || '', m.label || '')) }); break;
-        case 'stageExe': reply(m.id, { r: withHeapBytes(m.bytes, (p, n) => c.stageExe(p, n, m.cmdline || '', m.label || '')) }); break;
+        case 'stageCom': reply(m.id, { r: withHeapBytes(m.bytes, (p, n) => c.stageCom(p, n, m.cmdline || '', m.path || '')) }); break;
+        case 'stageExe': reply(m.id, { r: withHeapBytes(m.bytes, (p, n) => c.stageExe(p, n, m.cmdline || '', m.path || '')) }); break;
         case 'stageScript': reply(m.id, { r: withHeapBytes(m.bytes, (p, n) => c.stageScript(p, n, m.label || '')) }); break;
         case 'stageBatch': reply(m.id, { r: withHeapBytes(m.bytes, (p, n) => c.stageBatch(p, n, m.label || '')) }); break;
         case 'stageMusic': reply(m.id, { r: c.stageMusic() }); break;
