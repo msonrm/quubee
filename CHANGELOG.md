@@ -1,5 +1,54 @@
 # CHANGELOG
 
+## [サブディレクトリ起動 .bat (cd + 本体) で子の argv[0] にサブディレクトリを含める] — 2026-06-23
+
+ユーザー報告: サブディレクトリ内の `depth.exe` を**直接 Run すると動く**ようになった (2026-06-22 の案A 修正)
+ものの、ルートに自作した `depth.bat`:
+
+```
+cd depth
+depth
+```
+
+を Run すると**エラーになる**。**native + Wasm 再ビルド**。
+
+真因 = **EXEC 子の argv[0] にサブディレクトリが入らない**。`.bat` の `cd depth` + `depth` はミニ
+COMMAND.COM が `\depth\depth.exe` を `AH=4Bh` EXEC する経路に入る。その子の per-child env を作る
+`build_child_env` が **basename (`depth.exe`) しか受け取っていなかった**ため、argv[0] が
+`A:\DEPTH.EXE` (サブディレクトリ欠落) になっていた。Super Depth の `depth.exe` は **argv[0] の
+最後の `\` でデータディレクトリを切り出す** (CHANGELOG 既出・`build_env` のコメントにも明記) ので、
+`A:\` を見てデータを探し当てられず破綻していた。直接 Run (`build_env` 経路) は `g_stage.dir` 込みで
+argv[0]=`A:\DEPTH\DEPTH.EXE` を作るので動く、という非対称が症状の核心。`cd depth` 自体は成立しており
+(論理カレント `g_cwd`=depth)、**相対パスでデータを開くゲームなら .bat でも元から動いていた** — argv[0]
+依存のゲームだけが踏む地雷だった。
+
+修正 (`native/dos_int21.c` / `dos_loader.c` / `dos_loader.h`):
+- EXEC ハンドラ (`int21_4b`) が argv[0] 用に **/run 相対フルパス**を `read_dos_rel(DS:DX)` で取得して
+  `qb_dos_exec_load` へ渡す。`read_dos_rel` は drive 除去・cwd 前置・先頭 `\` 除去済みの正準形を返すので、
+  SHELL が EXEC した `\depth\depth.exe` → `depth/depth.exe`、cwd=GAME で相対 `CHILD.EXE` を EXEC →
+  `GAME/CHILD.EXE` と、サブディレクトリ込みの正しい argv[0] 元になる。
+- `qb_dos_exec_load` に `child_path` 引数を追加 (argv[0] 用フルパス)。**SFT note 用の `child_name`
+  (basename) は別途維持** — `qb_dos_sft_note_load` は pmd86 install-check の 8.3 名照合に basename を要求するため
+  (TH03 夢時空が依存)。`child_path` が空なら `child_name` にフォールバック。
+- `build_child_env` が `child_path` を受け、`A:\[SUB\DIR\]NAME` (大文字・`/`→`\`) で argv[0] を組む
+  (直接起動の `build_env` と同じ書式)。argv[0] バッファを 32→192 byte に拡張。
+
+ルート直下の EXEC 子は `read_dos_rel` がスラッシュ無しの basename を返すので argv[0]=`A:\NAME` のまま
+(余計なサブディレクトリは付かない) = **既存の .bat→exe+drv ランチャ群 (ザルバール / Ray / 東方 / MKD /
+POLA / ROLL / SSP / TW212 等) はゼロ回帰**。回帰 = `tools/subdir_bat_argv0_test.js` 新設 (本番経路
+batscript.js→serialize→stage_batch を通し、Case A=サブディレクトリ本体で argv[0] にサブディレクトリ込み・
+相対 open 成功 / Case B=ルート本体で余計な subdir 無しを確認、4/4) + `tools/exec_env_test.js` (root argv[0]
+回帰なし) + `tools/subdir_cwd_test.js` 6/0 + `tools/batch_test.js` 21/0 + `tools/touhou_test.js` 4/0 +
+`tools/sft_test.js` PASS + bio100 triage **ALIVE20/RENDER4/BOOT4/WAIT2/EXIT0/CRASH0・描画到達24/動作確認26**
+(ベースライン一致)。**ブラウザ実機確認済 (2026-06-23、ユーザー)** — ルートの depth.bat (`cd depth` / `depth`)
+が Run で起動。
+
+**追補 (再発防止リファクタ)**: 上記バグの正体は **argv[0] 整形ロジックが `build_env` (最上位プログラム) と
+`build_child_env` (EXEC 子) で別々に書かれていてドリフトした**こと (2026-06-22 に `build_env` 側だけ
+サブディレクトリ対応を入れ、子側が取り残された) だったので、整形を共有ヘルパ `format_argv0(rel, out, cap)`
+に集約した (`native/dos_loader.c`)。両関数とも /run 相対パスを組んで同ヘルパへ委譲する形に統一。振る舞いは
+不変 (`g_stage.name` は `stage_name` で大文字化済み = 再大文字化は no-op、出力は従来同一) で、回帰テスト
+全 PASS のまま「同種バグの再発」を構造的に塞いだ。詳細 [[feedback_dos_env_argv0]]
 ## [空の IME 入力欄でカーソル/編集キーをゲストへ透過 (空欄 = 透明なキーボード窓)] — 2026-06-23
 
 ユーザー案: 「下部のテキスト入力欄が**有効・フォーカス中・空**のときだけ、カーソルキーと

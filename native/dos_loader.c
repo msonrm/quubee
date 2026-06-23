@@ -1316,6 +1316,31 @@ static void qb_dos_env_reset(void) {
  * (set で build_env を再呼びすると顕在化した実バグ。loader-start の 1 回だけなら MCB 後追いで隠れていた)。 */
 #define QB_DOS_ENV_BYTES ((uint32_t)(QB_DOS_LOAD_SEG - 1 - QB_DOS_ENV_SEG) * 16u)
 
+/* /run 相対パス rel (例 "depth/depth.exe" / "PROG.COM" / "") を DOS の argv[0] フルパス
+ * "A:\[SUB\DIR\]NAME" (大文字・'\' 区切り) に整形して out (cap byte) に書く。rel が空/NULL なら
+ * 既定 "A:\PROG.EXE"。byte 単位で 'a'-'z'→大文字・'/'→'\' に直すだけ (DBCS 名は未対応 = 従来同一)。
+ *
+ * argv[0] の最後の '\' でデータディレクトリを切り出すゲーム (Super Depth の depth.exe) のため、
+ * basename だけでなく階層も必ず含める。最上位プログラム (build_env) と EXEC 子 (build_child_env)
+ * で別々に書いていた整形ロジックがドリフトして 2026-06-23 の「.bat 経由だと argv[0] に
+ * サブディレクトリが入らない」バグを生んだので、1 箇所に集約した (再発防止)。 */
+static void format_argv0(const char *rel, char *out, size_t cap) {
+    if (cap == 0) return;
+    size_t o = 0;
+    for (const char *pfx = "A:\\"; *pfx && o + 1 < cap; pfx++) out[o++] = *pfx;
+    if (rel && rel[0]) {
+        for (size_t i = 0; rel[i] && o + 1 < cap; i++) {
+            char c = rel[i];
+            if (c == '/') c = '\\';                          /* '/' → '\\' */
+            else if (c >= 'a' && c <= 'z') c = (char)(c - 32); /* 大文字化 */
+            out[o++] = c;
+        }
+    } else {
+        for (const char *def = "PROG.EXE"; *def && o + 1 < cap; def++) out[o++] = *def;
+    }
+    out[o] = '\0';
+}
+
 /* 環境セグメントを実機 DOS 互換レイアウトで書く: [変数部][\0 終端][WORD=後続文字列数 1][argv0\0]。
  * 変数部は g_env_buf (set で更新される)。set のたびに呼び直してマスタ env を最新化する。
  * 書き込みは必ず env ブロック内 (QB_DOS_ENV_BYTES) に収める (末尾 = program MCB を侵さない)。 */
@@ -1328,26 +1353,19 @@ static void build_env(uint16_t seg) {
     poke8(base + p++, 0x00);          /* 変数部末端 (空文字列) → 直前 NUL と合わせ "00 00" 成立 */
     poke8(base + p++, 0x01);          /* WORD: 後続文字列数 = 1 (LE) */
     poke8(base + p++, 0x00);
-    /* argv[0]: ステージした実 image 名から "A:\[SUB\DIR\]NAME.EXT" を作る (無ければ既定)。
-     * サブディレクトリに在る image はその階層も含める (実 DOS のフルパス argv[0] と同じく
-     * 大文字・'\' 区切り)。'\' を含むので、argv[0] からデータディレクトリを切り出すゲームも
-     * 正常化する。 */
-    char path[192];
+    /* argv[0]: ステージした実 image のパスから "A:\[SUB\DIR\]NAME.EXT" を作る (format_argv0 共用)。
+     * g_stage.dir ('/' 区切り・末尾スラッシュ無し) + g_stage.name を /run 相対パスに組んで渡す
+     * (name 空なら空 rel → 既定 "A:\PROG.EXE")。g_stage.name は stage_name で大文字化済みなので
+     * format_argv0 の再大文字化は no-op (= 従来の build_env 出力と同一)。 */
+    char rel[192];
     if (g_stage.name[0]) {
-        size_t o = 0;
-        path[o++] = 'A'; path[o++] = ':'; path[o++] = '\\';
-        for (size_t i = 0; g_stage.dir[i] && o + 1 < sizeof(path); i++) {
-            char c = g_stage.dir[i];
-            if (c == '/') c = '\\';                         /* '/' → '\\' */
-            else if (c >= 'a' && c <= 'z') c = (char)(c - 32);  /* 大文字化 */
-            path[o++] = c;
-        }
-        if (g_stage.dir[0] && o + 1 < sizeof(path)) path[o++] = '\\';  /* ディレクトリ/名の区切り */
-        for (size_t i = 0; g_stage.name[i] && o + 1 < sizeof(path); i++) path[o++] = g_stage.name[i];
-        path[o] = '\0';
+        if (g_stage.dir[0]) snprintf(rel, sizeof(rel), "%s/%s", g_stage.dir, g_stage.name);
+        else                snprintf(rel, sizeof(rel), "%s", g_stage.name);
     } else {
-        snprintf(path, sizeof(path), "A:\\PROG.EXE");
+        rel[0] = '\0';
     }
+    char path[192];
+    format_argv0(rel, path, sizeof(path));
     for (size_t i = 0; path[i] && p < cap - 1; i++) poke8(base + p++, (uint8_t)path[i]);
     poke8(base + p++, 0x00);          /* argv[0] 終端 (以降は memset 0) */
 }
@@ -1359,12 +1377,16 @@ static void build_env(uint16_t seg) {
  * 呼び元が child_psp 確定後に付け替える (env を子本体より先に確保するため child_psp 未確定)。
  *
  *   src_env_seg = コピー元 env の変数部 (build_env 互換: var\0...\0\0)。
- *   child_name  = 子の basename (大文字化して "A:\\NAME" に整形)。空なら "PROG.EXE"。
+ *   child_path  = 子の /run 相対パス (サブディレクトリ込み・'/' 区切り)。大文字化・'/'→'\\'
+ *                 して "A:\\[SUB\\DIR\\]NAME" に整形する。空なら "PROG.EXE"。サブディレクトリを
+ *                 含めるのは、argv[0] の最後の '\\' でデータディレクトリを切り出すゲーム
+ *                 (Super Depth の depth.exe) が basename だけだと階層を見失い破綻するため
+ *                 (直接起動の build_env と同じ書式)。
  *   戻り値      = 新 env data セグメント。0 = 確保失敗 (呼び元は親 env にフォールバック)。
  *
  * 【拡張ポイント】env_seg!=0 (明示 env) を完全 faithful 化する時は、呼び元で src_env_seg に
  * その明示セグを渡してこの関数を通すだけでよい (現状は corpus に該当タイトルが無いため継承のみ)。 */
-static uint16_t build_child_env(uint16_t src_env_seg, const char *child_name) {
+static uint16_t build_child_env(uint16_t src_env_seg, const char *child_path) {
     /* 1) コピー元の変数部を二重NUL (空文字列終端) まで境界付きで temp に複製。src が壊れている/
      *    終端が無い場合は最小 env ("\0\0" = 変数ゼロ) にフォールバックする (caller env 防御)。 */
     uint8_t  vars[256];
@@ -1379,20 +1401,11 @@ static uint16_t build_child_env(uint16_t src_env_seg, const char *child_name) {
     }
     if (!terminated) { vlen = 0; vars[vlen++] = 0; vars[vlen++] = 0; }
 
-    /* 2) argv[0] パスを "A:\\NAME" (大文字) に整形 (build_env と同じ書式)。 */
-    char path[32];
-    uint32_t pn = 0;
-    path[pn++] = 'A'; path[pn++] = ':'; path[pn++] = '\\';
-    if (child_name && child_name[0]) {
-        for (uint32_t i = 0; child_name[i] && pn + 1 < sizeof(path); i++) {
-            char ch = child_name[i];
-            path[pn++] = (ch >= 'a' && ch <= 'z') ? (char)(ch - 32) : ch;
-        }
-    } else {
-        const char *def = "PROG.EXE";
-        for (uint32_t i = 0; def[i] && pn + 1 < sizeof(path); i++) path[pn++] = def[i];
-    }
-    path[pn] = '\0';
+    /* 2) argv[0] パスを "A:\\[SUB\\DIR\\]NAME" に整形 (format_argv0 共用、build_env と同一書式)。
+     *    child_path は '/' 区切りの /run 相対パス (サブディレクトリ込み)。 */
+    char path[192];
+    format_argv0(child_path, path, sizeof(path));
+    uint32_t pn = (uint32_t)strlen(path);
 
     /* 3) 必要バイト = 変数部 + WORD(後続文字列数=1) + パス + NUL。アリーナから確保。 */
     uint32_t need_bytes = vlen + 2 + pn + 1;
@@ -1639,7 +1652,7 @@ static const char *build_one_fcb(uint32_t fcb_base, const char *p) {
 
 int qb_dos_exec_load(const uint8_t *image, size_t size, uint32_t file_bytes,
                      const char *cmdtail, uint16_t env_seg,
-                     const char *child_name,
+                     const char *child_name, const char *child_path,
                      uint32_t fcb1_lin, uint32_t fcb2_lin) {
     if (!image || size < 2) return -1;
     uint16_t magic = read_le16(image);
@@ -1695,7 +1708,8 @@ int qb_dos_exec_load(const uint8_t *image, size_t size, uint32_t file_bytes,
     if (env_seg == 0) {
         uint32_t ppsp = (uint32_t)g_cur_psp << 4;
         uint16_t parent_env = (uint16_t)(mem[ppsp + 0x2C] | (mem[ppsp + 0x2D] << 8));
-        child_env_seg = build_child_env(parent_env ? parent_env : QB_DOS_ENV_SEG, child_name);
+        child_env_seg = build_child_env(parent_env ? parent_env : QB_DOS_ENV_SEG,
+                                        (child_path && child_path[0]) ? child_path : child_name);
     }
 
     /* DOS の EXEC は子に「最大空きブロック」を渡す。子はその中に PSP+イメージを置き、

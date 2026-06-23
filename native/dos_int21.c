@@ -1910,14 +1910,23 @@ static void int21_4b_exec(void) {
 
     const char *base = host;
     for (const char *q = host; *q; q++) if (*q == '/' || *q == '\\') base = q + 1;
-    fprintf(stderr, "[int21h/4B] EXEC child=%s size=%zu env=%04X cmdtail=\"%s\" (stage1.5: parent resident)\n",
-            base, sz, (unsigned)env_seg, cmdtail);
+    /* argv[0] 用の /run 相対パス (サブディレクトリ込み)。read_dos_rel は drive 除去・cwd 前置・
+     * 先頭 '\' 除去済みの正準形を返す (例: SHELL が EXEC した "\depth\depth.exe" → "depth/depth.exe"、
+     * cwd=GAME で相対 "CHILD.EXE" を EXEC → "GAME/CHILD.EXE")。basename だけだと argv[0] が
+     * "A:\DEPTH.EXE" になり、argv[0] の最後の '\' でデータディレクトリを切り出すゲーム
+     * (Super Depth の depth.exe) がサブディレクトリを見失う (直接起動 build_env と揃える)。
+     * base は SFT note 用の basename として別途維持する (qb_dos_sft_note_load は 8.3 名を要求)。 */
+    char rel[192];
+    read_dos_rel(CPU_DS, CPU_DX, rel, sizeof(rel));
+    fprintf(stderr, "[int21h/4B] EXEC child=%s (argv0 rel=%s) size=%zu env=%04X cmdtail=\"%s\" (stage1.5: parent resident)\n",
+            base, rel, sz, (unsigned)env_seg, cmdtail);
     if (fcb1_lin)
         fprintf(stderr, "[int21h/4B] fcb1 drv=%d name=\"%.8s\" ext=\"%.3s\"\n",
                 (int)peek8(fcb1_lin), (char *)&mem[fcb1_lin + 1], (char *)&mem[fcb1_lin + 9]);
 
-    /* 親常駐のまま子を上にロードして CPU を子へ切替える (base = 子の basename → argv[0] 正規化用)。 */
-    int r = qb_dos_exec_load(childbuf, sz, file_bytes, cmdtail, env_seg, base,
+    /* 親常駐のまま子を上にロードして CPU を子へ切替える (base=basename は SFT note 用、
+     * rel=/run 相対フルパスは argv[0] 用)。 */
+    int r = qb_dos_exec_load(childbuf, sz, file_bytes, cmdtail, env_seg, base, rel,
                              fcb1_lin, fcb2_lin);
     if (r != 0) {
         fprintf(stderr, "[int21h/4B] exec_load failed r=%d\n", r);

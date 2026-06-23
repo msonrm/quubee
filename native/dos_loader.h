@@ -157,13 +157,17 @@ void qb_dos_sft_note_load(const char *name, uint32_t file_bytes);
  *   イメージのみと異なる。0 なら size で代用)、
  * cmdtail=子 PSP[0x80] に入れるコマンドテイル (先頭スペース込み可)、
  * env_seg=パラメータブロック由来の環境セグメント (0 なら親 env 継承)、
- * child_name=子の basename (argv[0] を "A:\\NAME" に正規化するのに使う。NULL/空なら既定)。
+ * child_name=子の basename (SFT stale エントリの 8.3 名に使う。NULL/空可)、
+ * child_path=子の /run 相対パス (サブディレクトリ込み・'/' 区切り)。argv[0] を
+ *   "A:\\[SUB\\DIR\\]NAME" に正規化するのに使う。NULL/空なら child_name にフォールバック。
+ *   サブディレクトリを含めるのは argv[0] の最後の '\\' でデータ位置を切り出すゲーム
+ *   (Super Depth の depth.exe) のため。
  * fcb1_lin/fcb2_lin=EXEC パラメータブロックの FCB1/FCB2 linear addr (0=複写しない)。
  *   子 PSP の 0x5C/0x6C へ 16B 複写する (親が AH=29h で組んだ FCB を子へ渡す経路)。
  * 戻り値 0=成功、<0=失敗。 */
 int qb_dos_exec_load(const uint8_t *image, size_t size, uint32_t file_bytes,
                      const char *cmdtail, uint16_t env_seg,
-                     const char *child_name,
+                     const char *child_name, const char *child_path,
                      uint32_t fcb1_lin, uint32_t fcb2_lin);
 
 /* AH=4Bh AL=03h Load Overlay。子イメージを呼び出し元が指定した load_seg:0000 にロードし、
