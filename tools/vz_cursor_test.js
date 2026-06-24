@@ -65,6 +65,15 @@ const NP2KaiModule = require(path.join(WEB, 'np2kai_core.js'));
 
   for (let f = 0; f < 400; f++) runFrame(handle);   // エディタ起動 + README.DOC オープン待ち
 
+  // CON ワークエリア 0:0713h (dosscrn_25) が 25 行 (非ゼロ) で初期化されていること。
+  // VZ の check_20 (SCRN98.ASM) がここを tstb で読み行高を選ぶ。未設定 (=0) だと
+  // 25 行モードでも 20 行と誤認され縦のラスタ/カーソル計算がずれる (2026-06-24 是正)。
+  const conarea0713 = pk(handle, 0x713);
+  if (conarea0713 === 0) {
+    console.log('FAIL — 0:0713h (dosscrn_25) が 0 = VZ が 20 行と誤認 (25 行で非ゼロを期待)');
+    process.exit(1);
+  }
+
   // ステータス行 (row 0) 先頭の "行:桁" を読む
   function statusLC() {
     let s = '';

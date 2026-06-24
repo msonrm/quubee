@@ -127,6 +127,12 @@ static void tty_sync_conarea(void) {
     int rows = (g_tty_lines20 ? 20 : 25) - (g_tty_sysline ? 1 : 0);
     mem[0x711] = (uint8_t)(g_tty_sysline ? 1 : 0);
     mem[0x712] = (uint8_t)(rows - 1);
+    /* 0:0713h = dosscrn_25 (20/25 行判定フラグ)。非ゼロ=25 行・ゼロ=20 行。
+     * PC-98 版 VZ Editor の check_20 (SCRN98.ASM) がここを tstb で読み、
+     * 行高 (lineh=15 か 19) を選ぶ。未設定 (=0) だと 25 行モードでも 20 行と
+     * 誤認され縦方向のラスタ/カーソル計算がずれる。VZ は nonzero テストのみ
+     * なので 25 行=1 で足りる。 */
+    mem[0x713] = (uint8_t)(g_tty_lines20 ? 0 : 1);
     mem[0x71D] = g_tty_attr;   /* 0:071Dh = CON の現在属性 (DOSBox-X dev_con.h と同じ位置) */
 }
 
@@ -2432,9 +2438,9 @@ void qb_dos_tty_reset(void) {
     g_csi_nparam = 0;
     g_csi_has_digit = 0;
     g_csi_priv = 0;
-    /* DOS CON ワークエリア (0:0711h/0712h/071Dh) を既定 (fkey 非表示・25 行・白属性) に。
-     * master.lib text_fillca/TEXT_HEIGHT がここを直読みする (未初期化=0 だと全画面
-     * fill が 1 行で切れる)。 */
+    /* DOS CON ワークエリア (0:0711h/0712h/0713h/071Dh) を既定 (fkey 非表示・25 行・
+     * 白属性) に。master.lib text_fillca/TEXT_HEIGHT は 0712h を、VZ の check_20 は
+     * 0713h を直読みする (未初期化=0 だと全画面 fill が 1 行で切れたり 20 行と誤認)。 */
     g_tty_lines20 = 0;
     g_tty_sysline = 0;
     g_tty_attr = DEF_ATTR;
