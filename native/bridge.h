@@ -126,6 +126,11 @@ int np2kai_set_beep_mute(int mute);
 __attribute__((visibility("default")))
 int np2kai_set_pmd_irq(int on);
 
+/* ブート時 ITF (BIOS POST) ROM のトグル。on=1 で POST (メモリカウント+ピポ音) を復活、on=0 で
+ * 既定どおりスキップ。次 Run (reset) から反映。qbDebug.itfpost(0|1) の実体。 */
+__attribute__((visibility("default")))
+int np2kai_set_itf_post(int on);
+
 /* CPU クロック倍率の live 設定 (快適化 A/B / async 自動クロック / ベンチ用)。倍率↑ = エミュ CPU
  * 高速化だが host 負荷も比例増 (CPU-bound 時。HLT-idle 時は HLT fast-forward でほぼ無影響)。
  * pull 型音声では host が追いつかない倍率にすると音声が枯れて途切れるので real-time を割らない

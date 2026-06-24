@@ -197,7 +197,15 @@ async function makeWorkerEmu() {
         // 永久に固まる (ローカル経路は rAF が音声と独立なので無音で走り続ける = それに揃える)。
         console.warn('worker audio setup failed — 無音で続行します (映像は動きます):', e);
     }
-    const resumeAudio = () => { if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume().catch(() => {}); };
+    // 最初のユーザー操作で resume したら自分のリスナーを外す (ローカル経路と揃える。
+    // 貼りっぱなしだと以後ずっと毎 pointerdown/keydown で resume() を呼び続ける)。
+    const resumeAudio = () => {
+        if (!audioCtx || audioCtx.state !== 'suspended') return;
+        audioCtx.resume().then(() => {
+            window.removeEventListener('pointerdown', resumeAudio);
+            window.removeEventListener('keydown', resumeAudio);
+        }).catch(() => {});
+    };
     window.addEventListener('pointerdown', resumeAudio);
     window.addEventListener('keydown', resumeAudio);
 
@@ -274,25 +282,31 @@ async function makeWorkerEmu() {
     let emu;   // QB_USE_WORKER → makeWorkerEmu / それ以外 → 下のローカル実装
     M.ccall('np2kai_set_data_dir', null, ['string'], ['/tmp/']);
 
-    // FONT.BMP を有効化。以前「化けの原因」と疑ったが実際は boot.asm の DS
-    // 未設定が真因だった。FONT.BMP が PC-98 規格通りなら 8x16 ネイティブグ
-    // リフが出る。化けるならその時こそ BMP 中身が不正と確定する。
-    await loadDisk(M, 'assets/font.bmp', '/tmp/FONT.BMP');
+    // FONT.BMP / リズムサンプル / boot.d88 の fetch は worker モードでは skip する。
+    // worker 時 M はスタブ (FS.writeFile は no-op) なのでローカル init は「無害に空回り」する
+    // 設計だが、fetch() だけは実ネットワークを叩く。これらは後段の makeWorkerEmu が worker FS へ
+    // 改めて fetch するので、ここで取りに行くと二重取得になる (HTTP キャッシュ頼みの無駄)。
+    if (!QB_USE_WORKER) {
+        // FONT.BMP を有効化。以前「化けの原因」と疑ったが実際は boot.asm の DS
+        // 未設定が真因だった。FONT.BMP が PC-98 規格通りなら 8x16 ネイティブグ
+        // リフが出る。化けるならその時こそ BMP 中身が不正と確定する。
+        await loadDisk(M, 'assets/font.bmp', '/tmp/FONT.BMP');
 
-    // OPNA 内蔵リズム音源 (バスドラ/スネア/シンバル/ハイハット/タム/リム) のサンプルを
-    // データディレクトリへ置く。これが無いと OPNA のリズム部 (reg 0x10 キーオン) が無音になり、
-    // 東方旧作など多くの曲でハイハット等のパーカッションが欠ける (実機では鳴る)。本物の YM2608
-    // リズム ROM はヤマハ著作物なので同梱不可 → font.bmp と同じく**クリーンな代替**を使う:
-    // メモル氏 (J'aime la musique, http://sound.jp/jaime/) が独自作成した「YM2608風リズム音色」
-    // 2608modoki2 (作者明示で「組み込み・再配布は有償無償問わず自由」)。CREDITS 参照。
-    // opna_reset (pccore_reset) が getbiospath()+"2608_*.WAV" を読むので、最初の reset より前に置く。
-    // fmgen は大文字 (2608_BD.WAV)、opngen 経路は小文字 (2608_bd.wav) を探すため両方の名前で書く。
-    for (const nm of ['bd', 'sd', 'top', 'hh', 'tom', 'rim']) {
-        const res = await fetch('assets/rhythm/2608_' + nm + '.wav');
-        if (!res.ok) continue;
-        const data = new Uint8Array(await res.arrayBuffer());
-        M.FS.writeFile('/tmp/2608_' + nm.toUpperCase() + '.WAV', data); // fmgen 既定
-        M.FS.writeFile('/tmp/2608_' + nm + '.wav', data);               // opngen A/B 用
+        // OPNA 内蔵リズム音源 (バスドラ/スネア/シンバル/ハイハット/タム/リム) のサンプルを
+        // データディレクトリへ置く。これが無いと OPNA のリズム部 (reg 0x10 キーオン) が無音になり、
+        // 東方旧作など多くの曲でハイハット等のパーカッションが欠ける (実機では鳴る)。本物の YM2608
+        // リズム ROM はヤマハ著作物なので同梱不可 → font.bmp と同じく**クリーンな代替**を使う:
+        // メモル氏 (J'aime la musique, http://sound.jp/jaime/) が独自作成した「YM2608風リズム音色」
+        // 2608modoki2 (作者明示で「組み込み・再配布は有償無償問わず自由」)。CREDITS 参照。
+        // opna_reset (pccore_reset) が getbiospath()+"2608_*.WAV" を読むので、最初の reset より前に置く。
+        // fmgen は大文字 (2608_BD.WAV)、opngen 経路は小文字 (2608_bd.wav) を探すため両方の名前で書く。
+        for (const nm of ['bd', 'sd', 'top', 'hh', 'tom', 'rim']) {
+            const res = await fetch('assets/rhythm/2608_' + nm + '.wav');
+            if (!res.ok) continue;
+            const data = new Uint8Array(await res.arrayBuffer());
+            M.FS.writeFile('/tmp/2608_' + nm.toUpperCase() + '.WAV', data); // fmgen 既定
+            M.FS.writeFile('/tmp/2608_' + nm + '.wav', data);               // opngen A/B 用
+        }
     }
 
     // ---- AudioContext を先に作って rate を確定させる (従来パス = メインスレッド音声のみ) ----
@@ -335,15 +349,19 @@ async function makeWorkerEmu() {
     // 最小自己起動ディスク (tools/boot_hello/boot.asm から生成)。
     // text VRAM に "HELLO NP2KAI" を直接書いて HLT ループするだけで BIOS
     // コール一切なし → FreeDOS で踏んだ BIOS ROM 問題を完全に回避できる。
+    // worker モードでは makeWorkerEmu が boot.d88 を worker FS へ fetch + insert するので skip
+    // (ここで取りに行くと二重取得・stub M への insert は no-op)。
     const diskUrl = 'assets/np2kai_boot.d88';
     const diskPath = '/tmp/boot.d88';
-    if (await loadDisk(M, diskUrl, diskPath)) {
-        const r = M.ccall('np2kai_insert_fdd', 'number',
-            ['number', 'string', 'number', 'number'],
-            [handle, diskPath, 0, 0]);
-        if (r !== 0) showFatal(`boot disk insert failed (r=${r})`);
-    } else {
-        showFatal(`boot disk fetch failed (${diskUrl})`);
+    if (!QB_USE_WORKER) {
+        if (await loadDisk(M, diskUrl, diskPath)) {
+            const r = M.ccall('np2kai_insert_fdd', 'number',
+                ['number', 'string', 'number', 'number'],
+                [handle, diskPath, 0, 0]);
+            if (r !== 0) showFatal(`boot disk insert failed (r=${r})`);
+        } else {
+            showFatal(`boot disk fetch failed (${diskUrl})`);
+        }
     }
 
     // ---- オーディオ再生 (pull 型, C1) ----
@@ -2096,6 +2114,7 @@ async function makeWorkerEmu() {
     const resetInt21  = M.cwrap('np2kai_debug_int21_reset',  null, []);
     const getReg16    = M.cwrap('np2kai_debug_get_reg16',    'number', ['number', 'number']);
     const setFmgen    = M.cwrap('np2kai_set_fmgen',          'number', ['number']);
+    const setItfPost  = M.cwrap('np2kai_set_itf_post',       'number', ['number']);
     const setMul      = M.cwrap('np2kai_set_clock_multiple', 'number', ['number']);
     const setVol      = M.cwrap('np2kai_set_vol',  null,     ['number','number','number','number']);
     const getVol      = M.cwrap('np2kai_get_vol',  'number', ['number']);
@@ -2198,6 +2217,10 @@ async function makeWorkerEmu() {
         // 86 ボードの割り込み線の上書き。既定は全ブート IRQ12 (de-facto 標準)。snd86irq(0)=既定 IRQ へ、
         // snd86irq(1)=IRQ12 明示、snd86irq()=既定 (IRQ12) に戻す。設定後に対象ゲームを Run (reset) して反映。
         snd86irq: (v) => { forcePmdIrq = (v === undefined ? null : (v ? 1 : 0)); return `forcePmdIrq=${forcePmdIrq} (null=既定IRQ12/1=IRQ12/0=既定IRQ) — 次の Run から反映`; },
+        // ブート時の ITF (BIOS POST) 表示。既定はスキップ (メモリカウント+ピポ音なし=即プレイ)。
+        // itfpost(1)=実機どおり POST を出す (ノスタルジー用)、itfpost(0)=既定どおりスキップ。
+        // 設定後にゲーム/音楽を Run (reset) して反映。
+        itfpost: (on = 1) => `ITF_WORK=${setItfPost(on ? 1 : 0)} (1=POST表示/0=スキップ) — 次の Run から反映`,
         // async 自動クロック (快適化, **既定 OFF**)。autoclock(1)=ON で host の余裕に応じ multiple を
         // floor..ceil 内で自動調整 (達成フレーム時間から逆算)。autoclock(0)=OFF で 20 固定 (既定)。
         // 既定 OFF の理由: 倍率を上げる利得は小さく音楽テンポがもたつく実害がある (上の autoClock 定義参照)。
@@ -2396,6 +2419,8 @@ async function makeWorkerEmu() {
             // --- ライブ制御 (worker へ転送して実効) ---
             fmgen: (on = 1) => { ctl('np2kai_set_fmgen', ['number'], [on ? 1 : 0]);
                 return `usefmgen=${on ? 1 : 0} (1=fmgen/0=opngen) — 次の Run から反映。同じゲームを再実行して聴き比べてください`; },
+            itfpost: (on = 1) => { ctl('np2kai_set_itf_post', ['number'], [on ? 1 : 0]);
+                return `ITF_WORK=${on ? 1 : 0} (1=POST表示/0=スキップ) — 次の Run から反映`; },
             vol: (o) => {
                 if (o !== undefined) {
                     const g = (k) => (o[k] === undefined ? -1 : (o[k] | 0));

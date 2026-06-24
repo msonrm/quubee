@@ -129,6 +129,15 @@ np2kai_handle np2kai_create(void) {
 	 * 48000 の端末で全音源が ~1.5 半音高く再生される (Beep/MIDI/FM 一様に高い真因)。 */
 	if (s_req_audio_rate) np2cfg.samplingrate = s_req_audio_rate;
 	np2cfg.fddequip = 0x03; /* equip drives A and B so diskdrv_* functions accept them */
+	/* ブート時の ITF (BIOS POST) ROM 実行を抑止。POST が出すメモリカウント (例:
+	 * "Memory xxxxx KB" のカウントアップ) と起動ピポ音を丸ごとスキップする。bios_itfcall は
+	 * ITF_WORK の値に関係なく必須の初期化 (memclear/vectorset/bios0x09_init/reinitbyswitch/
+	 * bios0x18_0c) を先に走らせ、ITF_WORK=0 のときは ITF ROM への far call を踏まずに MSW 既定を
+	 * 入れて返すだけ (bios/bios.c:702)。我々は自己起動ディスク (loader.d88) でブートし NEC BIOS の
+	 * ブートストラップに依存しないので、POST 本体は不要。音楽 Run のたびの reset で目に付く
+	 * メモリカウントが消える (ゲーム Run も同様に速くなる)。実機 POST を見たい層向けに
+	 * np2kai_set_itf_post(1) (= qbDebug.itfpost(1)) で復活できる (既定はこの 0 のまま)。 */
+	np2cfg.ITF_WORK = 0;
 	/* マスター音量。【重要】vol_master が実際に効くのは opngen/beep/psg(opngen)/cs4231 等の
 	 * 整数合成経路だけで、既定の fmgen には届かない: fmgen の音量は opna_reset が vol_fm で直接
 	 * 設定し、vol_master を畳む経路 (fmboard_updatevolume→opna_fmgen_setallvolume*_linear) は
@@ -512,6 +521,15 @@ int np2kai_set_pmd_irq(int on) {
 	if (on) np2cfg.snd86opt |= 0x0C;       /* bit2,3 = IRQ セレクト → s_irqtable[3]=0x0c=IRQ12 */
 	else    np2cfg.snd86opt &= ~0x0C;      /* 既定 (IRQ3 相当) に戻す */
 	return np2cfg.snd86opt;
+}
+
+/* ブート時の ITF (BIOS POST) ROM 実行のトグル。on=1 で POST を復活 (メモリカウント+起動ピポ音を
+ * 出す、実機ノスタルジー用)、on=0 で既定どおりスキップ。既定 = 0 (create 時に np2cfg.ITF_WORK=0)。
+ * np2cfg.ITF_WORK は reset 毎の bios_initialize → bios_itfcall で読まれるので、設定後の次 Run (reset)
+ * から反映。qbDebug.itfpost(0|1) の実体。詳細は上の np2cfg.ITF_WORK 設定箇所のコメント。 */
+int np2kai_set_itf_post(int on) {
+	np2cfg.ITF_WORK = on ? 1 : 0;
+	return np2cfg.ITF_WORK;
 }
 
 

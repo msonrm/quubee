@@ -1,5 +1,39 @@
 # CHANGELOG
 
+## [ブート時のメモリカウント (BIOS POST) をスキップ + コードレビュー修正 5 件] — 2026-06-24
+
+### ブート時の ITF (BIOS POST) を既定スキップ — `np2cfg.ITF_WORK = 0` (native + Wasm)
+音楽 Run のたびに目に付く「メモリカウント (Memory xxxxx KB のカウントアップ)」と起動ピポ音は、
+PC-98 BIOS の **ITF ROM POST** が出していたもの。NP2kai の `bios_itfcall` (`core/np2kai/bios/bios.c:702`)
+は `ITF_WORK` の値に関係なく**必須の初期化 (memclear / vectorset / bios0x09_init / reinitbyswitch /
+bios0x18_0c) を先に走らせ**、`ITF_WORK=0` のときだけ ITF ROM への far call を踏まず MSW 既定を入れて返す。
+我々は自己起動ディスク (loader.d88) でブートし NEC BIOS のブートストラップに依存しないので **POST 本体は
+不要** → `native/bridge.c` の create config で `np2cfg.ITF_WORK = 0` に設定。
+- **音楽 Run・ゲーム Run とも起動が即座になる** (実機ノスタルジーより「書庫ドロップ→即プレイ」を優先 =
+  「エミュレータでなくプレイヤー」のコンセプト [[project_concept_v3]] に合致)。
+- **トグルを用意**: 実機 POST を見たい層向けに `np2kai_set_itf_post(int on)` (= **`qbDebug.itfpost(1)`**) で
+  復活、`itfpost(0)` で既定スキップに戻す (次 Run/reset から反映)。ローカル/worker 両モードに配線。
+- 検証: ブートを実走する `touhou_test` 4/4・`pmd_session_test` 3/3・`batch_test` 21/0 PASS。
+  **bio100 triage 回帰ゼロ (むしろ +1)**: 描画到達 25/31・動作確認 27/31・CRASH=0・EXIT=0 (従来 24/26)。
+  ブラウザ実機確認済 (ユーザー「すんごく速くなりました」)。詳細 [[reference_np2kai_post_memcheck]]。
+
+### コードレビュー修正 5 件 (現状コードのざっと点検で見つけた downside なしの小修正)
+- **worker モードの音声ピーク判定が左チャンネルのみ** (`emu-worker.js`): ローカル経路と同じ
+  `Math.max(|l|,|r|)` に。完全右パンの曲で `audioActive` が立たず音楽プレイヤーの計時が 0:00 で
+  止まる非対称を解消 (worker は既定モード)。
+- **worker モードでアセット二重 fetch** (`bridge.js`): font.bmp / リズム WAV 6 本 / boot.d88 の fetch を
+  `!QB_USE_WORKER` でガード (後段 `makeWorkerEmu` が worker FS へ取り直すため二重だった)。
+- **worker の audio-resume リスナーが外れない** (`bridge.js`): resume 成功後に self-remove (ローカルと統一)。
+- **`stage_name` の大文字化が DBCS 非対応** (`dos_loader.c`): basename スキャンは DBCS-aware なのに
+  コピー兼大文字化ループがバイト単位で、SJIS トレイル `0x61-0x7A` を誤大文字化していた。兄弟の
+  `stage_dir` と同じイディオム (SJIS ペアは verbatim) に統一。
+- **EXEC ネスト過多を正直に失敗** (`dos_loader.c` + `dos_int21.c`): 上限 (8) 到達時に WARN だけ出して
+  子を走らせ、子終了で別 EXEC の frame を pop して誤った CS/IP/PSP を復元していた。確保前に `return -11`
+  で弾く (CF=1/AX=8) よう変更 → 子ブロック/env リークも誤復元もゼロ。リーク懸念のあった in-place の
+  if/else 分岐も削除 ([[feedback_hle_honest_failure]] の原則)。corpus では未到達のため実害は元々なし。
+- 回帰: `exec_env` / `subdir_cwd` 6/0 / `subdir_bat_argv0` 4/0 / `vz` / `vz_cursor` / `jed_cursor` /
+  `sft` / `wildcard_find` / `sgr` 含む全テスト PASS、bio100 triage 一致。
+
 ## [JED のカーソルキーを根治 — INT DCh の 1 キー単位 setkey に対応] — 2026-06-24
 
 ユーザー報告: `games/mem_test/jed194n.lzh` (テキストエディタ JED 1.94、H.Orikawa 氏) で JED.CFG を

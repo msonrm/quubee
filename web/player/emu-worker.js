@@ -126,7 +126,9 @@ function drainBlockToRing() {
         const l = src[i * 2], r = src[i * 2 + 1];
         audioData[idx]     = l / 32768;
         audioData[idx + 1] = r / 32768;
-        const a = l < 0 ? -l : l; if (a > peak) peak = a;
+        // L/R 両チャンネルのピークを見る (ローカル経路 bridge.js と揃える)。L だけだと
+        // 完全に右パンの曲で audioActive が立たず、音楽プレイヤーの計時が 0:00 で止まる。
+        const a = Math.max(l < 0 ? -l : l, r < 0 ? -r : r); if (a > peak) peak = a;
         w = (w + 1) | 0;
     }
     Atomics.store(audioCtrl, 0, w);

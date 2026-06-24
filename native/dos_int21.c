@@ -1982,7 +1982,7 @@ static void int21_4b_exec(void) {
                              fcb1_lin, fcb2_lin);
     if (r != 0) {
         fprintf(stderr, "[int21h/4B] exec_load failed r=%d\n", r);
-        CPU_AX = (r == -10) ? 8 : 0x0B;   /* -10=メモリ不足(8), 他=書式不正(11) */
+        CPU_AX = (r == -10 || r == -11) ? 8 : 0x0B;   /* -10=メモリ不足/-11=ネスト過多(8), 他=書式不正(11) */
         CPU_FLAG |= C_FLAG;
         return;
     }

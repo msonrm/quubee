@@ -413,12 +413,22 @@ static void stage_name(const char *name) {
         q++;
         if (c == '/' || c == '\\') base = q;
     }
-    size_t i = 0;
-    for (; base[i] && i + 1 < sizeof(g_stage.name); i++) {
-        char c = base[i];
-        g_stage.name[i] = (c >= 'a' && c <= 'z') ? (char)(c - 32) : c;
+    size_t o = 0;
+    for (size_t i = 0; base[i] && o + 1 < sizeof(g_stage.name); ) {
+        uint8_t c = (uint8_t)base[i];
+        /* SJIS ペアは verbatim でコピー (trail が 0x61-0x7A でも大文字化しない・対で運ぶ。
+         * stage_dir と同じイディオム)。2 byte 分の余地が無ければそこで打ち切る。 */
+        if (((c >= 0x81 && c <= 0x9F) || (c >= 0xE0 && c <= 0xFC)) && base[i + 1]) {
+            if (o + 2 >= sizeof(g_stage.name)) break;
+            g_stage.name[o++] = (char)c;
+            g_stage.name[o++] = base[i + 1];
+            i += 2;
+            continue;
+        }
+        g_stage.name[o++] = (c >= 'a' && c <= 'z') ? (char)(c - 32) : (char)c;
+        i++;
     }
-    g_stage.name[i] = '\0';
+    g_stage.name[o] = '\0';
 }
 
 /* image が在るディレクトリ部 (最後の区切りより前) を g_stage.dir に保持する。'/'/'\\' を
@@ -1655,6 +1665,11 @@ int qb_dos_exec_load(const uint8_t *image, size_t size, uint32_t file_bytes,
                      const char *child_name, const char *child_path,
                      uint32_t fcb1_lin, uint32_t fcb2_lin) {
     if (!image || size < 2) return -1;
+    /* EXEC ネスト過多はここ (確保・状態変更の前) で正直に弾く。これより後で気付くと
+     * 割り当て済みの子ブロック/env がリークし、「親復帰なしのまま子を走らせる」と子の終了時に
+     * g_exec_stack の別フレーム (祖父) を pop して誤った CS/IP/PSP を復元してしまう。実 DOS も
+     * EXEC のリソース枯渇は CF=1 で返す ([[feedback_hle_honest_failure]])。corpus では未到達。 */
+    if (g_exec_sp >= (int)(sizeof(g_exec_stack) / sizeof(g_exec_stack[0]))) return -11;
     uint16_t magic = read_le16(image);
     int is_exe = (magic == 0x5A4D || magic == 0x4D5A);   /* MZ/ZM=EXE、それ以外=COM */
 
@@ -1791,8 +1806,9 @@ int qb_dos_exec_load(const uint8_t *image, size_t size, uint32_t file_bytes,
 
     /* ---- 段階2: 親コンテキストを退避 (子終了でここへ戻る) ----
      * この時点で CPU_SS:SP はまだ親スタックを指し、その先頭に親の INT 21h AH=4Bh が
-     * 積んだ IRET フレーム (IP/CS/FLAGS) がある。g_cur_psp もまだ親の値。 */
-    if (g_exec_sp < (int)(sizeof(g_exec_stack) / sizeof(g_exec_stack[0]))) {
+     * 積んだ IRET フレーム (IP/CS/FLAGS) がある。g_cur_psp もまだ親の値。
+     * 容量は関数入口の guard (return -11) で保証済みなので無条件に push する。 */
+    {
         exec_frame_t *f = &g_exec_stack[g_exec_sp++];
         uint32_t splin = ((uint32_t)CPU_SS << 4) + CPU_SP;
         f->ret_ip = (uint16_t)(mem[splin]     | (mem[splin + 1] << 8));
@@ -1808,8 +1824,6 @@ int qb_dos_exec_load(const uint8_t *image, size_t size, uint32_t file_bytes,
         f->dta_seg = (uint16_t)(dta >> 16);
         f->dta_off = (uint16_t)(dta & 0xFFFF);
         f->fh_mask = qb_dos_fh_snapshot();        /* 親が開いていたハンドル (子終了で差分を閉じる) */
-    } else {
-        fprintf(stderr, "[dos_exec] WARN: EXEC ネスト過多 → この子は親復帰なし\n");
     }
 
     /* 現プロセス PSP を子に切替 (子の 48h 確保はこの PSP を所有者にする) */
