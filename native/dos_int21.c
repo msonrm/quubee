@@ -601,15 +601,22 @@ static void inject_pump(void) {
 void qb_dos_inject_pump(void) { inject_pump(); }
 
 /* ===== INT DCh: PC-98 ファンクション/編集キー定義テーブル =====================================
- * VZ Editor 等は INT DCh setkey (CL=0Dh, DS:DX=テーブル) で自前のキー定義表を BIOS に流し込む。
- * テーブル = [ファンクションキー N本 × 16byte][編集キー 11本 × 6byte] (KTBLSZ レイアウト)。
- * 各ソフトキー (f1-f10 / カーソル・編集キー) を押すと、定義された「発行文字列」がキーバッファ
- * 相当として DOS 入力に流れる。bios09 はソフトキーを (char=0x00, scan=高位) として enqueue する
- * だけ (定義文字列を出さない) ので、我々が DOS CON ドライバとして発行文字列に翻訳する。
- *   - g_fkeytbl_lin : 直近 setkey で渡されたテーブルの linear addr (0 = 未 install)
- *   - 押下キー (char=0x00, scan) → softkey_fill が該当スロットの発行文字列を g_softkey_buf へ。 */
-static uint32_t g_fkeytbl_lin;     /* 0 = 未 install */
-static uint16_t g_fkeytbl_mode;
+ * フルスクリーンエディタ等は INT DCh で自前のキー定義表を BIOS に流し込み、各ソフトキー
+ * (f1-f10 / カーソル・編集キー) を押すと定義された「発行文字列」が DOS 入力に流れる。bios09 は
+ * ソフトキーを (char=0x00, scan=高位) として enqueue するだけ (定義文字列を出さない) ので、
+ * 我々が DOS CON ドライバとして発行文字列に翻訳する。標準テーブル = [ファンクションキー 20本
+ * (f1-f10 ×2: 通常/SHIFT) × 16byte][編集キー 11本 × 6byte] の KTBLSZ レイアウト。
+ *
+ * INT DCh setkey には 2 系統があり、どちらも同じ標準テーブルへ書き込む (実 BIOS は 1 つの
+ * テーブルを両 API で読み書きする):
+ *   - 全体一括 (AX=0, DS:DX=テーブル全体): VZ Editor が使う。テーブルを丸ごと流し込む。
+ *   - 1 キー単位 (AX=key# 1..31, DS:DX=発行文字列): JED が使う。key# で 1 スロットだけ定義
+ *     (例: ↑=key#25 に "FF 3A" → 押下で 0xFF+scan の 2 バイトを発行)。
+ * 旧実装は AX=0 前提で「渡された linear をそのまま保持」していたため、JED の 1 キー単位 setkey
+ * (使い捨て 2 byte バッファ) を保持してしまい softkey_fill がゴミを読んでカーソルキーが死んでいた。
+ * → C 側に正準テーブル g_keytbl を持ち、両 API で populate・softkey_fill はそこを読む。 */
+static uint8_t  g_keytbl[386];     /* C 側正準テーブル (KTBLSZ レイアウト) */
+static int      g_keytbl_set;      /* 0 = 未 install (softkey 翻訳しない=非エディタはゼロ回帰) */
 static uint8_t  g_softkey_buf[24]; /* 直近ソフトキーの発行文字列 (NUL 終端まで)。len/pos は上で宣言済 */
 
 /* 編集/ファンクションキーのテーブル先頭オフセット。標準レイアウト (KTBLSZ) は
@@ -620,26 +627,43 @@ static uint8_t  g_softkey_buf[24]; /* 直近ソフトキーの発行文字列 (N
 #define QB_XKEY_SLOT_BYTES   6
 #define QB_KTBL_STD_SIZE     (QB_XKEY_BASE_OFF + 11 * QB_XKEY_SLOT_BYTES)  /* = 386 */
 
+/* INT DCh ソフトキー番号 (1 キー単位 setkey の AX) → 標準テーブル内の発行文字列オフセット/長。
+ *   1..20  = f1-f10 / SHIFT f1-f10 : スロット (n-1)*16、発行文字列はスロット +6 (先頭6byteは表示ラベル)
+ *   21..31 = 編集キー (RLUP/RLDN/INS/DEL/↑/←/→/↓/CLR/HELP/…): スロット 320 + (n-21)*6
+ * softkey_fill の scan→オフセット計算と必ず一致させること (同じ物理キーが同じ番地を指す)。
+ * 返り値 = 発行文字列長 (書込可能バイト数)、*off = 開始オフセット。範囲外は -1。 */
+static int keynum_issue_slot(int keynum, int *off) {
+    if (keynum >= 1 && keynum <= QB_FKEY_COUNT) {                  /* 1..20 fkey/shift-fkey */
+        *off = (keynum - 1) * QB_FKEY_SLOT_BYTES + 6;
+        return QB_FKEY_SLOT_BYTES - 6;                             /* 10 */
+    }
+    if (keynum >= QB_FKEY_COUNT + 1 && keynum <= QB_FKEY_COUNT + 11) {  /* 21..31 編集キー */
+        *off = QB_XKEY_BASE_OFF + (keynum - (QB_FKEY_COUNT + 1)) * QB_XKEY_SLOT_BYTES;
+        return QB_XKEY_SLOT_BYTES;                                 /* 6 */
+    }
+    return -1;
+}
+
 /* scan コードのソフトキーに対し、install されたテーブルから発行文字列を g_softkey_buf に展開。
  * 返り値 = 文字列長 (0 = ソフトキーでない or 未 install or 定義空)。
  * 編集キー scan: 0x36..0x3f を 0 起点スロットに、ファンクションキー scan: 0x62..0x6b を f1..f10 に。 */
 static int softkey_fill(uint8_t scan) {
-    if (!g_fkeytbl_lin) return 0;
-    uint32_t emit;
+    if (!g_keytbl_set) return 0;
+    int off;
     int maxbytes;                                  /* スロット内で発行文字列が占める領域 (跨ぎ読み防止) */
     if (scan >= 0x62 && scan <= 0x6b) {            /* f1-f10 (通常): 16byte スロット、発行文字列は +6 */
-        emit = g_fkeytbl_lin + (uint32_t)(scan - 0x62) * QB_FKEY_SLOT_BYTES + 6;
+        off = (int)(scan - 0x62) * QB_FKEY_SLOT_BYTES + 6;
         maxbytes = QB_FKEY_SLOT_BYTES - 6;         /* スロット末尾までの 10 byte */
     } else if (scan >= 0x36 && scan <= 0x3f) {     /* 編集キー: 並び順 RLUP/RLDN/INS/DEL/↑/←/→/↓/CLR/HELP */
         /* scan 0x36(RLUP)=slot0 起点。カーソルは ↑0x3a→slot4 / ←0x3b→5 / →0x3c→6 / ↓0x3d→7。 */
-        emit = g_fkeytbl_lin + QB_XKEY_BASE_OFF + (uint32_t)(scan - 0x36) * QB_XKEY_SLOT_BYTES;
+        off = QB_XKEY_BASE_OFF + (int)(scan - 0x36) * QB_XKEY_SLOT_BYTES;
         maxbytes = QB_XKEY_SLOT_BYTES;             /* 編集キーは 6 byte スロット (隣スロットへ食み出さない) */
     } else {
         return 0;
     }
     int n = 0;
     for (int i = 0; i < maxbytes && n < (int)sizeof(g_softkey_buf); i++) {
-        uint8_t b = mem[emit + i];
+        uint8_t b = g_keytbl[off + i];
         if (b == 0) break;
         g_softkey_buf[n++] = b;
     }
@@ -665,18 +689,40 @@ static int dos_next_input_byte(void) {
 }
 
 /* INT DCh ハンドラ (0xFEEA0 トランポリン → biosfunc 経由)。
- * CL=0Dh: キー定義テーブルを install (linear を保持)。CL=0Ch: 現テーブルを DS:DX へ複製。
+ * CL=0Dh setkey: AX=0 で全体一括、AX=key# で 1 キー単位 (どちらも g_keytbl へ書く)。
+ * CL=0Ch getkey: AX=0 で全体を DS:DX へ、AX=key# で 1 キーを DS:DX へ複製。
  * その他 CL (fkey 行表示 on/off 等) は良性 no-op。レジスタ・フラグは変えない。 */
 int qb_dos_intdc_hook(void) {
-    uint8_t cl = (uint8_t)(CPU_CX & 0xFF);
+    uint8_t  cl  = (uint8_t)(CPU_CX & 0xFF);
+    uint16_t ax  = (uint16_t)CPU_AX;
     uint32_t tbl = lin(CPU_DS, CPU_DX);
     if (cl == 0x0D) {                       /* set key table */
-        g_fkeytbl_lin  = tbl;
-        g_fkeytbl_mode = (uint16_t)CPU_AX;
+        if (ax == 0) {                      /* 全体一括 (VZ): テーブルを丸ごと g_keytbl へ */
+            for (int i = 0; i < QB_KTBL_STD_SIZE; i++) g_keytbl[i] = mem[tbl + i];
+            g_keytbl_set = 1;
+        } else {                            /* 1 キー単位 (JED): key#=AX のスロットだけ定義 */
+            int off, len = keynum_issue_slot((int)ax, &off);
+            if (len > 0) {
+                int i;
+                for (i = 0; i < len; i++) {     /* 発行文字列を NUL 終端までコピー */
+                    uint8_t b = mem[tbl + i];
+                    g_keytbl[off + i] = b;
+                    if (b == 0) { i++; break; }
+                }
+                for (; i < len; i++) g_keytbl[off + i] = 0;   /* スロット残りをクリア */
+                g_keytbl_set = 1;
+            }
+        }
         g_softkey_len = g_softkey_pos = 0;  /* 切替時に古い発行文字列を破棄 */
-    } else if (cl == 0x0C) {                /* get key table → DS:DX へ現テーブル (未 install は 0) */
-        for (uint32_t i = 0; i < QB_KTBL_STD_SIZE; i++)
-            mem[tbl + i] = g_fkeytbl_lin ? mem[g_fkeytbl_lin + i] : 0;
+    } else if (cl == 0x0C) {                /* get key table → DS:DX へ (未 install は 0) */
+        if (ax == 0) {
+            for (int i = 0; i < QB_KTBL_STD_SIZE; i++)
+                mem[tbl + i] = g_keytbl_set ? g_keytbl[i] : 0;
+        } else {
+            int off, len = keynum_issue_slot((int)ax, &off);
+            for (int i = 0; len > 0 && i < len; i++)
+                mem[tbl + i] = g_keytbl_set ? g_keytbl[off + i] : 0;
+        }
     }
     return 1;
 }
@@ -2461,8 +2507,8 @@ void qb_dos_tty_reset(void) {
     g_la_len = 0;
     g_0c_flushing = 0;   /* AH=0Ch flush ラッチ (再ポーリング途中での中断対策) */
     /* INT DCh キー定義テーブルも Run 毎にクリア (前 image の再定義を持ち越さない) */
-    g_fkeytbl_lin = 0;
-    g_fkeytbl_mode = 0;
+    g_keytbl_set = 0;
+    memset(g_keytbl, 0, sizeof(g_keytbl));
     g_softkey_len = 0;
     g_softkey_pos = 0;
     g_inject_head = g_inject_tail = 0;   /* ホスト IME 注入 FIFO も Run 毎にクリア (前 Run を持ち越さない) */

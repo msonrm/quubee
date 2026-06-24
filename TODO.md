@@ -27,8 +27,13 @@ PC-98 版 VZ Editor がブラウザで起動・編集できるように。BSD-3 
   RLUP/RLDN/INS/DEL/↑/←/→/↓/CLR/HELP (slot = scan−0x36)。非対応ゲームは表未 install で従来どおり=ゼロ回帰。
 - 恒久回帰: `tools/vz_test.js` (Illegal mode 不発) + `tools/vz_cursor_test.js` (↑↓←→ で行:桁が動く)。
   VZ.COM/DEF/README は BSD-3 で `tools/testdata` に同梱。詳細 CHANGELOG 2026-06-20。
-- **残 (未着手)**: ① JED (jed194n.lzh) は別機構でカーソル不可 (要調査=エディタクラスの次の一手)。
-  ② VZ のファンクションキー行 (F1-F10 ラベル) が画面に出ない (発行自体は機能・ラベル表示のみ未=装飾)。
+- **JED (jed194n.lzh) のカーソルキー = 根治済 (2026-06-24)**: 真因は INT DCh setkey の **1 キー単位 API**
+  (`CL=0Dh, AX=key#, DS:DX=発行文字列`) 未対応 (VZ は全体一括 AX=0)。JED は各ソフトキーに `FF <scancode>`
+  を定義し 0xFF プレフィックス方式で読む。C 側正準テーブル `g_keytbl` を両 API で populate して解決。
+  回帰 `tools/jed_cursor_test.js`。**残**: JED の点滅ハードウェアカーソルが左上に居座る (JED が GDC へ
+  位置を一切設定しない作り = HLE から正しい位置に置けない・要実機突合)。詳細 CHANGELOG 2026-06-24。
+- **残 (未着手)**: VZ のファンクションキー行 (F1-F10 ラベル) が画面に出ない (発行自体は機能・ラベル表示
+  のみ未=装飾。常時 strip は EZKEY.COM が別途出す=実機でも VZ 単体では出ない、と 2026-06-24 に決着)。
 
 ## ✅ PMD (.M) FM 音楽再生 — 完成 (2026-06-16)
 

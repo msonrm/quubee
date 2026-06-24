@@ -69,8 +69,14 @@
     属性リセット（絶対指定）、30-37=文字色（ANSI RGB→PC-98 GRB 写像）、40-47=色+**反転**（背景色は無い）、
     17-23=NEC 別系色コード、2/4/5/7/8=bit4/下線/点滅/反転/シークレット、空 param=0（リセット）。消去系は
     現在属性で埋める。回帰 = `tools/sgr_test.js`。
-    **INT DCh（DOS CON 拡張）は IRET スタブのまま** — corpus 実測で実需は CL=0x10（ファンクションキー文字列の
-    設定/取得、18 本）のみで、fkey 行を描画しない我々では no-op で実害なし。
+    **INT DCh（DOS CON 拡張）= キー定義 setkey/getkey を実装済み**（2026-06-20〜24）。`CL=0Dh` setkey は
+    2 系統あり、どちらも C 側正準テーブル `g_keytbl`（KTBLSZ レイアウト）へ書く: `AX=0` で全体一括（VZ Editor
+    が使う・386byte 表を丸ごと）、`AX=key# 1..31` で 1 キー単位（JED が使う・key# のスロットに発行文字列だけ）。
+    `CL=0Ch` getkey も AX=0/key# 両対応。ソフトキー押下（bios09 が char=0x00 で enqueue）を `g_keytbl` の
+    発行文字列に翻訳して DOS 文字入力へ流す（`softkey_fill`）→ エディタのカーソル/編集キーが効く。未 install
+    （`g_keytbl_set=0`）なら従来どおり char をそのまま返す＝非エディタはゼロ回帰。その他 CL（fkey 行表示 on/off
+    の 0x0F/0x10/0x11 等）は良性 no-op。**残**: JED は GDC ハードウェアカーソルを表示するが位置を一切設定しない
+    （CSRW/AH=13h 皆無）作りなので点滅カーソルが左上に居座る（バイナリに位置設定コードが無く実機でも同じはず）。
 
 12. **AH=58h（メモリ確保ストラテジ）は実際に効く** — get/set strategy（下位 2 ビット: 0=first-fit / 1=best-fit /
     2=last-fit）を MCB アロケータが honor する（2026-06-09。last-fit を要求するゲームに first-fit で応えると本体直上を

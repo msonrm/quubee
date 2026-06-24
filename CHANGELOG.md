@@ -1,5 +1,60 @@
 # CHANGELOG
 
+## [JED のカーソルキーを根治 — INT DCh の 1 キー単位 setkey に対応] — 2026-06-24
+
+ユーザー報告: `games/mem_test/jed194n.lzh` (テキストエディタ JED 1.94、H.Orikawa 氏) で JED.CFG を
+開くと**カーソルキーで編集位置が動かない** (文字入力は 4 行目あたりに出るが矢印キーで移動できない)。
+**native + Wasm 再ビルド**。テキストエディタ互換クラス ([[project_text_editor_class]]) の宿題
+「残=JED 別機構」を消化。
+
+### 真因 = INT DCh setkey の「1 キー単位 API」を未対応だった
+JED.EXE を逆アセンブルして確定 (推測でなく実機契約を読む):
+- JED のキー読みは **INT 21h AH=06h (DL=FF 非ブロッキング) → AL=0xFF なら拡張キーと判断し AH=07h で
+  2 バイト目 (scan) を読む** という 0xFF プレフィックス方式。
+- そのため起動時に **INT DCh の 1 キー単位 setkey (`CL=0Dh`, `AX=key# 1..31`, `DS:DX=発行文字列`)** を
+  31 回呼び、各ソフトキーに `FF <scancode> 00` を割り当てる (↑=key#25 に "FF 3A"、←=26 "FF 3B"、
+  →=27 "FF 3C"、↓=28 "FF 3D")。コードはちょうどそのキーの PC-98 scan コード。
+- 一方 **VZ Editor は「全体一括」setkey (`CL=0Dh`, `AX=0`, `DS:DX=テーブル全体 386byte`)** を使う。
+- 旧 `qb_dos_intdc_hook` は AX=0 前提で「渡された linear をそのまま `g_fkeytbl_lin` に保持」していた。
+  JED の 1 キー単位呼び出しは**使い捨ての 2 byte バッファ** (`095C:0C40`) を渡すので、ループ後
+  `g_fkeytbl_lin` がそのゴミバッファを指し、`softkey_fill` が編集キースロット (+320) のつもりで
+  範囲外を読み → カーソルキーが char=0x00 のまま発行文字列に翻訳されず死んでいた。
+  (実機 BIOS は 1 つの標準テーブルを両 API で読み書きするのに、我々は AX=0 経路しか持っていなかった)
+
+### 修正 (`native/dos_int21.c`)
+- **C 側に正準テーブル `g_keytbl[386]` (KTBLSZ レイアウト) を持ち、両 API で populate**:
+  - `CL=0Dh, AX=0`: テーブルを丸ごと `g_keytbl` へ (VZ、従来と同等)。
+  - `CL=0Dh, AX=key#`: `keynum_issue_slot()` で key# → スロットオフセットに写し、発行文字列だけ書込み
+    (1..20 = fkey/SHIFT-fkey スロット +6、21..31 = 編集キー 320+(n-21)*6 — `softkey_fill` の
+    scan→オフセットと一致)。
+  - `CL=0Ch` get も AX=0/key# 両対応。
+- `softkey_fill` は `g_keytbl` (正準コピー) を読む。install 判定は `g_keytbl_set` (未 install =
+  従来どおり char をそのまま返す → **非エディタはゼロ回帰**)。Run 毎に `qb_dos_tty_reset` でクリア。
+
+### 検証 / 回帰
+- **JED の ↑↓←→ が編集位置を動かすことを headless で確認** (ステータス行 "行:桁" が
+  1:1→DOWN 2:1→3:1→RIGHT 3:2→UP 2:2→LEFT 2:1)。恒久回帰 `tools/jed_cursor_test.js`
+  (jed194n.lzh が無ければ SKIP = 再配布不可・local-only)。
+- 全回帰 PASS: `vz_cursor_test` (VZ の全体一括 setkey が無傷) / `vz_test` (Illegal mode 不発) /
+  `batch_test` 21/0 / `touhou_test` 4/4 / `exec_env` / `sft` / `pmd` 2/0 / `wildcard_find` / `sgr` /
+  `ime_inject`。**bio100 triage ベースライン一致** (ALIVE20/RENDER4/BOOT4/WAIT2/EXIT0/CRASH0、
+  描画到達 24/動作確認 26)。
+- **ブラウザ実機 T3 確認済 (2026-06-24、ユーザー)**: jed194n.lzh をドロップ→JED.CFG を開き、カーソルキーで
+  カーソル位置表示 (行:桁) とカーソル行の下線が移動することを確認。
+
+### 残: 点滅カーソルが左上に居座る (別系統・今回未修正)
+ユーザー報告のもう 1 点「カーソルらしきものが最上行の左端で点滅・本来は 4 行目」を調査した結果、
+**JED は GDC テキストハードウェアカーソルを表示 (INT 18h AH=11h) するが位置を一切設定しない** ことが判明
+(逆アセンブル全数走査で `INT 18h AH=13h` も GDC `CSRW` 直書きも皆無、画面描画は text VRAM 直書き・
+tty 出力ゼロ)。`gdc.m.para` を直読みすると CSRFORM=0x8F (表示 ON)・EAD=0 (row0col0) のままで、
+カーソルキーで論理カーソルを動かしても EAD は動かない。**JED が自分の編集位置を BIOS/GDC に伝えないため、
+HLE 側からはハードウェアカーソルを正しい位置へ置けない**。tty 出力にカーソルを追従させる案も試したが
+JED は tty を使わず無効と判明 (撤回)。**JED はエディタ面に自前カーソルを描かない** (編集セルの属性は
+トグルしない=ソフトカーソル無し。ユーザー指摘どおり JED.CFG にカーソル色定義が無いのと整合) ので唯一の
+カーソルはハードウェアカーソルだが、JED は GDC に CCHAR (形状) しか送らず CSRW (位置) を一切送らない。
+**JED 1.94 のバイナリにはカーソル位置設定コードが存在しない**ため実機でも同じはず (ユーザーは行下線+
+桁ゲージ+"行:桁" で位置判別)。最終確認は実機/参照エミュ突合。
+
 ## [VZ の 20/25 行判定用 CON ワークエリア 0:0713h (dosscrn_25) を初期化] — 2026-06-24
 
 PC-98 版 VZ Editor の「ファンクションキー表示を出せるか」「30 行対応と一緒にやるべきか」の調査
