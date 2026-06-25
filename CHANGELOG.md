@@ -1,5 +1,38 @@
 # CHANGELOG
 
+## [＋Add がいま見ているフォルダ (currentDir) に展開 — サブディレクトリ起動ゲームのセーブ往復が成立] — 2026-06-25
+
+### 背景と動機 (JS のみ・Wasm 不変・ブラウザ実機確認済)
+ユーザー指摘: ファイラの **＋Add** は、サブフォルダに移動した状態でも常にルート (`/run` 直下) に
+展開していた。これがサブディレクトリ起動ゲームの**セーブ往復**を壊していた — Super Depth のように
+本体が `DEPTH/depth.exe` にあるゲームは CWD=`DEPTH/` でセーブを `DEPTH/SAVE.DAT` に書くが、Save
+ボタンは `baseName()` で `SAVE.DAT` としてダウンロードし、再 ＋Add するとルート `/run/SAVE.DAT` に
+落ちる → ゲームは CWD=`DEPTH/` で探すので見つからず往復不成立だった (ルート直下常駐の Canvas-98
+だけ偶然成り立っていた)。「わざわざサブフォルダへ移動して Add する人はそこへ置きたいはず」という
+判断 (ユーザー) で、**＋Add はいま見ているフォルダに展開する**に統一した。
+
+### 修正 — destDir を 1 度確定し全展開経路に通す (`web/player/bridge.js`)
+- `openDropped(file, append)` 冒頭で `const destDir = append ? currentDir : ''` を確定。＋Add は
+  `currentDir` 配下、新規ドロップ/オープンは束を閉じてルート (`closeBundle` が `currentDir=''`)。
+- 4 経路すべてに `destDir` を前置: ① 書庫 `extractArchiveToFs(file, true, destDir)` ② ディスク
+  イメージ `writeEntriesToRun(res.files, destDir)` ③ COM/EXE `rel = destDir + file.name` ④ 単体
+  ファイルは配置も case 比較も `destDir + file.name` 基準 (サブフォルダ内の同名セーブを上書き)。
+- ヘルパー `writeEntriesToRun(entries, destDir='')` / `extractArchiveToFs(file, append, destDir='')`
+  にデフォルト引数を追加。**ルート (`destDir=''`) では全経路が従来と完全一致 = 回帰ゼロ**。
+  `mergeEntries` はフルパスキーの last-wins なので `DEPTH/SAVE.DAT` と root の `SAVE.DAT` は非衝突。
+  `emu.writeRun` が親ディレクトリを mkdir -p するので追加配線は不要。
+- 副次: **＋Add 時に `currentDir=''` へ戻していた旧挙動を廃止**。Add 後もそのフォルダに留まるので
+  追加分がその場の一覧に現れて分かりやすい (新規ドロップは従来どおりルート表示へ)。
+- **書庫も `currentDir` 配下に展開する** (ユーザー判断)。`DEPTH/` を開いた状態で中身が `DEPTH/foo` の
+  パッチ書庫を重ねると `DEPTH/DEPTH/foo` とネストするが、これは展開先を選んだ本人の責任とし、将来の
+  ファイル操作 (ディレクトリ/ファイルのコピペ等) で救済する方針。
+
+### 検証
+`node --check web/player/bridge.js` PASS。ブラウザ実機で確認済 (2026-06-25、ユーザー「問題なし」) —
+サブフォルダを開いた状態の ＋Add (単体ファイル/書庫/COM・EXE) がそのフォルダ配下に着地・その場の
+一覧に出現、ルート表示の新規ドロップは従来どおり。ファイラの DOM クロージャ内コードのためヘッドレス
+回帰の対象外 (既存 `tools/*_test.js` は C/Wasm の DOS 層が対象)。
+
 ## [INT 27h (旧式 TSR) を実装し Microsoft マウスドライバ mouse.com の「停止」を根治] — 2026-06-25
 
 ### 症状と真因

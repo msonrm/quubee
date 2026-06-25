@@ -931,14 +931,19 @@ async function makeWorkerEmu() {
     async function openDropped(file, append) {
         document.body.classList.remove('panel-hidden');   // 投入時はパネルを表示
         syncStageMax();                                   // 取っ手のツールチップも追従
-        currentDir = '';                                  // 投入時はルート表示に戻す
+        // ＋Add は「いま見ているフォルダ」(currentDir 配下) に展開する。サブフォルダへ移動して
+        // から Add する人はそこへ置きたいはず (= サブディレクトリ起動ゲームのセーブ往復が成立)。
+        // 新規ドロップ/オープンは束を閉じてルートから (closeBundle が currentDir='' に戻す)。
+        // destDir をここで 1 度だけ確定し、以下の各経路 (書庫/ディスクイメージ/COM・EXE/単体
+        // ファイル) すべてに効かせる。ルート (destDir='') では全経路が従来挙動と完全一致。
+        const destDir = append ? currentDir : '';
         try {
             // 新規 = 前の束を完全に閉じてから (機械リセット込み — 前のゲームが左画面で
             // 走り続けない)。追加 (＋追加ボタン経由のみ) は重ね展開で機械もそのまま。
             if (!append) await closeBundle();
             runStatusEl.textContent = `Loading ${file.name}…`;
             if (/\.(lzh|zip)$/i.test(file.name)) {
-                mergeEntries(await extractArchiveToFs(file, true));   // /run/ クリアは上で実施済
+                mergeEntries(await extractArchiveToFs(file, true, destDir));  // currentDir 配下へ (/run クリアは closeBundle 済)
             } else if (qbDiskImage.isDiskImageName(file.name)) {
                 // ディスクイメージは「ブートせず中身を /run/ へ取り出す」(FAT12/16 リーダ)。
                 const res = qbDiskImage.extractDiskImage(
@@ -947,11 +952,12 @@ async function makeWorkerEmu() {
                     runStatusEl.textContent = `Cannot extract: ${file.name} — ${res.reason}`;
                     return;
                 }
-                mergeEntries(await writeEntriesToRun(res.files));
+                mergeEntries(await writeEntriesToRun(res.files, destDir));   // currentDir 配下へ
             } else if (isExecName(file.name)) {
                 const data = new Uint8Array(await file.arrayBuffer());
-                await emu.writeRun(file.name, data);
-                mergeEntries([{ name: file.name, data, mtime: file.lastModified ? new Date(file.lastModified) : null }]);
+                const rel = destDir + file.name;                  // currentDir 配下 (ルートなら従来どおり)
+                await emu.writeRun(rel, data);
+                mergeEntries([{ name: rel, data, mtime: file.lastModified ? new Date(file.lastModified) : null }]);
             } else if (append) {
                 // ＋Add 限定: 任意の単体ファイルを /run に重ねる (Save したセーブの読み戻し /
                 // 自作データ・MML 等の持ち込み)。ASCII 8.3 名のみ (上記 isDos83Name の対称性)。
@@ -964,8 +970,11 @@ async function makeWorkerEmu() {
                 const data = new Uint8Array(await file.arrayBuffer());
                 // 既存エントリと大文字小文字だけ違う名前は既存側の表記に揃える (MEMFS は
                 // case-sensitive なので、素直に書くと同名異 case のファイルが 2 つできる)。
-                const prior = loadedEntries.find((e) => e.name.toLowerCase() === file.name.toLowerCase());
-                const rel = prior ? prior.name : file.name;
+                // 比較も配置も destDir (= currentDir) 基準: サブフォルダを開いた状態なら
+                // そのフォルダ内の同名 (セーブ) を上書き、ルートなら従来どおり /run 直下。
+                const want = (destDir + file.name).toLowerCase();
+                const prior = loadedEntries.find((e) => e.name.toLowerCase() === want);
+                const rel = prior ? prior.name : destDir + file.name;
                 await emu.writeRun(rel, data);
                 mergeEntries([{ name: rel, data, mtime: file.lastModified ? new Date(file.lastModified) : null }]);
             } else {
@@ -1113,14 +1122,16 @@ async function makeWorkerEmu() {
     // 区切りは '/' 前提 (呼び出し側で正規化済)。サブディレクトリも再現。data==null は skip。
     // 書き出したエントリ (name=正規化相対パス) を返す。DOS は大小を区別しないので、case の
     // 吸収は C 側 dos_path_to_host の case-insensitive リゾルバに任せる (原ケースのまま保持)。
-    async function writeEntriesToRun(entries) {
+    async function writeEntriesToRun(entries, destDir = '') {
         const written = [], skipped = [], toStage = [];
         for (const ent of entries) {
             if (ent.data == null) {            // 未対応メソッド (例: -lh1-) → skip して継続
                 skipped.push(`${sjisName(ent.name)} (${ent.method || '?'})`);
                 continue;
             }
-            const rel = ent.name.replace(/^\/+/, '');
+            // destDir ('' = ルート / 末尾 '/' 付き) を前置して currentDir 配下へ。書庫内の
+            // サブフォルダはその下にネストする (本人が選んだ展開先=本人の責任、コメント済)。
+            const rel = destDir + ent.name.replace(/^\/+/, '');
             toStage.push({ rel, data: ent.data });
             written.push({ name: rel, data: ent.data, mtime: ent.mtime });
         }
@@ -1131,7 +1142,7 @@ async function makeWorkerEmu() {
         return written;
     }
 
-    async function extractArchiveToFs(file, append) {
+    async function extractArchiveToFs(file, append, destDir = '') {
         const bytes = new Uint8Array(await file.arrayBuffer());
         // .zip は deflate 展開、それ以外 (.lzh) は LZH デコーダ。どちらもブートせず /run/ へ展開する。
         const entries = /\.zip$/i.test(file.name)
@@ -1140,7 +1151,7 @@ async function makeWorkerEmu() {
         if (!append) await clearRunDir();
         // 書庫名の '\' 区切りを SJIS 対応で '/' に正規化 (ダメ文字の誤分割を防ぐ)。
         for (const e of entries) if (e.name) e.name = dosPathToSlash(e.name);
-        return await writeEntriesToRun(entries);
+        return await writeEntriesToRun(entries, destDir);   // destDir 配下へ展開 (＋Add は currentDir)
     }
 
     // ---- Phase 3 ローダ: COM / EXE image を staging → loader.d88 で起動 ----
