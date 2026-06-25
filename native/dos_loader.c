@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT OR GPL-2.0-or-later */
+/* SPDX-License-Identifier: MIT */
 /*
  * Phase 3 ミニマル DOS ローダ — image ステージング + loader-start フック。
  *

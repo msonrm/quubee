@@ -4,10 +4,9 @@ Copyright (c) 2026 msonrm
 
 QuuBee 独自のソースコード（msonrm 著作の部分。`native/` の `bridge`・`dos_loader`・
 `dos_int21`・`qb_*`、`web/player/`、`web/index.html`、`tools/`、`emscripten/`、`docs/` 等。
-第三者由来のファイル／`core/np2kai` サブモジュールを除く）は、MIT または
-GPL-2.0-or-later のいずれかを選択して利用できる（dual license: `MIT OR GPL-2.0-or-later`）。
-本ファイルはその MIT オプションの全文である。配布物全体のライセンスについては
-リポジトリ直下の `LICENSE`（GNU GPL v2 or later）と `CREDITS.md` を参照のこと。
+第三者由来のファイル／`core/np2kai` サブモジュールを除く）は **MIT ライセンス**で利用できる。
+本ファイルはその全文である。配布バイナリ全体は GPL 部品を含まない寛容ライセンスの集合体であり、
+その内訳・各部品の全文の所在はリポジトリ直下の `LICENSE` と `CREDITS.md` を参照のこと。
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

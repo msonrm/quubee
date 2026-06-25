@@ -25,6 +25,35 @@ bash tools/pmd_build/build_pmd.sh
 アセンブラの再ビルドを省略できる(スクリプトが内部で変数 `ASM` に移し `UASM` env を unset する。
 理由は下記の罠を参照)。
 
+## 再現性 / Reproducibility
+
+同梱バイナリ（`web/assets/pmd/` — これが実際に配布される現物）の SHA-256:
+
+```
+PMD86.COM  704a40c518032b5758d76db79772dba9c79e2c2d05eda4a22fd340a46d7a43f0
+PMP.COM    bbf47402c2253777f35422243f27f7b0c7828f113c8fbe9397d2b6b2bd98d1e9
+```
+
+ビルドが決定的になるよう **ソースを commit に pin** している（`build_pmd.sh` の `UASM_REF` / `PMD_REF`。
+`master` は moving target なので固定）:
+
+- UASM（アセンブラ）: `Terraspace/UASM` @ `bffb18461dd541479064990c3b2750ab50ae23e2`
+- PMD ソース: `d2lmirrors/pmd` @ `c620dc95c5e47970e7839cb5f0b7b9ab742d4f46`（KAJA 2019 公開のミラー）
+
+検証手順（誰でも実行でき、同梱バイナリが KAJA 公開ソースからの素直なビルド産物だと確かめられる）:
+
+```
+bash tools/pmd_build/build_pmd.sh
+sha256sum tools/pmd_build/out/PMD86.COM tools/pmd_build/out/PMP.COM
+# → 上のハッシュと一致すれば素性クリーンを byte 単位で確認できる。
+```
+
+**確認済 (2026-06-26)**: pin した上記 commit から `build_pmd.sh` で再ビルドした産物が、同梱バイナリ
+（`web/assets/pmd/`）と **byte 完全一致**することを確認した（`cmp` で PMD86.COM / PMP.COM とも差分ゼロ、
+SHA-256 も上記と一致）。よって同梱バイナリは KAJA 2019 公開ソースからの素直なビルド産物であることが
+byte 単位で裏取りできている。将来ツールチェイン（UASM / gcc）や pin ソースを更新したらこの確認を
+やり直し、`web/assets/pmd/` と本ハッシュを併せて更新すること（回帰は `tools/pmd_test.js`）。
+
 ## パイプラインの中身
 
 1. **UASM(MASM 互換アセンブラ)をビルド** — `nasm` では MASM/OPTASM 構文を通せない。Terraspace/UASM を

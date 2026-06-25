@@ -17,6 +17,11 @@ OUT="$HERE/out"
 mkdir -p "$OUT"
 UASM_REPO="Terraspace/UASM"            # MASM 互換アセンブラ(JWasm フォーク)
 PMD_REPO="d2lmirrors/pmd"              # KAJA 2019 公開ソースのミラー
+# 再現性のためソースを commit に pin する (master は moving target)。これにより誰でも同じバイナリを
+# 再ビルドし、同梱物 (web/assets/pmd/) のハッシュと照合できる。期待ハッシュは README.md「再現性」節。
+# 更新時は両 SHA を上げ、再ビルドして web/assets/pmd/ と README のハッシュも併せて更新すること。
+UASM_REF="bffb18461dd541479064990c3b2750ab50ae23e2"
+PMD_REF="c620dc95c5e47970e7839cb5f0b7b9ab742d4f46"
 
 echo "==== 1. UASM(MASM 互換アセンブラ)をビルド ===="
 # 【重要】UASM は環境変数 UASM を「既定オプション」として読む (MASM の ML 環境変数と同じ)。
@@ -25,7 +30,7 @@ echo "==== 1. UASM(MASM 互換アセンブラ)をビルド ===="
 ASM="${UASM:-}"
 unset UASM 2>/dev/null || true
 if [ -z "$ASM" ] || [ ! -x "$ASM" ]; then
-    gh api "repos/$UASM_REPO/tarball/master" > "$WORK/uasm.tar.gz"
+    gh api "repos/$UASM_REPO/tarball/$UASM_REF" > "$WORK/uasm.tar.gz"
     mkdir -p "$WORK/uasm" && tar xzf "$WORK/uasm.tar.gz" -C "$WORK/uasm" --strip-components=1
     cd "$WORK/uasm"
     # modern gcc-14 対応の最小パッチ(Windows 専用ヘッダ / MSVC グローバル / 厳格化):
@@ -43,7 +48,7 @@ if [ -z "$ASM" ] || [ ! -x "$ASM" ]; then
 fi
 
 echo "==== 2. KAJA 2019 ソースを取得 ===="
-gh api "repos/$PMD_REPO/tarball/master" > "$WORK/pmd.tar.gz"
+gh api "repos/$PMD_REPO/tarball/$PMD_REF" > "$WORK/pmd.tar.gz"
 mkdir -p "$WORK/src" && tar xzf "$WORK/pmd.tar.gz" -C "$WORK/src" --strip-components=1
 cd "$WORK/src"
 

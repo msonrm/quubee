@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT OR GPL-2.0-or-later
+// SPDX-License-Identifier: MIT
 // LZH アーカイブパーサ + LH1/4/5/6/7 / -lh0- デコーダ
 // 対応ヘッダ: Level 0 / Level 1 / Level 2 (Level 3 は throw)
 // 対応メソッド: "-lh1-" (適応Huffman+4KB), "-lh4/5/6/7-" (静的Huffman 4/8/32/64KB),

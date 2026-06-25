@@ -12,7 +12,8 @@ qb/
 ├── CHANGELOG.md             # 変更履歴
 ├── TODO.md                  # 進捗と次ステップ
 ├── CREDITS.md               # 第三者コンポーネントの帰属・ライセンス
-├── LICENSE / LICENSE-MIT    # 配布物 GPL-2.0+ / 独自コード MIT デュアル
+├── LICENSE / LICENSE-MIT    # 配布物=寛容ライセンス集合体(GPLなし) / 独自コード MIT
+├── licenses/                # 同梱第三者アセットのライセンス全文 (fonts/・SF2・GPL-2.0 退避)
 ├── .gitignore
 │
 ├── core/
@@ -97,7 +98,7 @@ qb/
 | 拡張メモリ | 数MB | 32MB (XMS 3.0 HLE で EMB として供給) |
 | グラフィック | 640×400 / 16色 | 同 + PEGC 256 色対応 |
 | サウンド | BEEP / 一部 FM | FM 音源 (OPNA / **fmgen** 既定) + BEEP + **MIDI** (RS-MIDI / MPU-PC98 → TinySoundFont + SF2、レシピ検出時に on-demand 有効化) |
-| クロック倍率 | x1 (実機) | **multiple=20 固定** (≈ 486 @ ~49MHz)。適応オートクロックは既定 OFF (倍率を上げると音楽がもたつくため。qbDebug.autoclock(1) でオプトイン) |
+| クロック倍率 | x1 (実機) | **multiple=27 固定** (≈ 486DX2-66、ZUN 推奨環境相当。2026-06-26 に 20≈49MHz から引き上げ・実機で音切れ無し確認)。適応オートクロックは既定 OFF (qbDebug.autoclock(1) でオプトイン) |
 
 ## CPU エミュレータ構成
 

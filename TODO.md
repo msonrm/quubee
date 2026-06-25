@@ -351,9 +351,9 @@ bio 100% (互換性の長尾) とは別軸のフロント強化。詳細は CHAN
 - [x] **ディスク D&D / ファイル選択 UI** — 任意の .d88 をブラウザにドロップ or クリックでロード
 - [x] **A:/B: 2 ドライブ対応** — スロットごとに独立した D&D/click、B: は挿入時リセットなし
 - [x] **マウス入力** — Pointer Lock + 相対移動 + 左右ボタン、ESC で解除
-- [x] **実 PC-98 ゲームがプレイ可能** — ロードモナーク (.d88) がディスプレイ選択→タイトル→ゲーム本体まで動作、実機相当の速度
-- [x] **2 枚組ゲームが動作** — プリンセスメーカー / プリンセスメーカー 2 (.d88 ×2) がディスプレイ選択→名前入力→オープニングまで進行、CG 表示も綺麗
-- [x] **サウンド対応 (基本)** — qb_soundmng リングバッファ + AudioContext + ScriptProcessorNode、プリメ2 で FM 音源確認、テンポはほぼ正しい
+- [x] **実 PC-98 のゲームディスクが動作** — 自己起動 .d88 がディスプレイ選択→タイトル→本体まで動作、実機相当の速度（CPU/FDD 経路のブリングアップ検証。市販ソフトは射程外）
+- [x] **2 枚組ディスクが動作** — .d88 ×2 構成がディスプレイ選択→名前入力→オープニングまで進行、CG 表示も綺麗（FDD 入替・CG 経路の検証）
+- [x] **サウンド対応 (基本)** — qb_soundmng リングバッファ + AudioContext + ScriptProcessorNode、実 .d88 で FM 音源確認、テンポはほぼ正しい
 - [x] **サウンド品質向上 (AudioWorklet 移行)** — `web/player/audio-worklet.js` 新規。postMessage で Int16Array 転送、Worklet 内部リング ~680ms。実機聴感で微ノイズ・途切れが大幅減
 - [x] **テンポ・音質チューニング (2026-05-27)** — wall-clock 56Hz catch-up 駆動でテンポ正規化、RGB565→RGBA32 LUT 化で主スレッド負荷削減、ソフトクリップ + vol_master=65 + `usefmgen=0` (opngen 採用) で低音ビリビリ歪みを実用レベルまで低減
 - [x] **MIDI (VERMOUTH + freepats) — 鳴る (2026-06-05)** — RS-MIDI (`-X1`, MIDDRV) を `qb_commng.c` で VERMOUTH に結線し、TW212 TWMIDI.BAT で実機ブラウザ発音をユーザー確認。boot は MIDI OFF (即プレイ)、MIDI レシピ Run 時だけ freepats を遅延ロードして有効化 (`enable_midi_now`)。reset 跨ぎ再登録も修正済。MPU98II 直叩き経路は別途 (未対応)。詳細は下記「✅ MIDI 鳴った」を参照
@@ -408,7 +408,7 @@ bio 100% (互換性の長尾) とは別軸のフロント強化。詳細は CHAN
   ゲーム (huma_ts2=東方封魔録 等、MMD ドライバが 0xE0D0 直叩き) が無音だった真因 = `mpuenable=0` で 0xE0D0 未 attach
   だったこと。`np2kai_enable_midi_now` が MIDI レシピ Run 時に MPU98II を限定有効化 (port 0xE0D0/INT2) し、
   `qb_commng.c` で VERMOUTH→(現 TSF) に結線。**ブラウザ実機で発音確認済 (ユーザー)**。
-  ※プリメ 2 のように「音源選択メニューが出ない=MIDI 無し判定」型は別途 (検出経路がメニュー UI 側) で、MPU 直叩き型とは別。
+  ※「音源選択メニューが出ない=MIDI 無し判定」型のタイトルは別途 (検出経路がメニュー UI 側) で、MPU 直叩き型とは別。
 
 - [x] **✅ MIDI 鳴った (2026-06-05、TW212 = bio_100% TWMIDI.BAT)** — RS-MIDI (`-X1`) を VERMOUTH へ
   結線し、実機ブラウザで FM とは別の MIDI 音色が鳴ることをユーザー確認。**遅延 on-demand 配線 + reset 跨ぎ

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT OR GPL-2.0-or-later
+// SPDX-License-Identifier: MIT
 const canvas = document.getElementById('screen');
 const ctx    = canvas.getContext('2d');
 // 初期化失敗・致命的エラーの表示先。Run バーのステータス行が唯一の常設テキスト
@@ -244,6 +244,7 @@ async function makeWorkerEmu() {
         async reset()                { await call({ type: 'reset' }); },
         async setPmdIrq(v)           { return (await call({ type: 'call', fn: 'np2kai_set_pmd_irq',  ret: 'number', argTypes: ['number'], args: [v] })).r; },
         async setBeepMute(v)         { return (await call({ type: 'call', fn: 'np2kai_set_beep_mute', ret: 'number', argTypes: ['number'], args: [v] })).r; },
+        async setClockMultiple(m)    { return (await call({ type: 'call', fn: 'np2kai_set_clock_multiple', ret: 'number', argTypes: ['number'], args: [m] })).r; },
         async enableMidiNow()        { return (await call({ type: 'call', fn: 'np2kai_enable_midi_now', ret: 'number', argTypes: ['number'], prependHandle: true, args: [] })).r; },
         async stageImage(bytes, cmdline, path, isExe) { return (await call({ type: isExe ? 'stageExe' : 'stageCom', bytes, cmdline, path })).r; },
         async stageScript(bytes, label) { return (await call({ type: 'stageScript', bytes, label })).r; },
@@ -1253,6 +1254,7 @@ async function makeWorkerEmu() {
         async reset() { reset(handle); },
         async setPmdIrq(v) { return setPmdIrq(v); },
         async setBeepMute(v) { return setBeepMute(v); },
+        async setClockMultiple(m) { return setMul(m); },
         async enableMidiNow() { return enableMidiNow(handle); },
         async stageImage(bytes, cmdline, path, isExe) {
             // path = image の /run 相対パス (例 "SDEPTH/SD.EXE")。C 側 stage_name/stage_dir が
@@ -2159,6 +2161,10 @@ async function makeWorkerEmu() {
     const setFmgen    = M.cwrap('np2kai_set_fmgen',          'number', ['number']);
     const setItfPost  = M.cwrap('np2kai_set_itf_post',       'number', ['number']);
     const setMul      = M.cwrap('np2kai_set_clock_multiple', 'number', ['number']);
+    // 既定クロック倍率。multiple=27 × baseclock 2.4576MHz ≈ 66MHz (≈486DX2-66、ZUN 推奨環境)。
+    // 旧既定は 20 (≈50MHz)。np2kai_set_clock_multiple は np2cfg.multiple も書くので一度適用すれば
+    // 以後の Run (reset) でも保持される (下の起動時 emu.setClockMultiple で一度だけ適用)。
+    const DEFAULT_MULTIPLE = 27;
     const setVol      = M.cwrap('np2kai_set_vol',  null,     ['number','number','number','number']);
     const getVol      = M.cwrap('np2kai_get_vol',  'number', ['number']);
     const midiBytes   = M.cwrap('np2kai_debug_serial_midi_bytes',  'number', ['number']);
@@ -2178,16 +2184,18 @@ async function makeWorkerEmu() {
     // (np2kai_set_clock_multiple = engine と同手順の changeclock + gdc_updateclock) だけ
     // 借りて、フィードバックは我々の最も信頼できる実時間信号 = run_frame 実測で駆動する。
     const autoClock = {
-        enabled: false,           // 既定 OFF (multiple=20 固定)。倍率を上げる快適化の利得は小さく
+        enabled: false,           // 既定 OFF (multiple=DEFAULT_MULTIPLE=27≈66MHz 固定)。autoclock の快適化利得は小さく
                                   // (大半のゲームは HLT 待ちで倍率ほぼ無影響)、一方で倍率を上げると
                                   // run_frame が重くなり音楽のテンポがもたつく実害が出る (MIDI でも FM/Ray でも
                                   // 確認、2026-06-14)。速さが欲しい稀な CPU 律速タイトルだけ qbDebug.autoclock(1)
                                   // または qbDebug.multiple(N) で手動で上げるオプトイン扱いにする。
-                                  // engine 既定 multiple も 20 (PCBASEMULTIPLE) なので OFF=20 で起動から安定。
-        floor: 20, ceil: 42, step: 2,   // ceil=42: 仕様の x42 快適化目標。これ以上 (例 60) だと
+                                  // 既定倍率は起動時に emu.setClockMultiple(DEFAULT_MULTIPLE=27) で適用し
+                                  // np2cfg.multiple に保持される (ZUN 推奨 66MHz 相当。実機で音切れ無しを確認)。
+        floor: 20, ceil: 42, step: 2,   // floor=20: autoclock ON 時の安全下限 (重い時はここまで下げる)。
+                                  // ceil=42: 仕様の x42 快適化目標。これ以上 (例 60) だと
                                   // vsync ロックゲームの CPU-bound バースト (ステージ遷移等) が
                                   // 速すぎになる (Nyahax で確認) ため、速度の上限として 42 を採用。
-        cur: 20,                  // 現在の倍率 (= pccore.multiple と同期)
+        cur: DEFAULT_MULTIPLE,    // 現在の倍率 (= pccore.multiple と同期)。既定 27≈66MHz
         emaMs: 0,                 // run_frame 1 回の所要 ms の指数移動平均
         budgetMs: 1000 / 56,      // 1 step の real-time 予算 (run loop の TARGET_HZ=56 と一致)
         evalEvery: 30,            // 評価間隔 (rAF 単位 ≈ 0.5s)。頻繁すぎる発振を防ぐ
@@ -2205,12 +2213,17 @@ async function makeWorkerEmu() {
         },
         setEnabled(on) {
             this.enabled = !!on;
-            if (!this.enabled) this.cur = setMul(20);   // OFF で既定 20 に戻す
+            if (!this.enabled) this.cur = setMul(DEFAULT_MULTIPLE);   // OFF で既定 (27≈66MHz) に戻す
             else this.emaMs = 0;                        // ON で EMA を初期化し測り直す
             return this.enabled;
         },
         setManual(m) { this.enabled = false; this.cur = setMul(m); return this.cur; },  // 手動固定
     };
+
+    // 既定クロックを 66MHz (multiple=27) に。np2kai_set_clock_multiple が np2cfg.multiple も書くので
+    // 一度の適用で以後の Run (reset) でも保持される。local/worker 両モードで効く (emu 経由)。
+    // ZUN 推奨環境 (≈486DX2-66) 相当。ブラウザ実機で東方等の音楽・テンポに破綻が無いことを確認済み。
+    emu.setClockMultiple(DEFAULT_MULTIPLE);
 
     window.qbDebug = {
         cs:     () => '0x' + (getCs(handle)       >>> 0).toString(16),
@@ -2265,7 +2278,7 @@ async function makeWorkerEmu() {
         // 設定後にゲーム/音楽を Run (reset) して反映。
         itfpost: (on = 1) => `ITF_WORK=${setItfPost(on ? 1 : 0)} (1=POST表示/0=スキップ) — 次の Run から反映`,
         // async 自動クロック (快適化, **既定 OFF**)。autoclock(1)=ON で host の余裕に応じ multiple を
-        // floor..ceil 内で自動調整 (達成フレーム時間から逆算)。autoclock(0)=OFF で 20 固定 (既定)。
+        // floor..ceil 内で自動調整 (達成フレーム時間から逆算)。autoclock(0)=OFF で既定 27≈66MHz 固定。
         // 既定 OFF の理由: 倍率を上げる利得は小さく音楽テンポがもたつく実害がある (上の autoClock 定義参照)。
         // 第2引数で ceil (上限倍率) を調整可: 例 autoclock(1, 30) で遷移をさらに緩く、(1, 60) で攻める。
         autoclock: (on=1, ceil) => {
@@ -2276,7 +2289,7 @@ async function makeWorkerEmu() {
             if (en && autoClock.cur > autoClock.ceil) autoClock.cur = setMul(autoClock.ceil);
             return en
                 ? `autoclock ON — host 余裕に応じ multiple を ${autoClock.floor}..${autoClock.ceil} で自動調整 (現 ${autoClock.cur})。重い時は自動で下げて音切れを防ぎます`
-                : `autoclock OFF — multiple=20 固定`;
+                : `autoclock OFF — multiple=${DEFAULT_MULTIPLE} 固定 (≈66MHz)`;
         },
         // CPU クロック倍率の手動上書き (autoclock を OFF にして固定)。引数なしで現状表示。
         // 快適化の A/B 用 (例: qbDebug.multiple(42) で速さ・音切れを体感比較)。

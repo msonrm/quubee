@@ -98,14 +98,23 @@ set(CPU_SOURCES
 )
 file(GLOB IA32_SOURCES        ${NP2}/i386c/ia32/*.c)
 file(GLOB IA32_INST_SOURCES   ${NP2}/i386c/ia32/instructions/*.c)
-# FPU: DOSBox 由来の DOSBOX2 系エミュレータを使う。
+# FPU: BSD ライセンスの Berkeley SoftFloat 3e (softfloat3) を使う。
 # FPU 命令 (例: FADD ST(0), ST(1)) は INT 7 (#NM) を吐くだけだとハンドラがない
 # OS (FreeDOS 等) でループするため、ダミーではなく本物のエミュを入れる。
 # fpdummy.c も残しておく: NOFPU_* シンボルが fpu.c 内のフォールバック経路で
 # 参照される可能性があるため。
+#
+# 2026-06-26 ライセンス整合性のため DOSBOX2 (fpemul_dosbox2.c, GPLv2+) → SOFTFLOAT3
+# (fpemul_softfloat3.cpp [BSD/NONAKA] + softfloat3/*.c [Berkeley SoftFloat 3e, BSD-3]) へ切替。
+# 理由: 我々の既定 FM エンジン fmgen は cisc 氏独自ライセンス (GPL 非互換: フリーソフト限定 +
+# 商用要許諾) で、GPL の DOSBox FPU と同一バイナリにリンクすると配布不能 (ライセンス矛盾)。
+# 本家 NP21/W も rev.98 以降この BSD 構成。これでバイナリから GPL が消え permissive 化する。
+# (指摘: msonrm/quubee Issue #1)
+file(GLOB SOFTFLOAT3_SOURCES ${NP2}/i386c/ia32/instructions/fpu/softfloat3/*.c)
 set(FPU_SOURCES
     ${NP2}/i386c/ia32/instructions/fpu/fpdummy.c
-    ${NP2}/i386c/ia32/instructions/fpu/fpemul_dosbox2.c
+    ${NP2}/i386c/ia32/instructions/fpu/fpemul_softfloat3.cpp
+    ${SOFTFLOAT3_SOURCES}
 )
 # SIMD: USE_SSE / USE_MMX / USE_3DNOW は定義しない (= 命令実行は UD_EXCEPTION
 # に落ちる) が、inst_table.c が SSE_*/MMX_*/AMD3DNOW_* シンボルを参照する。
@@ -282,6 +291,7 @@ target_include_directories(np2kai_core PRIVATE
     ${NP2}/i386c/ia32
     ${NP2}/i386c/ia32/instructions
     ${NP2}/i386c/ia32/instructions/fpu
+    ${NP2}/i386c/ia32/instructions/fpu/softfloat3   # Berkeley SoftFloat 3e ヘッダ (platform.h 等)
 )
 
 # Compile definitions (from Makefile.common NP2DEFINE, i286 mode)
@@ -303,8 +313,11 @@ target_compile_definitions(np2kai_core PRIVATE
     SUPPORT_GAMEPORT
     SUPPORT_CRT31KHZ
     USE_TSC              # RDTSC 命令で CPU_MSR_TSC を無条件参照するので必須
-    USE_FPU              # FPU 命令 (D8〜DF) を本物のエミュで処理
-    SUPPORT_FPU_DOSBOX2  # DOSBox 2 系 FPU エミュレータを使う
+    USE_FPU                # FPU 命令 (D8〜DF) を本物のエミュで処理
+    SUPPORT_FPU_SOFTFLOAT3 # BSD の Berkeley SoftFloat 3e FPU (GPL の DOSBox FPU は不使用)
+    USE_MMX                # SoftFloat FPU は FPU/MMX 共有レジスタ状態 (FPU_STAT.mmxenable) を
+                           # リセットするため必須 (DOSBox FPU 経路では不要だった)。副作用として
+                           # MMX 命令が UD でなく実機どおり実行されるが、対象ソフトに実害なし。
     BIOS_IO_EMULATION
     OSLANG_UTF8
     OSLINEBREAK_CRLF

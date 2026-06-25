@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT OR GPL-2.0-or-later
+// SPDX-License-Identifier: MIT
 // PC-98 フロッピーディスクイメージ → 中身 (FAT12/16 ファイル) 取り出し。
 //
 // 方針: イメージは「ブートさせず・ファイルとして取り出す」だけ (concept の赤線維持)。

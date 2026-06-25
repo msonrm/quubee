@@ -25,6 +25,12 @@ mkdir -p "$DIST"
 cp -rL web/. "$DIST/"                                    # -L: symlink は実体化 (現状 web/ に無し)
 find "$DIST" -name '*.map' -delete
 
+# 同梱バイナリ (font.bmp=修正BSD / soundfont.sf2 / PMD / リズム音色) の帰属・ライセンス全文を
+# 公開ビルドにも届ける。BSD のバイナリ再配布条項 (著作権表示を「頒布物に付属する材料」に再現する)
+# を、サイト自身が CREDITS.md + licenses/ を配ることで満たす。歓迎パネルの「CREDITS.md」リンクの実体。
+cp CREDITS.md "$DIST/CREDITS.md"
+cp -rL licenses "$DIST/licenses"
+
 # Cloudflare Pages は 1 ファイル 25MiB 上限。soundfont.sf2 (GeneralUser GS ~31MB) は超えるので、
 # 16MiB ごとに soundfont.sf2.00/.01… へ分割し、単一ファイルは dist から除く。
 # ブラウザ側 (bridge.js ensureMidiLoaded) は単一が無ければ連番パートを 404 まで連結する。

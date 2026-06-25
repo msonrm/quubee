@@ -55,9 +55,11 @@ HLE-DOS と実 DOS との差異・未対応は [docs/dos_hle_gaps.md](docs/dos_h
 
 ## ライセンス
 
-- **配布物（`np2kai_core.wasm` を含むアプリ全体）: GNU GPL v2 or later**（[LICENSE](LICENSE)）。
-  同梱する DOSBox 由来の FPU エミュレータ（`fpemul_dosbox*.c`, GPLv2-or-later）が結合物全体に GPL を及ぼすため。
+- **配布物（`np2kai_core.wasm` を含むアプリ全体）: 寛容ライセンスの集合体（GPL なし）**（[LICENSE](LICENSE)）。
+  FPU は GPL の DOSBox 由来ではなく BSD の Berkeley SoftFloat 3e を使い、コピーレフト部品をビルドに含めない。
 - **QuuBee 独自のソース**（`native/` の `qb_*`/`bridge`/`dos_*`、`web/player/`、`tools/`、`emscripten/`、`docs/` 等、
-  msonrm 著作の部分）は **`MIT OR GPL-2.0-or-later` のデュアル**（[LICENSE-MIT](LICENSE-MIT)）。FPU を除けば MIT 部分のみで再利用可。
-- 第三者コンポーネントの内訳（NP2kai=MIT / i386c=BSD / DOSBox FPU=GPLv2 / font.bmp=修正BSD）は [CREDITS.md](CREDITS.md)。
-- 「著作権クリーン」は NEC BIOS / MS-DOS 等の proprietary を**同梱しない**意味で、GPL（オープンソース）は公開ホスティングと両立する。
+  msonrm 著作の部分）は **MIT**（[LICENSE-MIT](LICENSE-MIT)）。
+- 第三者コンポーネントの内訳（NP2kai=MIT / i386c=BSD / SoftFloat3 FPU=BSD-3 / fmgen=cisc 独自(フリーソフト配布) /
+  font.bmp=修正BSD）は [CREDITS.md](CREDITS.md)。
+- 「著作権クリーン」は NEC BIOS / MS-DOS 等の proprietary を**同梱しない**こと、加えて配布バイナリ内の各部品
+  ライセンスが相互に整合していること（2026-06-26 に GPL 部品を除去して整合化。経緯は CREDITS.md）。

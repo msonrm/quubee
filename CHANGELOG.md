@@ -1,5 +1,49 @@
 # CHANGELOG
 
+## [既定 CPU クロックを 66MHz (multiple=27) に引き上げ] — 2026-06-26
+
+### 背景 (JS のみ・Wasm 不変・ブラウザ実機で確認)
+既定クロックは `multiple=20`(≈486DX2-50MHz)だったが、ZUN 推奨環境の **66MHz**(≈486DX2-66)に合わせて
+`multiple=27`(27×2.4576MHz≈66.4MHz)を既定化。ユーザーがブラウザ実機で `qbDebug.multiple(27)` を試し、
+東方等で音楽・テンポの破綻が無いことを確認した上での変更。
+
+### 実装 (`web/player/bridge.js`)
+- `DEFAULT_MULTIPLE = 27` を新設。起動時に一度だけ `emu.setClockMultiple(DEFAULT_MULTIPLE)` を呼ぶ。
+  `np2kai_set_clock_multiple` は **`np2cfg.multiple` も書く**(`native/bridge.c`)ので、一度適用すれば
+  以後の Run(reset)でも 66MHz が保持される(毎ブックフックもエンジン改変も不要)。
+- `emu` 抽象に `setClockMultiple` を追加(local=cwrap 直叩き / worker=call 経由)。両モードで効く。
+- autoClock の既定値(`cur`)・OFF 時の戻り先・表示文字列を `DEFAULT_MULTIPLE` 基準に更新。
+  autoclock の floor=20 は「ON 時の安全下限」として維持(重い時はここまで自動で下げる)。
+- 過去 2026-06-14 に「倍率↑は音楽もたつき」と判断し 20 既定にしたが、ユーザーの実機 A/B で 27 は
+  問題無しと確認できたため引き上げ。autoclock を既定 OFF にする方針自体は維持。
+
+## [ライセンス整合性の修正 — 配布バイナリから GPL を除去し permissive に整合] — 2026-06-26
+
+### 背景 (指摘: msonrm/quubee Issue #1)
+配布バイナリ(`np2kai_core.wasm`)が **GPL の DOSBox 由来 FPU** と **GPL 非互換の fmgen**(cisc 氏独自
+ライセンス: フリーソフト配布限定・商用要許諾)を同時にリンクしており、どちらのライセンス条件も同時に
+満たせない(配布不能)状態だった。CREDITS/LICENSE の「配布物全体は GPL」表記はそもそも実現不可能だった。
+
+### 修正 (`native/CMakeLists.txt` + Wasm 再ビルド)
+- FPU を **`fpemul_dosbox2.c`(GPLv2+) → `fpemul_softfloat3.cpp` + `softfloat3/*.c`(Berkeley SoftFloat 3e,
+  BSD-3)** に差替(`SUPPORT_FPU_DOSBOX2` → `SUPPORT_FPU_SOFTFLOAT3`)。本家 NP21/W も rev.98 以降この構成。
+- SoftFloat FPU は FPU/MMX 共有レジスタ状態(`FPU_STAT.mmxenable`)を要求するため **`USE_MMX` を追加**
+  (副作用は MMX 命令が UD でなく実行されるようになるだけ・実害なし)。
+- **fmgen は維持**(GPL が消えたので非互換問題は解消。QuuBee は無償配布なので fmgen の「フリーソフト配布」
+  条件も満たす)。これで配布バイナリから GPL が消え、全体が寛容ライセンス(BSD/MIT/fmgen 独自)で整合。
+- **検証**: 再ビルド OK、ヘッドレス回帰 33 本全 PASS、東方旧作 4/4 PASS、FreeDOS ブート(FPU 実動)完走、
+  bio100 triage CRASH=0・描画到達 25/31(回帰なし)。FPU 差替の性能影響は A/B 実測で誤差レベル(変化なし)。
+- `LICENSE`(GPLv2 全文 → permissive 集合体の概要・GPLv2 全文は `licenses/GPL-2.0.txt` へ退避)・
+  `LICENSE-MIT`(MIT 単独化)・`CREDITS.md`・`README.md`・`docs/structure.md`・`CLAUDE.md`・独自コードの
+  SPDX ヘッダ 6 本(`MIT` 単独)を改訂。
+
+### あわせて: 同梱アセットの帰属を公開ビルドに同伴 (著作権クリーンの詰め)
+- `font.bmp`(修正BSD)等の構成フォント個別ライセンスを `licenses/fonts/` に収録、SF2 ライセンス全文を
+  `licenses/soundfont-GeneralUser-GS-LICENSE.txt` に。`tools/deploy.sh` が `CREDITS.md` + `licenses/` を
+  `dist/` に同梱(BSD のバイナリ再配布条項を満たす)。歓迎パネルに `CREDITS.md` リンクを追加。
+- PMD 同梱バイナリの再現性を担保(ソースを commit に pin・SHA-256 記録・再ビルドで byte 一致を確認)。
+- 公開ドキュメントの市販タイトル名(プリンセスメーカー/ロードモナーク)を汎用表現に置換。
+
 ## [画像/音楽 (.MAG/.PI/.M) を単体で開けるように — 閲覧専用形式の非破壊オープン] — 2026-06-25
 
 ### 背景と方針 (JS のみ・Wasm 不変・実機確認はユーザーに委任)
@@ -3059,7 +3103,7 @@ AH=4Bh EXEC** で起動する (cmdline 例 `"SIZ01 ZBG2"` = 面 + 図柄)。面 
 
 **背景:** コードレビュー中に発見した潜在バグを修正し、Super Depth (DEPTH100.LZH) で検証。
 3 件とも特定タイトル依存ではなく **INT 21h ローダの一般的な正しさ** の修正で、全タイトルに効く。
-さめがめ / ロードモナーク / プリンセスメーカー 2 で回帰なしを確認済。
+さめがめ ほか実 .d88 タイトルで回帰なしを確認済。
 
 **バグ fix:**
 
@@ -3514,7 +3558,7 @@ INT 21h の追加実装が必要なのは {25h/2Ah/2Ch/30h/35h/3Ch/3Dh/3Eh/3Fh/4
   原因候補は (a) freepats のサンプル品質、(b) 加算時のクリップ歪み、
   (c) `midiout_get` 内部の preparepcm の副作用 (no-op で症状消失)。
   再開時の選択肢: VERMOUTH 出力減衰調整 / eawpats 差し替え / JS SoundFont 切替
-- **プリメ 2 で MIDI 検出されず** — `mpuopt=0` (IRQ 3) も `mpuopt=2` (IRQ 6 =
+- **音源選択メニュー非表示型のタイトルで MIDI 検出されず** — `mpuopt=0` (IRQ 3) も `mpuopt=2` (IRQ 6 =
   PC-98 「INT2」表記) も MPU port write 0 件で、ゲームから MIDI 無しと判定。
   マニュアルに「FM のみなら音源選択メニュー無し」とある通り、メニュー非表示
   自体がそのサイン。検出経路は MPU port のステータスだけでなく、BIOS の
@@ -3539,10 +3583,10 @@ INT 21h の追加実装が必要なのは {25h/2Ah/2Ch/30h/35h/3Ch/3Dh/3Eh/3Fh/4
 
 ### 達成
 - **サウンド品質向上 (AudioWorklet 移行)** — ScriptProcessorNode から AudioWorklet + postMessage 方式へ移行。別スレッド再生によりメインスレッドジャンクの影響を受けず、微ノイズ・途切れを大幅削減 (実機聴感で確認)
-- **FM 音源が鳴る** — プリンセスメーカー 2 で BGM/効果音を確認、テンポはほぼ正しい
-- **2 枚組ゲームが動作** — プリンセスメーカー (.d88 ×2) / プリンセスメーカー 2 でディスプレイ選択 → 名前入力 → オープニング進行確認、CG も綺麗に表示
+- **FM 音源が鳴る** — 実 .d88 タイトルで BGM/効果音を確認、テンポはほぼ正しい
+- **2 枚組ディスクが動作** — .d88 ×2 構成でディスプレイ選択 → 名前入力 → オープニング進行確認、CG も綺麗に表示
 - **A:/B: 2 ドライブ対応 UI** — スロットごとに D&D / クリックでロード、B: は挿入時リセットなし (ゲーム中のディスク差し替え対応)
-- **実 PC-98 ゲームがプレイ可能に**🎉 — ロードモナーク (.d88) がディスプレイ選択 → タイトル → ゲーム本体まで完走、実機相当の速度でキャラクター動作確認
+- **実 PC-98 のゲームディスクがプレイ可能に**🎉 — 自己起動 .d88 がディスプレイ選択 → タイトル → 本体まで完走、実機相当の速度でキャラクター動作確認
 - **マウス入力対応** — Pointer Lock API + 相対移動、ブラウザのクリック判定をそのまま PC-98 マウス I/F に流す
 - **ディスクの D&D / ファイル選択 UI** — 任意の .d88 をブラウザにドロップ or クリックでロード
 - **PC-98 自己起動ディスクが正しく動作** — `tools/boot_hello/np2kai_boot.d88` をブートし、テキスト VRAM に "HELLO NP2KAI" を 8x16 ネイティブグリフで表示
@@ -3565,7 +3609,7 @@ INT 21h の追加実装が必要なのは {25h/2Ah/2Ch/30h/35h/3Ch/3Dh/3Eh/3Fh/4
 - ブリッジ: `np2kai_mouse_move(dx, dy)` / `np2kai_mouse_button(button, down)`
 - Web 側は canvas クリックで Pointer Lock 取得、`movementX/Y` を CSS px → source px に再スケールして転送
 - ESC 解除時はボタン状態を強制リセット (スタックボタン防止)
-- これによりロードモナーク (.d88) がマウス認識を経てディスプレイ選択画面→タイトル→ゲーム本体まで完走
+- これにより実 .d88 がマウス認識を経てディスプレイ選択画面→タイトル→本体まで完走
 
 ### ディスク差し替え UI (`web/index.html`, `web/player/bridge.js`, `native/bridge.c/h`)
 - `np2kai_reset()` ブリッジ追加 — `pccore_reset()` で新ディスクからブートし直し
