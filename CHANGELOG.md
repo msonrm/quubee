@@ -1,5 +1,52 @@
 # CHANGELOG
 
+## [INT 27h (旧式 TSR) を実装し Microsoft マウスドライバ mouse.com の「停止」を根治] — 2026-06-25
+
+### 症状と真因
+ユーザー報告: Vector で公式配布されている Microsoft マウスドライバ `mouse.com` (Mouse Driver
+Version 7.06、QuickBasic 等に同梱) を Run すると「Mouse driver installed」のバナーを出した後に**停止**
+(画面が固まる)。ヘッドレス診断で INT 21h 全コールをトレースし、逆アセンブル (`ndisasm`) と突合した結果、
+真因は **HLE-DOS が INT 27h (Terminate and Stay Resident、DOS 1.x 旧式 TSR) を未実装**だったこと。
+mouse.com の正規インストール経路 (0x2331-0x2335) は
+
+```
+2331  mov dx,[0x2105]   ; 常駐サイズ (byte)
+2335  int 0x27          ; ★ TSR で常駐
+2337  call 0x2341       ; ↓ 本来到達しない
+233A  mov ah,0x4c; int 21  ; 通常終了 (プログラムを解放)
+```
+
+と、INT 33h ベクタを自分のセグメント (0100:0B84) へ張った直後に `int 27h` で常駐する。我々は INT 27h を
+**未使用 INT 用の裸 IRET スタブ**に向けていたため、`int 27h` が素通りして直下の `AH=4Ch 通常終了`に
+フォールスルー → DOS がプログラム (= INT 33h ハンドラの実体) を解放 → **INT 33h ベクタがダングリング**。
+後続ゲームが INT 33h を呼ぶと解放/再利用済みメモリへ飛んで暴走するのが「停止」の正体だった。
+
+### 修正 — INT 27h を AH=31h と同じ TSR 機構へ結線 (native + Wasm)
+- **トランポリン `QB_TRAMP_INT27` (F000:EEB0) を新設** (`native/dos_loader.h`)。`qb_dos_install_trampolines`
+  で NOP+IRET を設置し、loader-start の IVT 構築で `IVT[0x27] → F000:EEB0` に上書き (未使用 INT ループで
+  一旦 IRET パッドにされた分を INT 29h/DCh と同じ作法で差し替え)。`bios.c` の `biosfunc()` に
+  `case 0xFEEB0: return qb_dos_int27_hook()` を追加 (patch 01 を再生成)。
+- **`qb_dos_int27_hook()`** (`native/dos_loader.c`): INT 27h は DX = PSP 先頭からの常駐**バイト数**
+  (CS=PSP 前提)・終了コード 0 固定なので、`(DX+15)>>4` で paragraph に丸めて既存の
+  `qb_dos_signal_tsr()` へ委譲 (AH=31h と同一機構)。signal_tsr が CPU を親 (EXEC 子なら) / halt loop
+  (最上位なら) へリダイレクトするのでトランポリンの IRET は踏まれない。
+- 非対象プログラムは従来どおり (INT 27h を呼ばなければ no-op) で**ゼロ回帰**。
+
+### 検証
+- **新規回帰 `tools/int27_tsr_test.js`** (自己完結の合成 COM・再配布物に非依存): `int 27h` の直後に
+  フォールスルー検出マーカを書く COM を走らせ、「マーカが書かれない = TSR で常駐し AH=4Ch に落ちない」
+  ことを判定。PASS (ran=0x11 / fallThrough=0x00)。
+- **end-to-end `tools/mouse_chain_probe.js`** (mouse.com 不在なら SKIP): シェル列 `MOUSE.COM`→INT 33h
+  プローブ COM を 1 セッションで EXEC。mouse.com が `TSR keep=528 para (常駐)` で常駐し、後続 COM が
+  **INT 33h AX=0 (reset) に AX=0xFFFF (= マウス在り) を受け取って完走** (暴走なし)。常駐ドライバの
+  INT 33h ハンドラが正しく応答することを確認。
+- 既存回帰ゼロ: `exec_env_test` PASS / `batch_test` 21-0 / `batscript_test` 51-0 / `touhou_test` 4-0 /
+  `sft_test` PASS / `pmd_test` 2-0 / `vz_test` PASS。**bio100 triage: CRASH=0・EXIT=0 維持** (ALIVE=21、
+  従来 20 から退行なし)。
+- **ブラウザ実機 T3 確認待ち** (mouse.com + INT 33h 使用ゲームでの実マウス動作)。INT 27h の TSR と
+  INT 33h 応答までは確認済み。実マウス移動は OPNA タイマ割り込み + 8255 読みの実時間挙動に依存するため
+  ブラウザ確認が必要。詳細 docs/dos_hle_gaps.md / [[feedback_dos_exec_launcher]]。
+
 ## [ブート時のメモリカウント (BIOS POST) をスキップ + コードレビュー修正 5 件] — 2026-06-24
 
 ### ブート時の ITF (BIOS POST) を既定スキップ — `np2cfg.ITF_WORK = 0` (native + Wasm)

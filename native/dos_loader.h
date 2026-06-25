@@ -64,6 +64,10 @@
  * setkey(CL=0Dh) で「キー定義テーブル」を取得/設定する。エディタでカーソル/編集キーが
  * 動くにはこの再定義が要る (キー押下時に定義文字列を発行する仕組み)。NOP + IRET。 */
 #define QB_TRAMP_INTDC          0xFEEA0u  /* F000:EEA0 */
+/* INT 27h (Terminate and Stay Resident, DOS 1.x 旧式 TSR)。DX=PSP からの常駐バイト数
+ * (最後のバイト+1)、CS=PSP セグメント、終了コード常に 0。AH=31h (paragraph 単位) と等価だが
+ * byte 単位。MS Mouse Driver 等の旧式マウスドライバが自身を常駐させるのに使う。NOP + IRET。 */
+#define QB_TRAMP_INT27          0xFEEB0u  /* F000:EEB0 */
 
 /* PSP/COM のロードセグメント (PSP 自体もここに置く)。
  * EXE は PSP の直後 (256 byte = 16 paragraphs 先) に image を配置する慣例。 */
@@ -195,6 +199,10 @@ int qb_dos_int20_hook(void);
 /* INT DCh (PC-98 ファンクション/編集キー定義 BIOS) (0xFEEA0 で biosfunc から呼ばれる)。
  * CL=0Ch get / 0Dh set。AX=tblmode, DS:DX=テーブル。常に 1 を返す。 */
 int qb_dos_intdc_hook(void);
+
+/* INT 27h (Terminate and Stay Resident, 旧式 TSR) (0xFEEB0 で biosfunc から呼ばれる)。
+ * DX(byte) を paragraph に丸めて AH=31h と同じ qb_dos_signal_tsr へ委譲。常に 1 を返す。 */
+int qb_dos_int27_hook(void);
 
 /* XMS/EMS 需要プローブのフック (0xFEE50 / 0xFEE60 で biosfunc から呼ばれる)。検出だけして
  * ログ+カウントし、レジスタは変えず (= 未インストール応答を維持) 1 を返す。 */

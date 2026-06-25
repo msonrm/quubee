@@ -1090,6 +1090,20 @@ int qb_dos_signal_tsr(uint16_t keep_paras, int code) {
     return 0;
 }
 
+/* INT 27h (Terminate and Stay Resident, DOS 1.x 旧式)。
+ * AH=31h との違いは引数の単位だけ: INT 27h は DX = PSP 先頭からの「常駐させる最後のバイト+1」
+ * (CS=PSP セグメント前提)、終了コードは常に 0。paragraph に丸めて同じ signal_tsr へ委譲する。
+ * MS Mouse Driver 7.06 等の旧式ドライバが INT 33h を hook した後ここで常駐する。未実装 (IRET
+ * スタブ) だと int 27h が素通りして直下の AH=4Ch 通常終了に落ち、ドライバが自身を解放して
+ * INT 33h ベクタがダングリング → 後続ゲームが INT 33h を呼ぶと暴走する (= mouse.com「停止」の真因)。
+ * signal_tsr が CPU を親 (EXEC 子なら) / halt loop (最上位なら) へリダイレクトするので、
+ * トランポリンの IRET は踏まれない (AH=31h と同じ)。 */
+int qb_dos_int27_hook(void) {
+    uint16_t keep_paras = (uint16_t)(((uint32_t)CPU_DX + 15u) >> 4);
+    qb_dos_signal_tsr(keep_paras, 0);
+    return 1;
+}
+
 int qb_dos_is_running(void) { return g_run.running; }
 
 /* ---------------- メモリ書き込みヘルパ ----------------
@@ -1197,6 +1211,10 @@ void qb_dos_install_trampolines(void) {
     /* INT DCh (PC-98 ファンクション/編集キー定義 BIOS): NOP + IRET。
      * C フックが getkeytbl/setkey を処理する (VZ Editor 等のカーソル/編集キー)。 */
     put_trampoline(QB_TRAMP_INTDC);
+
+    /* INT 27h (旧式 TSR): NOP + IRET。C フックが signal_tsr へ委譲する (MS Mouse 等)。
+     * 実際には signal_tsr が CPU を親/halt へリダイレクトするので IRET は踏まれない。 */
+    put_trampoline(QB_TRAMP_INT27);
 
     /* XMS ドライバ entry: far CALL で踏まれるので NOP + RETF (0xCB)。NOP が biosfunc を踏む。 */
     poke8(QB_TRAMP_XMS_ENTRY + 0, 0x90);  /* NOP */
@@ -1519,6 +1537,11 @@ int qb_dos_loader_start_hook(void) {
     /* INT DCh を専用フックへ (上のループで一旦 IRET パッドにされた分を上書き)。
      * VZ Editor 等がキー定義テーブルを設定し、カーソル/編集キーを有効化する。 */
     set_ivt(0xDC, 0xF000, (uint16_t)(QB_TRAMP_INTDC & 0xFFFF));
+
+    /* INT 27h (旧式 TSR) を専用フックへ (上のループで一旦 IRET パッドにされた分を上書き)。
+     * IRET スタブのままだと MS Mouse 等が int 27h で常駐できず直後の AH=4Ch に落ちて
+     * 自身を解放 → INT 33h ベクタがダングリングして後続ゲームが暴走する。 */
+    set_ivt(0x27, 0xF000, (uint16_t)(QB_TRAMP_INT27 & 0xFFFF));
     g_probe_xms = g_probe_ems = g_probe_emm_open = 0;  /* この Run の計測をリセット */
     qb_xms_reset();   /* XMS ハンドル表を Run 毎にクリア + プールを CPU_EXTMEM から再計算 */
 

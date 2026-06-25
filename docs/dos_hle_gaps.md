@@ -157,8 +157,16 @@
   VRAM tty、ANSI/ESC パーサ込み）へ流す。**master.lib `text_clear()` は実体が「`INT 29h` で `ESC[2J` を送るだけ」**
   なので、未実装（IRET スタブ）だと master.lib 系の画面消去が無音で効かず、書いた文字が残留していた（SSP の
   タイトル banner ゴースト等）。トランポリン `0xFEE80`。INT 29h は DOS 標準なので他プログラムの画面出力一般にも効く。
+- **INT 27h（Terminate and Stay Resident / DOS 1.x 旧式 TSR）= 実装済み（2026-06-25）**。`DX` = PSP 先頭からの
+  常駐バイト数（CS=PSP 前提）・終了コード 0 固定で、`(DX+15)>>4` で paragraph 化して `AH=31h` と同じ
+  `qb_dos_signal_tsr` へ委譲。トランポリン `0xFEEB0`。**未実装（IRET スタブ）だと `int 27h` が素通りして直下の
+  `AH=4Ch` 通常終了にフォールスルー → 常駐したつもりのドライバが自身を解放**し、hook 済みベクタがダングリングして
+  後続が暴走する（Microsoft マウスドライバ `mouse.com` の「Mouse driver installed 表示後に停止」の真因だった）。
 - **INT 25h/26h（絶対セクタ R/W）= IRET スタブ** → 直接セクタアクセス・一部コピープロテクト不可。
-- **INT 33h マウスドライバ = スタブ**。ただし**ハード（バスマウス）経由は NP2kai 側で動く**。
+- **INT 33h マウスドライバ = 我々は直接は提供しない**が、**ハード（PC-98 8255 マウス）経由は NP2kai 側で動き**、
+  さらに **DOS のマウスドライバ（MS `mouse.com` 7.06 等）を常駐させれば INT 33h API も使える**（INT 27h TSR 実装後、
+  `mouse.com` が常駐し INT 33h AX=0 に AX=0xFFFF を返すまで確認済み・2026-06-25）。実マウス移動の追従は
+  OPNA タイマ割り込み + 8255 読みの実時間挙動依存でブラウザ実機確認が要る。
 - **COMMAND.COM は起動 .bat 専用のミニ実装のみ**（2026-06-03、`tools/dos_loader/shell.asm` +
   `qb_dos_stage_script`）。起動 .bat のコマンドを 1 セッション内で順に `AH=4Bh` EXEC する（ドライバ TSR 常駐 →
   game → -r 解除）専用シェルで、汎用シェルではない。**対話プロンプト・環境変数展開・`cd`/`set`・リダイレクトは
