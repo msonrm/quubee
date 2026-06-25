@@ -649,6 +649,9 @@ async function makeWorkerEmu() {
     const isReadme   = (n) => /readme|read\.me|よみ|説明|どきゅめんと/i.test(n);
     const isImageName = (n) => /\.(mag|pi)$/i.test(n);   // PC-98 標準画像 (MAKI02 / Pi)。.MKI は別系統で未対応
     const isMusicName = (n) => /\.m$/i.test(n);     // PMD (KAJA) FM 音楽データ。.M2/.M26 は後回し
+    // 実行せず「閲覧/試聴するだけ」の形式 (画像/音楽)。D&D/Open/＋Add のどれでも単体で開け、
+    // 実行されないので束 (ゲーム) を壊さず重ねられる (非破壊オープン)。
+    const isPreviewOnlyName = (n) => isImageName(n) || isMusicName(n);
     const baseName   = (n) => n.slice(n.lastIndexOf('/') + 1);   // /run 相対 → ファイル名
     // DOS 8.3 (ASCII) 名か — ＋Add の単体ファイル受け入れ / Save ボタン有効化の共通判定。
     // /run の名前正準形は SJIS 生バイトだが、ブラウザの File.name / download 名は Unicode。
@@ -939,10 +942,15 @@ async function makeWorkerEmu() {
         // destDir をここで 1 度だけ確定し、以下の各経路 (書庫/ディスクイメージ/COM・EXE/単体
         // ファイル) すべてに効かせる。ルート (destDir='') では全経路が従来挙動と完全一致。
         const destDir = append ? currentDir : '';
+        // 画像 (.MAG/.PI) / 音楽 (.M) は実行されない閲覧専用形式。束を壊さず重ねる
+        // (束が空なら新規 1 個・ロード済みなら追加)。自動プレビュー対象を previewRel に控える。
+        const previewOnly = isPreviewOnlyName(file.name);
+        let previewRel = null;
         try {
             // 新規 = 前の束を完全に閉じてから (機械リセット込み — 前のゲームが左画面で
             // 走り続けない)。追加 (＋追加ボタン経由のみ) は重ね展開で機械もそのまま。
-            if (!append) await closeBundle();
+            // 閲覧専用形式は !append でも束を閉じない (誤って画像を落としても前のゲームが消えない)。
+            if (!append && !previewOnly) await closeBundle();
             runStatusEl.textContent = `Loading ${file.name}…`;
             if (/\.(lzh|zip)$/i.test(file.name)) {
                 mergeEntries(await extractArchiveToFs(file, true, destDir));  // currentDir 配下へ (/run クリアは closeBundle 済)
@@ -960,6 +968,22 @@ async function makeWorkerEmu() {
                 const rel = destDir + file.name;                  // currentDir 配下 (ルートなら従来どおり)
                 await emu.writeRun(rel, data);
                 mergeEntries([{ name: rel, data, mtime: file.lastModified ? new Date(file.lastModified) : null }]);
+            } else if (previewOnly) {
+                // 画像 (.MAG/.PI) / 音楽 (.M) の単体オープン。実行せず閲覧するだけなので束を壊さず
+                // 重ねる。/run 名は SJIS 生バイトの latin1 写像が正準形 (書庫展開名と同形) なので
+                // encodeSjis で SJIS 化 — 日本語名の CG もそのまま開ける。SJIS で表現できない名前は弾く。
+                const sjis = encodeSjis(file.name);
+                if (!sjis.length) {
+                    runStatusEl.textContent = `Cannot represent name in Shift-JIS: ${file.name}`;
+                    return;
+                }
+                const data = new Uint8Array(await file.arrayBuffer());
+                const canon = destDir + String.fromCharCode(...sjis);
+                const prior = loadedEntries.find((e) => e.name.toLowerCase() === canon.toLowerCase());
+                const rel = prior ? prior.name : canon;
+                await emu.writeRun(rel, data);
+                mergeEntries([{ name: rel, data, mtime: file.lastModified ? new Date(file.lastModified) : null }]);
+                previewRel = rel;          // 末尾で自動プレビュー
             } else if (append) {
                 // ＋Add 限定: 任意の単体ファイルを /run に重ねる (Save したセーブの読み戻し /
                 // 自作データ・MML 等の持ち込み)。ASCII 8.3 名のみ (上記 isDos83Name の対称性)。
@@ -1002,11 +1026,17 @@ async function makeWorkerEmu() {
                 else if (exes.length + coms.length > 0) needChoice = true;
             }
             renderFileList();
-            // readme 系を自動で開く (③敬意: 作者の声をまず見せる)
-            const readme = loadedEntries.find((e) => isReadme(e.name) && isTextName(e.name))
-                        || loadedEntries.find((e) => /\.doc$/i.test(e.name))
-                        || loadedEntries.find((e) => isTextName(e.name));
-            if (readme) openText(readme);
+            // 画像/音楽を単体で開いたら即プレビュー (1 個落とす → そのまま表示/試聴)。
+            // それ以外は readme 系を自動で開く (③敬意: 作者の声をまず見せる)。
+            if (previewRel) {
+                const pent = loadedEntries.find((e) => e.name === previewRel);
+                if (pent) (isImageName(pent.name) ? openImage(pent) : openMusic(pent));
+            } else {
+                const readme = loadedEntries.find((e) => isReadme(e.name) && isTextName(e.name))
+                            || loadedEntries.find((e) => /\.doc$/i.test(e.name))
+                            || loadedEntries.find((e) => isTextName(e.name));
+                if (readme) openText(readme);
+            }
             // 曖昧 (起動候補が複数) の時だけ一言誘導 — Run が無効な理由を黙らせない。
             runStatusEl.textContent = needChoice
                 ? 'Multiple programs — select one from the list to run'

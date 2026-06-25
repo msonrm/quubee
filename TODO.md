@@ -311,6 +311,9 @@ bio 100% (互換性の長尾) とは別軸のフロント強化。詳細は CHAN
 - [x] **.PI (Pi 形式) 画像ビューア (2026-06-25)** — `web/player/piimage.js` 自前デコーダ (pi24.lzh の piloadc.asm を
       仕様参照・逐語移植せず)。MAG と並ぶ 2 大形式。`openImage` がシグネチャで MAG/PI を自動判別。検証 = 同一画像の
       MAG/PI ペア突合 (`tools/pi_test.js`、c165/c206 全 256000px が MAG と色番号一致)。ライセンス clean。ブラウザ実機確認済
+- [x] **画像/音楽 (.MAG/.PI/.M) の単体オープン (2026-06-25)** — 閲覧専用形式は D&D/Open/＋Add のどれでも単体で開け、
+      実行されないので束を壊さず重ねる (非破壊・誤ドロップで前のゲームが消えない)。encodeSjis で SJIS 名化して /run
+      配置 (日本語名 CG も可)・開いたら自動プレビュー。Open accept に .mag/.pi/.m 追加。実機確認はユーザー委任
 - [x] **ゲームパッド対応 (2026-06-10)** — Gamepad API→キー変換 (`pollGamepads`、十字/左スティック→カーソル、
       ボタン 0→Z/1→X/2→Space/3→Enter/Start→ESC)。ブラウザ実機で TH02・Super Depth 動作確認済。
       ネイティブ PC-98 パッド (案 B: joymng_getstat 実装、bio100 21/36 書庫が対応明記) は将来課題 (CHANGELOG 参照)
