@@ -647,7 +647,7 @@ async function makeWorkerEmu() {
         /\.(txt|doc|man|hed|his|me|1st|asc|ini|cfg|nfo|faq|hlp|dic|wri)$/i.test(n) ||
         /readme|read\.me|どきゅめんと|説明|よみ/i.test(n);
     const isReadme   = (n) => /readme|read\.me|よみ|説明|どきゅめんと/i.test(n);
-    const isImageName = (n) => /\.mag$/i.test(n);   // PC-98 標準画像 (MAKI02)。.MKI は別系統で未対応
+    const isImageName = (n) => /\.(mag|pi)$/i.test(n);   // PC-98 標準画像 (MAKI02 / Pi)。.MKI は別系統で未対応
     const isMusicName = (n) => /\.m$/i.test(n);     // PMD (KAJA) FM 音楽データ。.M2/.M26 は後回し
     const baseName   = (n) => n.slice(n.lastIndexOf('/') + 1);   // /run 相対 → ファイル名
     // DOS 8.3 (ASCII) 名か — ＋Add の単体ファイル受け入れ / Save ボタン有効化の共通判定。
@@ -867,7 +867,9 @@ async function makeWorkerEmu() {
         renderFileList();
         textHeadBar.hidden = false;
         let img;
-        try { img = QBMag.decode(ent.data); }
+        // MAG (MAKI02) / Pi をシグネチャで自動判別 (拡張子でなく中身で出し分け)。
+        const decodeImage = (QBPi.isPi(ent.data) ? QBPi.decode : QBMag.decode);
+        try { img = decodeImage(ent.data); }
         catch (e) {
             showTextMode();
             textHeadEl.textContent = sjisName(ent.name);

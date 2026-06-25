@@ -47,6 +47,7 @@ qb/
 │   │   ├── diskimage.js     # ディスクイメージ→FAT12/16 ファイル取り出し (ブートせず)
 │   │   ├── batscript.js     # 起動 .bat を「作者の起動レシピ」として解釈 (if/goto は C 側と分担)
 │   │   ├── magimage.js      # PC-98 .MAG (MAKI02) 画像デコーダ
+│   │   ├── piimage.js       # PC-98 .PI (Pi 形式) 画像デコーダ
 │   │   └── pmdmeta.js       # PMD (.M) 曲データ末尾 memo (曲名/作曲/編曲/コメント) パーサ
 │   ├── assets/
 │   │   ├── font.bmp         # ANK 8x16 / 漢字フォント (2048×2048 1bpp、修正 BSD — CREDITS.md)

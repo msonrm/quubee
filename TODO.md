@@ -308,6 +308,9 @@ bio 100% (互換性の長尾) とは別軸のフロント強化。詳細は CHAN
 - [x] **別窓ビューア** — ファイル名行右端 `⛶ 拡大` → モーダル (content-agnostic、画像も相乗り)
 - [x] **.MAG (MAKI02) 画像ビューア** — `web/player/magimage.js` 自前デコーダ (Magd ソース magd25s.lzh を仕様参照・
       逐語移植せず。savefont.mag/gbox.mag で検証)。`🖼` プレビュー + `⛶ 拡大`
+- [x] **.PI (Pi 形式) 画像ビューア (2026-06-25)** — `web/player/piimage.js` 自前デコーダ (pi24.lzh の piloadc.asm を
+      仕様参照・逐語移植せず)。MAG と並ぶ 2 大形式。`openImage` がシグネチャで MAG/PI を自動判別。検証 = 同一画像の
+      MAG/PI ペア突合 (`tools/pi_test.js`、c165/c206 全 256000px が MAG と色番号一致)。ライセンス clean。ブラウザ実機確認済
 - [x] **ゲームパッド対応 (2026-06-10)** — Gamepad API→キー変換 (`pollGamepads`、十字/左スティック→カーソル、
       ボタン 0→Z/1→X/2→Space/3→Enter/Start→ESC)。ブラウザ実機で TH02・Super Depth 動作確認済。
       ネイティブ PC-98 パッド (案 B: joymng_getstat 実装、bio100 21/36 書庫が対応明記) は将来課題 (CHANGELOG 参照)
