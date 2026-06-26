@@ -1,5 +1,41 @@
 # CHANGELOG
 
+## [FMP (Guu) 音楽ドライバ + 「ちびおと」(86+ADPCM) 対応 — FMDSP の code 7 を根治] — 2026-06-27
+
+### 背景 (ユーザー報告: FMDSP.COM が exited code 7 で動かない)
+FMP (Guu 氏の FM 音源ドライバ、KAJA の PMD と双璧) の定番ビジュアライザ **FMDSP** が起動できなかった。
+headless triage で真因を確定: **FMDSP はドライバ常駐前提のビジュアライザで自身はドライバを持たない**。
+FMP も PMD も常駐していないと `code 7` で終了する (FMDSP.DOC「対応音源ドライバ及び FMDSP が常駐確認/動作
+制御する TSR」)。`FMP s` (サイレント常駐) を先に EXEC すると **code 7 が消え FMDSP が起動**。FMP は我々の
+86 ボードを正しく認識した (`Found YM2608, Access I/O=0188h, Used INT5h(=IRQ12), Hooked INT d2h`) =
+**ボード/IRQ 構成は既定のまま完全一致**で、音源側の作業は不要だった。`FMP s` → `PLAY *.opi` で FM 音楽が
+実音再生 (headless audio peak ~15000) することも確認。
+
+データ拡張子の対応 (FMC.DOC の表): `.mpi/.mvi/.mzi` = MML **ソース** (FMC コンパイラ入力)、
+`.opi/.ovi/.ozi` = **コンパイル済み演奏形式**。`.opi`=ノーマル FM (現状の素の 86=0x04 で鳴る)、
+`.ovi`=スピークボード(ADPCM)、`.ozi`=PPZ。**`.ovi` の ADPCM 声部を鳴らすには「ちびおと」が必要**。
+
+### 実装 ①「ちびおと」= PC-9801-86 + ADPCM RAM のセッション限定有効化 (`native/bridge.c`/`bridge.h`)
+- `np2kai_set_chibioto(on)` を新設。on で `np2cfg.SOUND_SW = SOUNDID_PC_9801_86_ADPCM (0x14)`、off で
+  素の 86 (`0x04`)。SOUND_SW は `pccore_reset → pccore_set` で `pccore.sound` に読まれ `fmboard_reset` が
+  ボードを再 bind するので、設定後の次 Run (reset) から反映 (`np2kai_set_pmd_irq` と同型)。
+- **既定 OFF** (opt-in)。`0x14` は `board86_reset` で `OPNA_HAS_ADPCM` を立て `opna_readExtendedStatus` が
+  ADPCM ステータスビットを混ぜる等 OPNA の実時間挙動を変える副作用があり、ADPCM 不要なタイトルに恒常的に
+  課す利得がない。よって ADPCM が要るセッションだけ on にする (bridge.c が以前から予告していた方針)。
+- JS: `qbDebug.chibioto(0|1)` トグル (local/worker 両モード)。`forceChibi` を runStaged の reset 前に
+  `emu.setChibiOto()` で適用。FM のみ (.opi) には無影響 (headless で peak 15005/15005 = OFF/ON 同一を実証)。
+
+### 実装 ② INT 21h の小ギャップ補完 (`native/dos_int21.c`)
+- **AH=0Eh** (Select default drive): A:(=/run) 単一なのでドライブ切替は no-op、AL=論理ドライブ数(5)を返す。
+- **AH=34h** (Get InDOS flag address): HLE では DOS 再入が無く常に 0。`QB_LOL_SEG` 未使用域に 0 バイトを
+  置いて ES:BX で返す (直前 = critical-error flag も 0)。FMP/FMDSP 等が install 時に呼ぶ。
+
+### 検証
+- 新規 `tools/fmp_test.js` (games 不在で SKIP): `FMP s`→`PLAY .opi` で FM 発音、ちびおと OFF/ON で .opi が
+  同一発音 (回帰なし)、ちびおと ON + `PLAY .ovi` で ADPCM 発音 = **3/3 PASS** (peak: opi 15005、ovi 27746)。
+- 全回帰グリーン (touhou 4/0・batch 21/0・batscript 51/0・pmd 2/0・sft・wildcard)。bio100 triage 回帰なし
+  (ALIVE21・描画到達25・動作確認27/31・**CRASH0/EXIT0**、ベースライン同等以上)。
+
 ## [既定 CPU クロックを 66MHz (multiple=27) に引き上げ] — 2026-06-26
 
 ### 背景 (JS のみ・Wasm 不変・ブラウザ実機で確認)

@@ -2308,6 +2308,28 @@ static void int21_52_list_of_lists(void) {
     CPU_FLAG &= ~C_FLAG;
 }
 
+/* AH=0Eh: Select default drive (DL = 0=A: 1=B: …)。AL に論理ドライブ数を返す。
+ * 我々は実体として A: (= /run) 単一なのでドライブ切り替えは no-op (g_cwd ベース)。
+ * 多くのプログラムは戻り値を使わず「念のため A: を選ぶ」だけ呼ぶ (FMDSP 等)。
+ * LASTDRIVE=5 (LoL と整合) に合わせて 5 を返す。この関数は CF を返さない。 */
+static void int21_0e_select_disk(void) {
+    CPU_AL = 5;   /* number of logical drives (LASTDRIVE) */
+}
+
+/* AH=34h: Get InDOS flag address → ES:BX。常駐ドライバ (TSR) が「いま DOS 内部に
+ * いない」ことを確認してから常駐/動作するための旗。我々は HLE なので DOS 再入の概念が
+ * 無く、常に 0 (= not in DOS) でよい。QB_LOL_SEG の未使用低位域に 0 バイトを置いて返す
+ * (直前バイト = critical-error flag も 0 にしておく。InDOS-1 を覗く実装に備える)。
+ * FMP/FMDSP 等が install 時に呼ぶ。 */
+static void int21_34_indos(void) {
+    uint32_t base = (uint32_t)QB_LOL_SEG << 4;   /* linear 0xA00 (env/PSP の手前・未使用) */
+    poke8(base + 0x0F, 0);   /* critical error flag (InDOS-1) */
+    poke8(base + 0x10, 0);   /* InDOS flag = 0 (not in DOS) */
+    CPU_ES = QB_LOL_SEG;
+    CPU_BX = 0x0010;
+    CPU_FLAG &= ~C_FLAG;
+}
+
 /* AH=58h メモリ確保ストラテジ / UMB リンク状態の get/set。
  * UMB は持たないが、確保ストラテジ (first/best/last-fit) は実際に効かせる:
  * last-fit を要求するゲームに first-fit で応えると本体直上を埋めてしまい、PSP ブロックの
@@ -2405,6 +2427,7 @@ void qb_dos_int21_dispatch(void) {
     case 0x0A: int21_0a_buffered();     break;
     case 0x0B: int21_0b_instat();       break;
     case 0x0C: int21_0c_flush_input();  break;
+    case 0x0E: int21_0e_select_disk();  break;
     case 0x19: int21_19_curdrive();     break;
     case 0x1A: int21_1a_set_dta();   break;
     case 0x25: int21_25_set_vec();   break;
@@ -2415,6 +2438,7 @@ void qb_dos_int21_dispatch(void) {
     case 0x30: int21_30_version();   break;
     case 0x31: int21_31_keep();         break;
     case 0x33: int21_33_ctrlbreak();    break;
+    case 0x34: int21_34_indos();        break;
     case 0x35: int21_35_get_vec();   break;
     case 0x36: int21_36_freespace();    break;
     case 0x39: int21_39_mkdir();        break;

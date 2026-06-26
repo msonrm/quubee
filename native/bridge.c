@@ -523,6 +523,20 @@ int np2kai_set_pmd_irq(int on) {
 	return np2cfg.snd86opt;
 }
 
+/* 「ちびおと」= PC-9801-86 + ADPCM RAM (SOUNDID 0x14) のセッション限定有効化。
+ * on で 86+ADPCM (256KB ADPCM RAM 有効)、off で素の 86 (0x04) に戻す。FMP の .ovi /
+ * PMD の .PPC 等、ADPCM(PCM) 声部を持つ曲データを鳴らすのに要る。
+ * 既定 OFF。理由: 0x14 は board86_reset で OPNA_HAS_ADPCM を立て、opna_readExtendedStatus が
+ * ADPCM ステータスビットを混ぜる等 OPNA の実時間挙動を変える副作用があり、ADPCM 不要な
+ * タイトルに恒常的に課す利得がない (素の 86 = 0x04 が安全既定)。よって「ADPCM が要る曲を
+ * 鳴らすセッションだけ on」にする (np2kai_set_pmd_irq / enable_midi_now と同型のオプトイン)。
+ * SOUND_SW は pccore_reset → pccore_set で pccore.sound に読まれ fmboard_reset がボードを
+ * 再 bind するので、設定後の次 reset (Run) から反映する。qbDebug.chibioto(0|1) の実体。 */
+int np2kai_set_chibioto(int on) {
+	np2cfg.SOUND_SW = on ? SOUNDID_PC_9801_86_ADPCM : SOUNDID_PC_9801_86;
+	return np2cfg.SOUND_SW;
+}
+
 /* ブート時の ITF (BIOS POST) ROM 実行のトグル。on=1 で POST を復活 (メモリカウント+起動ピポ音を
  * 出す、実機ノスタルジー用)、on=0 で既定どおりスキップ。既定 = 0 (create 時に np2cfg.ITF_WORK=0)。
  * np2cfg.ITF_WORK は reset 毎の bios_initialize → bios_itfcall で読まれるので、設定後の次 Run (reset)

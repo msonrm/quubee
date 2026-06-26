@@ -126,6 +126,13 @@ int np2kai_set_beep_mute(int mute);
 __attribute__((visibility("default")))
 int np2kai_set_pmd_irq(int on);
 
+/* 「ちびおと」= PC-9801-86 + ADPCM RAM (SOUNDID 0x14) のセッション限定有効化。on で 86+ADPCM、
+ * off で素の 86 (0x04)。FMP .ovi / PMD .PPC 等 ADPCM(PCM) 声部のある曲で要る。既定 OFF
+ * (0x14 は OPNA 実時間挙動を変えるので ADPCM が要るセッションだけ on)。次 Run (reset) から反映。
+ * qbDebug.chibioto(0|1) の実体。 */
+__attribute__((visibility("default")))
+int np2kai_set_chibioto(int on);
+
 /* ブート時 ITF (BIOS POST) ROM のトグル。on=1 で POST (メモリカウント+ピポ音) を復活、on=0 で
  * 既定どおりスキップ。次 Run (reset) から反映。qbDebug.itfpost(0|1) の実体。 */
 __attribute__((visibility("default")))

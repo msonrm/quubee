@@ -243,6 +243,7 @@ async function makeWorkerEmu() {
         async insertFdd(path, drive, ro) { return (await call({ type: 'insertFdd', path, drive, readonly: ro })).r; },
         async reset()                { await call({ type: 'reset' }); },
         async setPmdIrq(v)           { return (await call({ type: 'call', fn: 'np2kai_set_pmd_irq',  ret: 'number', argTypes: ['number'], args: [v] })).r; },
+        async setChibiOto(v)         { return (await call({ type: 'call', fn: 'np2kai_set_chibioto', ret: 'number', argTypes: ['number'], args: [v] })).r; },
         async setBeepMute(v)         { return (await call({ type: 'call', fn: 'np2kai_set_beep_mute', ret: 'number', argTypes: ['number'], args: [v] })).r; },
         async setClockMultiple(m)    { return (await call({ type: 'call', fn: 'np2kai_set_clock_multiple', ret: 'number', argTypes: ['number'], args: [m] })).r; },
         async enableMidiNow()        { return (await call({ type: 'call', fn: 'np2kai_enable_midi_now', ret: 'number', argTypes: ['number'], prependHandle: true, args: [] })).r; },
@@ -1207,9 +1208,13 @@ async function makeWorkerEmu() {
     // 86 ボードの割り込みを IRQ12 に寄せる。我々の PMD .M 再生でだけ on (常駐ドライバ同梱ゲームは
     // 既定 IRQ を前提にするので off=既定でないと演奏が壊れる)。snd86opt は reset(board bind) 前に設定。
     const setPmdIrq     = M.cwrap('np2kai_set_pmd_irq',     'number', ['number']);
+    const setChibiOto   = M.cwrap('np2kai_set_chibioto',    'number', ['number']);
     // 86 ボード IRQ の上書きトグル。null=既定 (全ブート IRQ12)、0=既定 IRQ 強制、1=IRQ12 強制。
     // 既定は下の loadLoaderDisk で IRQ12。将来 IRQ12 非対応ドライバが出たら qbDebug.snd86irq(0) で逃げる。
     let forcePmdIrq = null;
+    // 「ちびおと」(86+ADPCM=SOUND_SW 0x14) の有効化トグル。既定 false (素の 86=0x04)。FMP .ovi /
+    // PMD .PPC 等 ADPCM 声部のある曲を鳴らすときだけ qbDebug.chibioto(1) で on にする (次 Run から)。
+    let forceChibi = false;
     let suppressBootBeep = false;   // 次の loader ブートが音楽セッションか (= beep 消音 + IRQ12 + エンジン非表示)
     let hideEngineFiles  = false;   // 一覧から PMD86.COM/PMP.COM を隠すか (音楽セッション中だけ true)
     // np2kai_dos_get_exit(int* code) — JS では HEAP に書き込み番地を渡す
@@ -1253,6 +1258,7 @@ async function makeWorkerEmu() {
         async insertFdd(path, drive, ro) { return insertFdd(handle, path, drive, ro ? 1 : 0); },
         async reset() { reset(handle); },
         async setPmdIrq(v) { return setPmdIrq(v); },
+        async setChibiOto(v) { return setChibiOto(v); },
         async setBeepMute(v) { return setBeepMute(v); },
         async setClockMultiple(m) { return setMul(m); },
         async enableMidiNow() { return enableMidiNow(handle); },
@@ -1444,6 +1450,9 @@ async function makeWorkerEmu() {
         // snd86opt は board bind (reset) 時に読まれるので reset の前に設定する。
         // forcePmdIrq が non-null なら上書き (qbDebug.snd86irq / 将来 IRQ12 非対応ドライバ用)。
         await emu.setPmdIrq(forcePmdIrq !== null ? forcePmdIrq : 1);
+        // 「ちびおと」(86+ADPCM) は opt-in。on のときだけ SOUND_SW=0x14 で board を再 bind
+        // (FMP .ovi / ADPCM 声部用)。off (既定) は素の 86 のまま = 非 ADPCM タイトルに無影響。
+        await emu.setChibiOto(forceChibi ? 1 : 0);
         await emu.reset();
         // 起動音 (ピポ) は音楽セッションのブートでだけ消す。ゲーム起動は当時どおり鳴らす
         // (beepcfg.vol は render 時参照なので reset 後でも間に合う)。
@@ -2273,6 +2282,10 @@ async function makeWorkerEmu() {
         // 86 ボードの割り込み線の上書き。既定は全ブート IRQ12 (de-facto 標準)。snd86irq(0)=既定 IRQ へ、
         // snd86irq(1)=IRQ12 明示、snd86irq()=既定 (IRQ12) に戻す。設定後に対象ゲームを Run (reset) して反映。
         snd86irq: (v) => { forcePmdIrq = (v === undefined ? null : (v ? 1 : 0)); return `forcePmdIrq=${forcePmdIrq} (null=既定IRQ12/1=IRQ12/0=既定IRQ) — 次の Run から反映`; },
+        // 「ちびおと」(PC-9801-86 + ADPCM RAM = SOUND_SW 0x14) のトグル。既定 OFF (素の 86=0x04)。
+        // chibioto(1)=ON で FMP の .ovi / PMD の .PPC 等 ADPCM(PCM) 声部のある曲が鳴る。chibioto(0)/()=既定 OFF。
+        // 設定後に対象を Run (reset) して反映。FM のみの曲には無影響なので付けっぱなしでも実害は小さい。
+        chibioto: (on = 1) => { forceChibi = !!on; return `forceChibi=${forceChibi} (1=86+ADPCM/0=素の86) — 次の Run から反映`; },
         // ブート時の ITF (BIOS POST) 表示。既定はスキップ (メモリカウント+ピポ音なし=即プレイ)。
         // itfpost(1)=実機どおり POST を出す (ノスタルジー用)、itfpost(0)=既定どおりスキップ。
         // 設定後にゲーム/音楽を Run (reset) して反映。
