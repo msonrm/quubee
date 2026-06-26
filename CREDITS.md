@@ -139,7 +139,7 @@ FreeDOS(98) の 2HD フロッピーイメージ（**GPL**、再配布可）。he
 
 PC-98 版 VZ Editor Ver1.60 の実行ファイル（**BSD-3-Clause**、再配布は著作権表示の保持が条件）。
 HLE-DOS の起動回帰（`tools/vz_test.js`、VZ の `checkhard` が要求する INT DCh≠DDh ベクタの検証）
-専用の素材で、**デプロイ対象外**（サイトには含まれない）。原作 中村満（c.mos）、ソース公開
+専用の素材で、**デプロイ対象外**（サイトには含まれない）。原作 兵藤嘉彦（c.mos）、ソース公開
 vcraftjp <https://github.com/vcraftjp/VZEditor>。ライセンス全文は `tools/testdata/VZ.LICENSE.txt`。
 
 ---
