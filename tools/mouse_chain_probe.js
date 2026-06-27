@@ -9,7 +9,7 @@ const path = require('path');
 const fs = require('fs');
 const ROOT = path.resolve(__dirname, '..');
 const WEB = path.join(ROOT, 'web');
-const MOUSE = process.argv[2] || path.join(ROOT, 'games/mouse.com');
+const MOUSE = process.argv[2] || path.join(ROOT, 'games/fixture/mouse.com');
 if (!fs.existsSync(MOUSE)) {   // MS Mouse は再配布不可 → 不在なら SKIP (jed_cursor_test と同方針)
     console.log('SKIP — mouse.com 不在 (' + MOUSE + ')。Microsoft Mouse は再配布不可のため未コミット。');
     process.exit(0);

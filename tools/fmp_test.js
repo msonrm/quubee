@@ -9,8 +9,8 @@
 //   3. ちびおと ON + `PLAY <song.ovi>` (+ .pvi 音色) で ADPCM 声部が鳴る (audio peak > 閾値)。
 //
 // 素材は再配布不可 (games/ は .gitignore) なので、無ければ SKIP (CI 安全)。
-//   games/fmp428u.lzh  … FMP ドライバ一式 (fmp.com / play.com)
-//   games/fmpdata.lzh  … 曲データ (コンパイル済み .opi=FM / .ovi=ADPCM + .pvi 音色)
+//   games/driver/fmp428u.lzh  … FMP ドライバ一式 (fmp.com / play.com)
+//   games/music/fmpdata.lzh   … 曲データ (コンパイル済み .opi=FM / .ovi=ADPCM + .pvi 音色)
 // 展開は lha / lhasa。
 //
 // 使い方: node tools/fmp_test.js
@@ -28,7 +28,9 @@ const FONT   = path.join(WEB, 'assets', 'font.bmp');
 function skip(msg) { console.log('SKIP — ' + msg); process.exit(0); }
 for (const [p, n] of [[LOADER, 'loader.d88'], [FONT, 'font.bmp']]) if (!fs.existsSync(p)) skip(`${n} 不在`);
 if (!fs.existsSync(path.join(WEB, 'np2kai_core.js'))) skip('np2kai_core.js 不在 (ビルドしてください)');
-for (const a of ['fmp428u.lzh', 'fmpdata.lzh']) if (!fs.existsSync(path.join(G, a))) skip(`games/${a} 不在 (再配布不可・ローカル限定)`);
+const FMP_DRV = path.join(G, 'driver', 'fmp428u.lzh');   // 音源ドライバ
+const FMP_DAT = path.join(G, 'music', 'fmpdata.lzh');    // 曲データ
+for (const [p, rel] of [[FMP_DRV, 'driver/fmp428u.lzh'], [FMP_DAT, 'music/fmpdata.lzh']]) if (!fs.existsSync(p)) skip(`games/${rel} 不在 (再配布不可・ローカル限定)`);
 function haveCmd(c) { try { cp.execSync(`command -v ${c}`, { stdio: 'ignore' }); return true; } catch (_) { return false; } }
 const EX = haveCmd('lha') ? 'lha' : (haveCmd('lhasa') ? 'lhasa' : null);
 if (!EX) skip('lha / lhasa が無い');
@@ -43,8 +45,8 @@ function extract(lzh, sub) {
 function find(dir, re) { for (const f of fs.readdirSync(dir, { recursive: true })) if (re.test(f)) return path.join(dir, f); return null; }
 function biggest(dir, re) { let b = null, m = 0; for (const f of fs.readdirSync(dir, { recursive: true })) { if (!re.test(f)) continue; const p = path.join(dir, f), s = fs.statSync(p).size; if (s > m) { m = s; b = p; } } return b; }
 
-const dDrv = extract(path.join(G, 'fmp428u.lzh'), 'drv');
-const dDat = extract(path.join(G, 'fmpdata.lzh'), 'dat');
+const dDrv = extract(FMP_DRV, 'drv');
+const dDat = extract(FMP_DAT, 'dat');
 const FMP  = find(dDrv, /(^|\/)fmp\.com$/i);
 const PLAY = find(dDrv, /(^|\/)play\.com$/i);
 const OPI  = biggest(dDat, /\.opi$/i);

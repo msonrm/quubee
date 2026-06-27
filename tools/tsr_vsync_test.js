@@ -13,18 +13,18 @@
 // フレーム間ハッシュが変化する (= 常駐 VSYNC ISR が毎フレーム描画している = IF=1) ことを確認。
 // 旧バグ (IF=0 idle) なら画面が静止しハッシュが 1 種類のまま。
 //
-// corpus は再配布不可のため local 限定 (games/frway102.lzh)。不在/lha 無しは SKIP。
+// corpus は再配布不可のため local 限定 (games/fixture/frway102.lzh)。不在/lha 無しは SKIP。
 // 使い方: node tools/tsr_vsync_test.js
 const path = require('path');
 const fs = require('fs');
 const cp = require('child_process');
 const ROOT = path.resolve(__dirname, '..');
 const WEB = path.join(ROOT, 'web');
-const LZH = path.join(ROOT, 'games', 'frway102.lzh');
+const LZH = path.join(ROOT, 'games', 'fixture', 'frway102.lzh');
 const WORK = '/tmp/qb_frway_test';
 
 function skip(m) { console.log('SKIP — ' + m); process.exit(0); }
-if (!fs.existsSync(LZH)) skip('games/frway102.lzh 不在 (local-only corpus)');
+if (!fs.existsSync(LZH)) skip('games/fixture/frway102.lzh 不在 (local-only corpus)');
 if (cp.spawnSync('sh', ['-c', 'command -v lha']).status) skip('lha 不在');
 
 // 展開 (freeway.com を取り出す)

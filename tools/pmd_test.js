@@ -12,8 +12,8 @@
 //   どちらか欠けると「最初の1音だけ鳴って無音」になる (peak は出るが rms(late)≈0)。
 //
 // ローカル限定: PMD/PMP/曲は再配布不可の書庫からその場で展開。不在なら SKIP (CI 安全)。
-//   driver = games/touhou/huma_ts2.lzh の pmd86.com / player = games/pmd48o.lzh の pmp.com /
-//   曲 = games/th5_12pmd.lzh の th5_12.M。展開には lha/lhasa。
+//   driver = games/touhou/huma_ts2.lzh の pmd86.com / player = games/driver/pmd48o.lzh の pmp.com /
+//   曲 = games/music/th5_12pmd.lzh の th5_12.M。展開には lha/lhasa。
 //
 // 使い方: node tools/pmd_test.js
 
@@ -27,9 +27,9 @@ const LOADER = path.join(WEB, 'assets', 'loader.d88');
 const FONT   = path.join(WEB, 'assets', 'font.bmp');
 
 const SRC = [
-    { arc: path.join(ROOT, 'games', 'touhou', 'huma_ts2.lzh'), member: 'pmd86.com', as: 'PMD86.COM' },
-    { arc: path.join(ROOT, 'games', 'pmd48o.lzh'),             member: 'pmp.com',   as: 'PMP.COM'   },
-    { arc: path.join(ROOT, 'games', 'th5_12pmd.lzh'),          member: 'th5_12.M',  as: 'TH5_12.M'  },
+    { arc: path.join(ROOT, 'games', 'touhou', 'huma_ts2.lzh'),  member: 'pmd86.com', as: 'PMD86.COM' },
+    { arc: path.join(ROOT, 'games', 'driver', 'pmd48o.lzh'),    member: 'pmp.com',   as: 'PMP.COM'   },
+    { arc: path.join(ROOT, 'games', 'music', 'th5_12pmd.lzh'),  member: 'th5_12.M',  as: 'TH5_12.M'  },
 ];
 
 function skip(msg) { console.log('SKIP — ' + msg); process.exit(0); }

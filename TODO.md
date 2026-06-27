@@ -133,6 +133,10 @@ T3 確認は入力が要るのでブラウザで人が行う (headless は T0〜
 - **triage を改修** (`tools/bio100_triage.js`): ①ランチャ型は `.bat` を batscript.js で解釈し
   `stage_script` 経路 (ドライバ常駐込み) でステージ ②最終 PC を **EXIT(0xFEE30 正常終了)/
   WAIT(0xFEE10 入力待ち=生存)/BIOS(neccheck 暴走)** の 3 状態に分類。`node tools/bio100_triage.js [filter]`。
+- **triage を並列化** (2026-06-27): 旧版は 31 本を 1 プロセス逐次で回し 15〜20 分かかって毎回タイムアウト
+  していた (各本 3000 フレームが実 40〜86 秒)。**1 ゲーム = 1 子プロセス + 既定 8 並列 + 個別タイムアウト
+  150 秒 + 再開キャッシュ + ALIVE 早期確定**で**コールド 約 2〜3 分・再実行 0.2 秒** (キャッシュヒット) に。
+  `--jobs N` `--timeout S` `--fresh` 対応。ベースライン完全一致 (詳細 CHANGELOG 2026-06-27)。
 - **INT 21h AH=52h (Get List of Lists) を実装** → master.lib 製 **Super Spartan (SSP101) が EXIT→ALIVE**
   (本体 sspartan.d98 が未実装の AH=52h で諦め code 1 終了していた)。master.lib 系全般に効く土台。
 - **INT 29h (DOS 高速文字出力) を実装 → テキスト残留を根治** → SSP のメニュー/ハイスコアに「Super Spartan

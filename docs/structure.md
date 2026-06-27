@@ -76,8 +76,18 @@ qb/
 │   │   └── 03_rtc_y2k_clamp.patch     # RTC 年を 1999 にクランプ (Y2K 系の固定幅年バグ対策)
 │   └── testdata/            # テスト専用素材 (FreeDOS boot.d88 等。デプロイ対象外)
 │
-├── games/                   # テスト用書庫のローカル置き場。**.gitkeep 以外は全て gitignore**
-│                            # (再配布許可のない書庫はコミットしない — リポジトリポリシー)
+├── games/                   # 検証用書庫のローカル置き場。**.gitkeep 以外は全て gitignore**
+│   │                        # (再配布許可のない書庫はコミットしない — リポジトリポリシー)。
+│   │                        # 中はカテゴリ別サブディレクトリに整理 (games/README.md に明文化):
+│   ├── bio_100/             #   bio 100% ゲームコーパス (triage 用 31 本+。bio100_triage.js)
+│   ├── touhou/              #   東方旧作コーパス + pmd_music/ (touhou_test/pmd_*/rhythm/vol)
+│   ├── mem_test/            #   エディタ/メモリ検証群 (VZ/JED/life 等。xms_clients/jed_cursor)
+│   ├── game/                #   単発ゲーム本体 (rabbit/ray/sam/zar/brpn)
+│   ├── tool/                #   エディタ/ビューア/お絵描き/開発参照 (MUAP/Canvas/gbox/magd/pi24/mtlib/trkei)
+│   ├── driver/              #   音源ドライバ/ビジュアライザ (mdrv/pmd48o/fmp428u/fmds/mxd)
+│   ├── music/               #   曲データ (th5_12pmd/fmpdata/fmp_bundle ほか)
+│   ├── image/               #   画像データ (C165_206 = MAG/PI ペア。pi_test)
+│   └── fixture/             #   テスト専用入力 (dostest/mouse/frway102。mouse_chain_probe/tsr_vsync)
 │
 └── docs/
     ├── concept.md           # コンセプト (魂)

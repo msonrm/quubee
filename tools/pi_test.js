@@ -9,8 +9,8 @@
 // 素材は版権物 (転載不可) でリポジトリにコミットできないため、games/ 配下に書庫が在るときだけ
 // 走り、無ければ SKIP する (jed_cursor_test.js と同じ方針)。
 //
-//   素材の置き方: games/ に PI と MAG が同名で入った LZH/ZIP を置く (既定 C165_206.LZH)。
-//   別書庫を使う場合は第1引数にパスを渡す:  node tools/pi_test.js games/foo.lzh
+//   素材の置き方: games/image/ に PI と MAG が同名で入った LZH/ZIP を置く (既定 C165_206.LZH)。
+//   別書庫を使う場合は第1引数にパスを渡す:  node tools/pi_test.js games/image/foo.lzh
 
 const fs = require('fs');
 const path = require('path');
@@ -19,11 +19,11 @@ const { parseLzh } = require('../web/player/archive.js');
 require('../web/player/magimage.js');   // → global.QBMag
 require('../web/player/piimage.js');    // → global.QBPi
 
-const archivePath = process.argv[2] || path.join(__dirname, '..', 'games', 'C165_206.LZH');
+const archivePath = process.argv[2] || path.join(__dirname, '..', 'games', 'image', 'C165_206.LZH');
 
 if (!fs.existsSync(archivePath)) {
     console.log(`SKIP: ${archivePath} が無いため PI デコードの突合をスキップ`);
-    console.log('  (版権素材につき非コミット。PI と MAG が同名で入った書庫を games/ に置くと走ります)');
+    console.log('  (版権素材につき非コミット。PI と MAG が同名で入った書庫を games/image/ に置くと走ります)');
     process.exit(0);
 }
 

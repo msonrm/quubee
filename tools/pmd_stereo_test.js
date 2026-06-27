@@ -10,7 +10,7 @@
 //   パンが効く区間 (曲頭付近) で L≠R が出れば PASS。
 //   【注意】曲全体を平均すると center 区間に薄まって L≒R に見えるので、必ず窓ごとに走査する。
 //
-// サンプルはローカルの games/pmd48o.lzh (→ ネスト pmd_sam.lzh → uke10.m) から取り出す。
+// サンプルはローカルの games/driver/pmd48o.lzh (→ ネスト pmd_sam.lzh → uke10.m) から取り出す。
 // 書庫 / lha が無ければ SKIP (CI 安全・書庫は再配布不可でコミットしない)。
 //
 // 使い方: node tools/pmd_stereo_test.js
@@ -25,13 +25,13 @@ const LOADER = path.join(WEB, 'assets', 'loader.d88');
 const FONT   = path.join(WEB, 'assets', 'font.bmp');
 const PMD86  = path.join(WEB, 'assets', 'pmd', 'PMD86.COM');
 const PMP    = path.join(WEB, 'assets', 'pmd', 'PMP.COM');
-const OUTER  = path.join(ROOT, 'games', 'pmd48o.lzh');
+const OUTER  = path.join(ROOT, 'games', 'driver', 'pmd48o.lzh');
 
 function skip(msg) { console.log('SKIP — ' + msg); process.exit(0); }
 for (const [p, n] of [[LOADER, 'loader.d88'], [FONT, 'font.bmp'], [PMD86, 'PMD86.COM'], [PMP, 'PMP.COM']])
     if (!fs.existsSync(p)) skip(`${n} 不在`);
 if (!fs.existsSync(path.join(WEB, 'np2kai_core.js'))) skip('np2kai_core.js 不在 (ビルドしてください)');
-if (!fs.existsSync(OUTER)) skip('games/pmd48o.lzh 不在 (ローカル限定)');
+if (!fs.existsSync(OUTER)) skip('games/driver/pmd48o.lzh 不在 (ローカル限定)');
 function haveCmd(c) { try { cp.execSync(`command -v ${c}`, { stdio: 'ignore' }); return true; } catch (_) { return false; } }
 if (!haveCmd('lha')) skip('lha が無い');
 
