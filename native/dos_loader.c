@@ -55,6 +55,7 @@ static struct {
     uint16_t exe_ss;
     uint16_t exe_sp;
     uint16_t exe_minalloc;      /* MZ e_minalloc: body 以降に最低限必要な paragraphs */
+    uint16_t exe_maxalloc;      /* MZ e_maxalloc: body 以降に最大欲しい paragraphs (0xFFFF=全メモリ) */
 } g_stage;
 
 /* 実行中状態 */
@@ -521,6 +522,7 @@ int qb_dos_stage_exe(const uint8_t *image, size_t size, const char *cmdline,
     uint16_t e_crlc     = read_le16(image + 0x06);
     uint16_t e_cparhdr  = read_le16(image + 0x08);
     uint16_t e_minalloc = read_le16(image + 0x0A);
+    uint16_t e_maxalloc = read_le16(image + 0x0C);
     uint16_t e_ss      = read_le16(image + 0x0E);
     uint16_t e_sp      = read_le16(image + 0x10);
     uint16_t e_ip      = read_le16(image + 0x14);
@@ -552,6 +554,7 @@ int qb_dos_stage_exe(const uint8_t *image, size_t size, const char *cmdline,
     g_stage.exe_ss = e_ss;
     g_stage.exe_sp = e_sp;
     g_stage.exe_minalloc = e_minalloc;
+    g_stage.exe_maxalloc = e_maxalloc;
 
     /* relocation 適用: 各エントリは (offset, segment) 16-bit ペアで、image 先頭からの
      * seg:off を指す。そこに格納された 16-bit segment 値に image_base_seg を加算する。 */
@@ -1616,14 +1619,24 @@ int qb_dos_loader_start_hook(void) {
         CPU_ESI = g_stage.exe_ip;
         CPU_EDI = g_stage.exe_sp;
         /* AH=48h 用 alloc base = image_base から見た「プログラム占有の末尾」。
-         * ヘッダ宣言の最低確保 (body + e_minalloc) と実スタック頂点 (SS:SP) の
-         * 大きい方を採用 (旧実装のマジック SS+0x1000 を排除)。+16 para は余裕。 */
+         * 実 DOS は EXE に body + clamp(e_maxalloc, e_minalloc, 空き) paragraphs を割り当てる
+         * (e_maxalloc=0xFFFF=ほぼ全 EXE の既定 → 全空きメモリを占有)。旧実装は e_maxalloc を
+         * 無視し body+e_minalloc だけ与えていたため、自前ローダ型 EXE が「直上は空き」と誤認して
+         * AH=48h で確保した一時バッファが本体のセグメントロード先と衝突した (bound NE の brpn 等)。
+         * 実 DOS どおり最大確保にすると、それら EXE の AH=48h は実機同様に失敗し直接ロード経路へ。
+         * 標準 C cstartup は起動直後に AH=4Ah で self-shrink するので、その後の malloc/EXEC は
+         * 解放されたメモリで通常どおり動く。 */
         uint32_t body_paras = (uint32_t)((g_stage.size + 15) >> 4);
-        uint32_t heap_end   = body_paras + (uint32_t)g_stage.exe_minalloc;
+        uint32_t min_end    = body_paras + (uint32_t)g_stage.exe_minalloc;
+        uint32_t max_end    = body_paras + (uint32_t)g_stage.exe_maxalloc;
         uint32_t stack_end  = (uint32_t)g_stage.exe_ss + (((uint32_t)g_stage.exe_sp + 15) >> 4);
-        uint32_t end_rel    = heap_end > stack_end ? heap_end : stack_end;
-        uint32_t alloc_base = (uint32_t)QB_DOS_EXE_IMAGE_SEG + end_rel + 0x10;
-        qb_dos_alloc_reset(alloc_base > 0xFFFFu ? QB_DOS_MEM_TOP_SEG : (uint16_t)alloc_base);
+        uint32_t avail      = (uint32_t)QB_DOS_MEM_TOP_SEG - (uint32_t)QB_DOS_EXE_IMAGE_SEG;
+        uint32_t end_rel    = max_end;                 /* 欲しいだけ (e_maxalloc) */
+        if (end_rel > avail)      end_rel = avail;     /* 空きを超えない (実機: 取れるだけ) */
+        if (end_rel < min_end)    end_rel = min_end;   /* 最低確保は満たす */
+        if (end_rel < stack_end)  end_rel = stack_end; /* スタック頂点は必ず収める */
+        uint32_t alloc_base = (uint32_t)QB_DOS_EXE_IMAGE_SEG + end_rel;
+        qb_dos_alloc_reset(alloc_base > QB_DOS_MEM_TOP_SEG ? QB_DOS_MEM_TOP_SEG : (uint16_t)alloc_base);
         fprintf(stderr,
                 "[dos_loader] EXE loaded at %04x:0000, entry %04x:%04x, SS:SP=%04x:%04x\n",
                 QB_DOS_EXE_IMAGE_SEG, CPU_CS, CPU_IP, CPU_SS, CPU_SP);

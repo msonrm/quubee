@@ -1,5 +1,52 @@
 # CHANGELOG
 
+## [bound NE 実行ファイル (ぶろっくでポン等) の黒画面を根治 — staged EXE で e_maxalloc を honor] — 2026-06-27
+
+### 背景 (ユーザー報告: brpn100.lzh が真っ黒・停止せず)
+`brpn100.lzh` (ぶろっく で ポン、YONE 氏、1992) をドロップ→Run すると**画面が真っ黒のまま**
+(クラッシュ・停止はしない) という報告。headless 調査で `brpn.exe` の正体が判明 = **bound NE
+実行ファイル** (MZ スタブ + NE 本体、3 セグメント、リンカ 4.2)。MZ スタブが自身を高位へ退避し、
+自分の EXE を開いて NE セグメントを実モードへロードする自前ローダ。`main()` (seg1:0x34ea) を
+`call` した直後に `jmp far 0xb982:dc82` (= 未割当 VRAM、全 0xFF) へ暴走し #UD ループ → 黒画面。
+
+### 真因 (コア HLE のメモリモデル乖離: staged EXE が e_maxalloc を無視)
+NE ローダは読み込み用の一時バッファを `AH=48h` で確保するが、我々の `qb_dos_stage_exe` /
+loader-start は **MZ ヘッダの `e_maxalloc` を無視**し `body + e_minalloc` paragraphs だけを
+プログラムに割り当てていた (brpn は e_minalloc=0 なので本体 237 para のみ)。そのため空きアリーナが
+**0x020D から**始まり、`AH=48h` が低位 `0x020E` を返す。この一時バッファ (0xFFF para = linear
+0x20E0〜0x120D0) が **seg1 の最終ロード先 0x121 (linear 0x1210〜0xE000) と重なる**。
+ローダの読み込みは「read 1 → seg1 を 0x121 へコピー → read 2 (seg3 の残り) を再び 0x020E へ読む」
+順で、read 2 が seg1 最終領域 0x20E0〜0x4923 (= seg1 offset 0xED0〜0x3713) を **seg3 のデータで
+上書き**。ここに `main()` (0x34ea) が含まれて消滅 → `call main` がデータへ飛んで暴走。
+
+実 DOS は EXE に `body + clamp(e_maxalloc, e_minalloc, 空き)` paragraphs を割り当てる
+(`e_maxalloc=0xFFFF` = ほぼ全 EXE の既定 → **全コンベンショナルメモリを占有**)。よってこの `AH=48h` は
+実機では**失敗**し、ローダは衝突しない直接ロード経路を取る。我々が e_maxalloc を無視して小ブロックしか
+与えていなかったのが乖離点。
+
+### 修正 (`native/dos_loader.c`、Wasm 再ビルド)
+- `qb_dos_stage_exe` が MZ `e_maxalloc` (offset 0x0C) をパースし `g_stage.exe_maxalloc` に保持。
+- loader-start の EXE ブランチで alloc_base (空きアリーナ起点 = プログラム占有の末尾) を
+  **`body + clamp(e_maxalloc, e_minalloc, 空き)`** で計算 (旧: `body + e_minalloc + 0x10`)。
+  `e_maxalloc=0xFFFF` なら alloc_base=0xA000 = プログラムが全メモリを所有 → 自前ローダ型 EXE の
+  `AH=48h` 一時バッファ要求は実機同様に失敗し衝突が消える。スタック頂点 (SS:SP) は必ず収める floor 維持。
+- 標準 C cstartup は起動直後に `AH=4Ah` で self-shrink するので、その後の malloc/EXEC は解放された
+  メモリで通常どおり動く (= 全メモリ所有でも回帰なし。EXEC は親 shrink 後にアリーナへ子をロード)。
+- bound NE / 自前ローダ・自己展開型 EXE 全般に効く systemic な faithfulness 修正。
+
+### 検証
+- **brpn.exe**: 黒画面 (colors=1・cs=0xb982 VRAM #UD ループ) → **タイトル画面描画** (framebuffer
+  100% 非黒・6 色フルスクリーン、CS=0x121 user code、brpn.chr ロード・BRPN.SC0 生成・キー入力待ち)。
+- 新規回帰 `tools/exe_maxalloc_test.js` (4/4): 合成 EXE (e_maxalloc=0xFFFF) で「起動時は全メモリ所有
+  → AH=48h 大確保が失敗」かつ「self-shrink 後の AH=48h は成功」を 1 本で確認 = faithful + 回帰なし。
+- 全 headless テスト PASS (batch/batscript/exec_env/touhou 4/4/xms/vz/pmd/sft 他 30+本)。
+- bio100 triage: **同一コードで本修正あり/なしを A/B 比較 → 完全一致 (ALIVE=21 RENDER=4 BOOT=3
+  WAIT=2 EXIT=0 BUSY=1 CRASH=0、描画到達 25・動作確認 27/31)** = **回帰ゼロ**。bio100 の 31 本は
+  直接 EXE か .bat (子は EXEC=本修正の対象外) で、本修正は brpn 等のトップレベル staged EXE のみに効く。
+  (memory の 2026-06-09 baseline ALIVE20 からの差は本修正でなく以降の累積変更由来 = A/B で確認。)
+- **ブラウザ実機 T3 確認済 (2026-06-27、ユーザー)** — brpn がタイトル画面まで表示・問題なし。
+
+
 ## [.M プレビューの曲差し替えで前曲の残響が冒頭に乗る件を根治] — 2026-06-27
 
 ### 背景 (ユーザー報告・JS のみ・Wasm 不変)
