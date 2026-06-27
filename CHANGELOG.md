@@ -1,5 +1,21 @@
 # CHANGELOG
 
+## [ちびおと(86+ADPCM)を既定 ON 化 + 既定クロックを 27→20 に差し戻し] — 2026-06-27
+
+### 背景 (JS のみ・Wasm 不変・ブラウザ実機で確認)
+前項の FMP/ちびおと対応をユーザーが実機で試し、**FM・ADPCM・FMDSP すべて問題なし**と確認。
+toggle 無しで ADPCM が鳴るよう **ちびおとを既定 ON 化**することにした。あわせて FMDSP で音が
+わずかに詰まり、`qbDebug.multiple(20)` がちょうど良いとの実機判断を受け、**既定クロックを
+27(≈66MHz)→20(≈49MHz) に差し戻し**た (2026-06-26 の引き上げを撤回。ちびおと既定 ON で
+run_frame が少し重くなるぶん、20 の方が音の余裕がある)。
+
+### 変更 (`web/player/bridge.js`)
+- `forceChibi` の初期値 `false → true` (全ブートで SOUND_SW=0x14=86+ADPCM)。`qbDebug.chibioto(0)` で
+  従来の素の 86 (0x04) に戻せる。0x14 はメイン status レジスタ読み (timer/busy=FM ドライバの主経路) を
+  変えず、ADPCM 未使用なら無音ストリームを足すだけ = FM のみ曲は発音同一 (headless で実証済・bio100 回帰ゼロ)。
+- `DEFAULT_MULTIPLE` `27 → 20`。autoClock の cur/OFF 戻り先/表示文字列も 20 基準に同期 (定数参照なので自動)。
+- 関連コメント (リファレンス機種表・CLAUDE.md) を 20 / 既定 ON に更新。
+
 ## [FMP (Guu) 音楽ドライバ + 「ちびおと」(86+ADPCM) 対応 — FMDSP の code 7 を根治] — 2026-06-27
 
 ### 背景 (ユーザー報告: FMDSP.COM が exited code 7 で動かない)

@@ -1212,9 +1212,12 @@ async function makeWorkerEmu() {
     // 86 ボード IRQ の上書きトグル。null=既定 (全ブート IRQ12)、0=既定 IRQ 強制、1=IRQ12 強制。
     // 既定は下の loadLoaderDisk で IRQ12。将来 IRQ12 非対応ドライバが出たら qbDebug.snd86irq(0) で逃げる。
     let forcePmdIrq = null;
-    // 「ちびおと」(86+ADPCM=SOUND_SW 0x14) の有効化トグル。既定 false (素の 86=0x04)。FMP .ovi /
-    // PMD .PPC 等 ADPCM 声部のある曲を鳴らすときだけ qbDebug.chibioto(1) で on にする (次 Run から)。
-    let forceChibi = false;
+    // 「ちびおと」(86+ADPCM=SOUND_SW 0x14) の有効化トグル。**既定 true (= 全ブート 86+ADPCM)**。
+    // 2026-06-27 にユーザー実機確認 (FM/ADPCM/FMDSP すべて問題なし) を経て既定 ON 化。0x14 はメインの
+    // status レジスタ読み (timer/busy) を変えず (FM ドライバの主経路は不変)、ADPCM 未使用なら無音ストリームを
+    // 足すだけ = FM のみ曲は発音同一。ADPCM 入り (FMP .ovi / PMD .PPC) は追加設定なしで鳴る。
+    // 非 ADPCM タイトルで万一の副作用 (拡張 status/レジスタ読みの差) が出たら qbDebug.chibioto(0) で素の 86 に戻せる。
+    let forceChibi = true;
     let suppressBootBeep = false;   // 次の loader ブートが音楽セッションか (= beep 消音 + IRQ12 + エンジン非表示)
     let hideEngineFiles  = false;   // 一覧から PMD86.COM/PMP.COM を隠すか (音楽セッション中だけ true)
     // np2kai_dos_get_exit(int* code) — JS では HEAP に書き込み番地を渡す
@@ -1450,8 +1453,8 @@ async function makeWorkerEmu() {
         // snd86opt は board bind (reset) 時に読まれるので reset の前に設定する。
         // forcePmdIrq が non-null なら上書き (qbDebug.snd86irq / 将来 IRQ12 非対応ドライバ用)。
         await emu.setPmdIrq(forcePmdIrq !== null ? forcePmdIrq : 1);
-        // 「ちびおと」(86+ADPCM) は opt-in。on のときだけ SOUND_SW=0x14 で board を再 bind
-        // (FMP .ovi / ADPCM 声部用)。off (既定) は素の 86 のまま = 非 ADPCM タイトルに無影響。
+        // 「ちびおと」(86+ADPCM=SOUND_SW 0x14) を毎 Run の reset 前に適用。forceChibi 既定 true (全ブート ON)。
+        // FMP .ovi / PMD .PPC 等 ADPCM 声部が追加設定なしで鳴る。qbDebug.chibioto(0) で素の 86 に戻せる。
         await emu.setChibiOto(forceChibi ? 1 : 0);
         await emu.reset();
         // 起動音 (ピポ) は音楽セッションのブートでだけ消す。ゲーム起動は当時どおり鳴らす
@@ -2170,10 +2173,12 @@ async function makeWorkerEmu() {
     const setFmgen    = M.cwrap('np2kai_set_fmgen',          'number', ['number']);
     const setItfPost  = M.cwrap('np2kai_set_itf_post',       'number', ['number']);
     const setMul      = M.cwrap('np2kai_set_clock_multiple', 'number', ['number']);
-    // 既定クロック倍率。multiple=27 × baseclock 2.4576MHz ≈ 66MHz (≈486DX2-66、ZUN 推奨環境)。
-    // 旧既定は 20 (≈50MHz)。np2kai_set_clock_multiple は np2cfg.multiple も書くので一度適用すれば
-    // 以後の Run (reset) でも保持される (下の起動時 emu.setClockMultiple で一度だけ適用)。
-    const DEFAULT_MULTIPLE = 27;
+    // 既定クロック倍率。multiple=20 × baseclock 2.4576MHz ≈ 49MHz (≈486DX2-50)。
+    // 2026-06-26 に 27 (≈66MHz、ZUN 推奨環境相当) へ上げたが、ちびおと(ADPCM)既定 ON 後の
+    // FMDSP 等で run_frame が重くなり音が詰まる実害をユーザーが実機で確認したため 20 に戻した
+    // (2026-06-27)。np2kai_set_clock_multiple は np2cfg.multiple も書くので一度適用すれば以後の
+    // Run (reset) でも保持される (下の起動時 emu.setClockMultiple で一度だけ適用)。
+    const DEFAULT_MULTIPLE = 20;
     const setVol      = M.cwrap('np2kai_set_vol',  null,     ['number','number','number','number']);
     const getVol      = M.cwrap('np2kai_get_vol',  'number', ['number']);
     const midiBytes   = M.cwrap('np2kai_debug_serial_midi_bytes',  'number', ['number']);
@@ -2193,18 +2198,18 @@ async function makeWorkerEmu() {
     // (np2kai_set_clock_multiple = engine と同手順の changeclock + gdc_updateclock) だけ
     // 借りて、フィードバックは我々の最も信頼できる実時間信号 = run_frame 実測で駆動する。
     const autoClock = {
-        enabled: false,           // 既定 OFF (multiple=DEFAULT_MULTIPLE=27≈66MHz 固定)。autoclock の快適化利得は小さく
+        enabled: false,           // 既定 OFF (multiple=DEFAULT_MULTIPLE=20≈49MHz 固定)。autoclock の快適化利得は小さく
                                   // (大半のゲームは HLT 待ちで倍率ほぼ無影響)、一方で倍率を上げると
                                   // run_frame が重くなり音楽のテンポがもたつく実害が出る (MIDI でも FM/Ray でも
-                                  // 確認、2026-06-14)。速さが欲しい稀な CPU 律速タイトルだけ qbDebug.autoclock(1)
-                                  // または qbDebug.multiple(N) で手動で上げるオプトイン扱いにする。
-                                  // 既定倍率は起動時に emu.setClockMultiple(DEFAULT_MULTIPLE=27) で適用し
-                                  // np2cfg.multiple に保持される (ZUN 推奨 66MHz 相当。実機で音切れ無しを確認)。
+                                  // 確認、2026-06-14。ちびおと既定 ON 後の FMDSP でも 2026-06-27 に再確認)。速さが欲しい稀な
+                                  // CPU 律速タイトルだけ qbDebug.autoclock(1) または qbDebug.multiple(N) で手動で上げる。
+                                  // 既定倍率は起動時に emu.setClockMultiple(DEFAULT_MULTIPLE=20) で適用し
+                                  // np2cfg.multiple に保持される (≈486DX2-50 相当。音切れの出ない安全側)。
         floor: 20, ceil: 42, step: 2,   // floor=20: autoclock ON 時の安全下限 (重い時はここまで下げる)。
                                   // ceil=42: 仕様の x42 快適化目標。これ以上 (例 60) だと
                                   // vsync ロックゲームの CPU-bound バースト (ステージ遷移等) が
                                   // 速すぎになる (Nyahax で確認) ため、速度の上限として 42 を採用。
-        cur: DEFAULT_MULTIPLE,    // 現在の倍率 (= pccore.multiple と同期)。既定 27≈66MHz
+        cur: DEFAULT_MULTIPLE,    // 現在の倍率 (= pccore.multiple と同期)。既定 20≈49MHz
         emaMs: 0,                 // run_frame 1 回の所要 ms の指数移動平均
         budgetMs: 1000 / 56,      // 1 step の real-time 予算 (run loop の TARGET_HZ=56 と一致)
         evalEvery: 30,            // 評価間隔 (rAF 単位 ≈ 0.5s)。頻繁すぎる発振を防ぐ
@@ -2222,16 +2227,16 @@ async function makeWorkerEmu() {
         },
         setEnabled(on) {
             this.enabled = !!on;
-            if (!this.enabled) this.cur = setMul(DEFAULT_MULTIPLE);   // OFF で既定 (27≈66MHz) に戻す
+            if (!this.enabled) this.cur = setMul(DEFAULT_MULTIPLE);   // OFF で既定 (20≈49MHz) に戻す
             else this.emaMs = 0;                        // ON で EMA を初期化し測り直す
             return this.enabled;
         },
         setManual(m) { this.enabled = false; this.cur = setMul(m); return this.cur; },  // 手動固定
     };
 
-    // 既定クロックを 66MHz (multiple=27) に。np2kai_set_clock_multiple が np2cfg.multiple も書くので
+    // 既定クロックを ≈49MHz (multiple=20) に。np2kai_set_clock_multiple が np2cfg.multiple も書くので
     // 一度の適用で以後の Run (reset) でも保持される。local/worker 両モードで効く (emu 経由)。
-    // ZUN 推奨環境 (≈486DX2-66) 相当。ブラウザ実機で東方等の音楽・テンポに破綻が無いことを確認済み。
+    // ≈486DX2-50 相当。ちびおと(ADPCM)既定 ON 後も FMDSP 等で音が詰まらない安全側 (2026-06-27 実機確認)。
     emu.setClockMultiple(DEFAULT_MULTIPLE);
 
     window.qbDebug = {
@@ -2285,13 +2290,13 @@ async function makeWorkerEmu() {
         // 「ちびおと」(PC-9801-86 + ADPCM RAM = SOUND_SW 0x14) のトグル。既定 OFF (素の 86=0x04)。
         // chibioto(1)=ON で FMP の .ovi / PMD の .PPC 等 ADPCM(PCM) 声部のある曲が鳴る。chibioto(0)/()=既定 OFF。
         // 設定後に対象を Run (reset) して反映。FM のみの曲には無影響なので付けっぱなしでも実害は小さい。
-        chibioto: (on = 1) => { forceChibi = !!on; return `forceChibi=${forceChibi} (1=86+ADPCM/0=素の86) — 次の Run から反映`; },
+        chibioto: (on = 1) => { forceChibi = !!on; return `forceChibi=${forceChibi} (既定 ON。1=86+ADPCM/0=素の86) — 次の Run から反映`; },
         // ブート時の ITF (BIOS POST) 表示。既定はスキップ (メモリカウント+ピポ音なし=即プレイ)。
         // itfpost(1)=実機どおり POST を出す (ノスタルジー用)、itfpost(0)=既定どおりスキップ。
         // 設定後にゲーム/音楽を Run (reset) して反映。
         itfpost: (on = 1) => `ITF_WORK=${setItfPost(on ? 1 : 0)} (1=POST表示/0=スキップ) — 次の Run から反映`,
         // async 自動クロック (快適化, **既定 OFF**)。autoclock(1)=ON で host の余裕に応じ multiple を
-        // floor..ceil 内で自動調整 (達成フレーム時間から逆算)。autoclock(0)=OFF で既定 27≈66MHz 固定。
+        // floor..ceil 内で自動調整 (達成フレーム時間から逆算)。autoclock(0)=OFF で既定 20≈49MHz 固定。
         // 既定 OFF の理由: 倍率を上げる利得は小さく音楽テンポがもたつく実害がある (上の autoClock 定義参照)。
         // 第2引数で ceil (上限倍率) を調整可: 例 autoclock(1, 30) で遷移をさらに緩く、(1, 60) で攻める。
         autoclock: (on=1, ceil) => {
@@ -2302,7 +2307,7 @@ async function makeWorkerEmu() {
             if (en && autoClock.cur > autoClock.ceil) autoClock.cur = setMul(autoClock.ceil);
             return en
                 ? `autoclock ON — host 余裕に応じ multiple を ${autoClock.floor}..${autoClock.ceil} で自動調整 (現 ${autoClock.cur})。重い時は自動で下げて音切れを防ぎます`
-                : `autoclock OFF — multiple=${DEFAULT_MULTIPLE} 固定 (≈66MHz)`;
+                : `autoclock OFF — multiple=${DEFAULT_MULTIPLE} 固定 (≈49MHz)`;
         },
         // CPU クロック倍率の手動上書き (autoclock を OFF にして固定)。引数なしで現状表示。
         // 快適化の A/B 用 (例: qbDebug.multiple(42) で速さ・音切れを体感比較)。
