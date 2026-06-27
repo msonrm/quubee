@@ -1083,13 +1083,22 @@ int qb_dos_signal_tsr(uint16_t keep_paras, int code) {
         return 1;
     }
 
-    /* 最上位プログラムが TSR した (親無し) = 常駐させる相手がいないので halt 扱い。 */
+    /* 最上位プログラムが TSR した (親無し) = 常駐させる相手 (シェル) がいないので idle (halt loop)。
+     * ただし実 DOS なら制御は COMMAND.COM (IF=1 のプロンプト) に戻り、常駐 ISR は割り込みで
+     * 動き続ける。我々の halt loop は HLT;JMP だが、INT 21h(AH=31h) は IF をクリアした状態で
+     * 入ってくるので、ここで IF を立て直さないと HLT が割り込みで起きず常駐 ISR が一切走らない。
+     * 例: FreeWay (frway) は VSYNC (INT 0Ah) をフックして夜景/道路をアニメーションさせる
+     * 常駐ソフトで、IF=0 idle だと画面が静止する ([[reference_int27_oldstyle_tsr]] / PMD 音楽 TSR の
+     * 「IF=0 だと最初の1音だけ」と同型)。worker tick は exited を見ず run_frame を回し続けるので、
+     * IF=1 さえ立てれば常駐 ISR が VSYNC 毎に動く。exited 扱いは従来どおり (受動 TSR=mouse 等の
+     * 回帰や int27_tsr_test を変えない)。 */
     g_run.exited = 1;
     g_run.exit_code = code;
     g_run.running = 0;
     CPU_CS = 0xF000;
     CPU_IP = (uint16_t)(QB_TRAMP_HALT_LOOP & 0xFFFF);
-    fprintf(stderr, "[dos_loader] top-level TSR (keep=%u) → halt loop\n", (unsigned)keep_paras);
+    CPU_FLAG |= I_FLAG;     /* 常駐 ISR (VSYNC アニメ等) が halt loop 中に走れるよう割り込み許可 */
+    fprintf(stderr, "[dos_loader] top-level TSR (keep=%u) → halt loop (IF=1, 常駐 ISR 有効)\n", (unsigned)keep_paras);
     return 0;
 }
 

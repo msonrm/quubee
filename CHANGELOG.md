@@ -1,5 +1,37 @@
 # CHANGELOG
 
+## [常駐ソフト (FreeWay) の VSYNC アニメが静止する件を根治 — 最上位 TSR の idle を IF=1 に] — 2026-06-27
+
+### 背景 (ユーザー報告: frway102.lzh で夜景が動かない)
+FreeWay (frway102.lzh、FKS 作・1990) は「3D ドライブ環境常駐ソフト」で、起動すると VSYNC ごとに
+擬似 3D の道路と遠景の夜景をアニメーションさせる。`freeway` で常駐 (TSR)・`freeway -r` で常駐解除。
+ブラウザで動かすと TSR はするが**画面が静止**して夜景が動かない、という報告。
+
+### 真因 (最上位 TSR の idle が IF=0 で常駐 ISR が走らない)
+freeway は **VSYNC (PC-98 IRQ2 = INT 0Ah) をフック** (100:103) し、その ISR が毎フレーム道路/夜景を
+描く。INT 21h `AH=31h` (TSR) は IF をクリアした状態でハンドラに入るため、最上位プログラムが TSR した
+ときの我々の idle (halt loop = `HLT; JMP -3`) が **IF=0 のまま**で、`HLT` が VSYNC 割り込みで起きず
+**常駐 ISR が一度も走らない** → 画面静止。実 DOS なら制御は COMMAND.COM (IF=1 のプロンプト) に戻り、
+VSYNC ごとに freeway の ISR が動き続ける。PMD 音楽 TSR の「IF=0 アイドルだと最初の1音だけ」と同型。
+
+### 修正 (`native/dos_loader.c`、Wasm 再ビルド)
+- `qb_dos_signal_tsr` の最上位 TSR ブランチ (親=シェルが居ない場合の idle) で **`CPU_FLAG |= I_FLAG`**
+  を立て、halt loop 中も VSYNC/timer 等のハードウェア割り込みが常駐 ISR に届くようにした。
+- worker tick は `exited` を見ず `run_frame` を回し続けるので、IF=1 さえ立てば常駐 ISR が VSYNC 毎に動く。
+  `exited` の扱い・受動 TSR (mouse 等) の挙動・正常終了 (signal_exit) の halt loop (IF=0 のまま=凍結) は不変。
+- 影響は「最上位プログラムが AH=31h/INT 27h で TSR」する経路のみ。EXEC 子 TSR (Ray RIN.COM・.bat の音源
+  ドライバ) は親復帰の別経路で不変。
+
+### 検証
+- **freeway**: 画面静止 (フレームハッシュ 1 種) → **夜景/道路がアニメーション** (TSR 後フレームハッシュ
+  15 種・PC が常駐 ISR 0x100:18xx で実行)。
+- 新規回帰 `tools/tsr_vsync_test.js` (corpus、不在なら SKIP): freeway を TSR まで進めた後フレームが
+  変化することを確認 (= 常駐 VSYNC ISR が IF=1 で動く)。
+- `int27_tsr_test` (mouse 型 INT 27h 最上位 TSR) PASS 維持・batch/batscript/pmd/touhou/exe_maxalloc PASS。
+- bio100 triage: ベースライン維持 (CRASH=0)。
+- **ブラウザ実機 T3 確認済 (2026-06-27、ユーザー)** — 夜景/道路がアニメーション・カーソルキーで操舵を確認。
+
+
 ## [bound NE 実行ファイル (ぶろっくでポン等) の黒画面を根治 — staged EXE で e_maxalloc を honor] — 2026-06-27
 
 ### 背景 (ユーザー報告: brpn100.lzh が真っ黒・停止せず)
