@@ -1,5 +1,22 @@
 # CHANGELOG
 
+## [.M プレビューの曲差し替えで前曲の残響が冒頭に乗る件を根治] — 2026-06-27
+
+### 背景 (ユーザー報告・JS のみ・Wasm 不変)
+`.M` (PMD) を単体プレビューで次々に再生すると、**前の曲の演奏音がちょっとだけ残って次曲の冒頭が汚く**なる、
+という報告。真因 = 「再起動なしの曲差し替え」(PMD86 常駐のまま PMP を再 EXEC して曲だけ差し替え) で、
+**worker の SAB 音声リングに溜まった前曲のバッファ (最大 ~341ms) が破棄されず次曲の頭で鳴り出す** + 差し替え窓
+(シェル wake → `PMP <曲>` ロードの間) に前曲が鳴り続ける分が乗ること。worker モード固有 (SAB リング) なので
+headless では再現しない (ブラウザ実機の現象)。
+
+### 修正 (`web/player/emu-worker.js` — Approach A「前曲を止めてから新曲をロード」)
+- `musicPlay` 受信時、**2 曲目以降 (差し替え) だけ** ① リングをクリア (`writeIdx←readIdx` で前曲バッファを破棄)
+  ② 差し替え窓を覆う数ブロック (~120ms 相当) を無音で埋める (`g_swapSilence`、`drainBlockToRing` が消費)。
+- **初回再生 (`g_musicStarted=false`) はスキップ**しイントロを削らない。`reset` で `g_musicStarted` を倒すので
+  新セッションの初曲も無音化しない。無音マスク中は `audioActive` を立てない (前曲の窓で計時開始しないため)。
+- 通常再生・ゲーム実行は `g_swapSilence`/`g_musicStarted` が立たず従来と完全に同一 (drainBlockToRing は mute=false で不変)。
+- ローカル経路 (?local, ScriptProcessorNode 直 pull) はリング backlog が無いので元から最小 (変更なし)。
+
 ## [ちびおと(86+ADPCM)を既定 ON 化 + 既定クロックを 27→20 に差し戻し] — 2026-06-27
 
 ### 背景 (JS のみ・Wasm 不変・ブラウザ実機で確認)

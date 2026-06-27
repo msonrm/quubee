@@ -41,6 +41,15 @@ const STALL_MS = 500;
 // 音声リング (Stage 1c)。main が SAB を確保し init で渡す。SPSC: ctrl[0]=writeIdx, ctrl[1]=readIdx。
 let audioSab = null, audioCtrl = null, audioData = null, audioCap = 0, audioMask = 0;
 let fillPtr = 0, audioOn = false;
+let audioRate = 48000;       // init で msg.audioRate を保持 (差し替え無音長を ms→block 換算するのに使う)
+
+// 曲差し替え (.M プレビューの 2 曲目以降) の前曲残響対策。差し替え時にリングをクリアして前曲の
+// バッファ残量を破棄し (g_swapSilence>0 の間は) 数ブロックを無音で埋めて差し替え窓 (シェル wake→
+// PMP <曲> ロードの間に前曲が鳴り続ける分) を隠す。初回再生 (g_musicStarted=false) は前曲が無いので
+// スキップしイントロを削らない。reset で g_musicStarted を倒すので新セッションの初曲も無音化しない。
+let g_swapSilence = 0;       // 残りの無音ブロック数 (drainBlockToRing が消費)
+let g_musicStarted = false;  // この音楽セッションで 1 曲以上演奏したか (差し替え判定用)
+const SWAP_SILENCE_MS = 120; // 差し替え窓を覆う無音長 (短いほど次曲のイントロ欠けが減る)
 
 function reply(id, payload, transfer) {
     if (id === undefined) return;
@@ -116,17 +125,30 @@ function postFrame() {
 
 function ringFill() { return (Atomics.load(audioCtrl, 0) - Atomics.load(audioCtrl, 1)) | 0; }
 
+// リングを空にする (producer 側で writeIdx を readIdx へ巻き戻す = バッファ済み前曲を破棄)。
+// consumer (worklet) は readIdx==writeIdx で underrun→無音を出すので、巻き戻しは安全 (SPSC の producer 操作)。
+function clearRing() { if (audioCtrl) Atomics.store(audioCtrl, 0, Atomics.load(audioCtrl, 1)); }
+// 差し替え窓を覆う無音ブロック数 (SWAP_SILENCE_MS を block 長で割る。最低 2 ブロック)。
+function swapSilenceBlocks() {
+    const blockMs = bufsize / (audioRate || 48000) * 1000;
+    return Math.max(2, Math.round(SWAP_SILENCE_MS / blockMs));
+}
+
 // 1 ブロック (s_samples) を pcmlock → int16→float32 でリングへ書く。
 // pcmlock 直前に sound_sync が CPU クロックにロックステップでブロックを満たしているので top-up ≈0。
 let audioActiveReported = false;   // 「実際に音が鳴り始めた」を main へ 1 度通知する用 (音楽プレイヤーの計時開始)
 function drainBlockToRing() {
     c.audioFill(handle, fillPtr, bufsize);              // pcmlock → fillPtr に int16 stereo (bufsize frames)
+    // 曲差し替え直後はこのブロックを無音で埋める (前曲の続きを隠す)。audioFill は必ず呼んで
+    // emu の sound パイプラインは消費し、ring へ書く値だけ 0 にする (タイミングは進める)。
+    const mute = g_swapSilence > 0;
+    if (mute) g_swapSilence--;
     const src = new Int16Array(M.HEAPU8.buffer, fillPtr, bufsize * 2);
     let w = Atomics.load(audioCtrl, 0);
     let peak = 0;
     for (let i = 0; i < bufsize; i++) {
         const idx = (w & audioMask) * 2;
-        const l = src[i * 2], r = src[i * 2 + 1];
+        const l = mute ? 0 : src[i * 2], r = mute ? 0 : src[i * 2 + 1];
         audioData[idx]     = l / 32768;
         audioData[idx + 1] = r / 32768;
         // L/R 両チャンネルのピークを見る (ローカル経路 bridge.js と揃える)。L だけだと
@@ -135,7 +157,8 @@ function drainBlockToRing() {
         w = (w + 1) | 0;
     }
     Atomics.store(audioCtrl, 0, w);
-    if (!audioActiveReported && peak > 1000) { audioActiveReported = true; postMessage({ type: 'audioActive' }); }
+    // 無音マスク中は audioActive を立てない (前曲の窓で計時開始するのを防ぐ。次曲の実音で立てる)。
+    if (!mute && !audioActiveReported && peak > 1000) { audioActiveReported = true; postMessage({ type: 'audioActive' }); }
 }
 
 function tick() {
@@ -225,7 +248,7 @@ async function init(msg) {
     c.getExitFn  = M.cwrap('np2kai_dos_get_exit', 'number', ['number']);
 
     M.ccall('np2kai_set_data_dir', null, ['string'], ['/tmp/']);
-    if (msg.audioRate) M.ccall('np2kai_set_audio_rate', 'number', ['number'], [msg.audioRate]);
+    if (msg.audioRate) { M.ccall('np2kai_set_audio_rate', 'number', ['number'], [msg.audioRate]); audioRate = msg.audioRate; }
 
     // data-dir ファイル (FONT.BMP / リズムサンプル等) を create より前に書く。
     // create→pccore_reset で font ROM / リズム ROM が読まれるため、先に置く必要がある。
@@ -283,7 +306,7 @@ onmessage = (ev) => {
 
         // ライフサイクル
         case 'insertFdd': reply(m.id, { r: c.insertFdd(handle, m.path, m.drive, m.readonly ? 1 : 0) }); break;
-        case 'reset': audioActiveReported = false; c.reset(handle); reply(m.id, { ok: true }); break;
+        case 'reset': audioActiveReported = false; g_musicStarted = false; g_swapSilence = 0; c.reset(handle); reply(m.id, { ok: true }); break;
 
         // ステージング (生バイトを HEAP 経由で)
         case 'stageCom': reply(m.id, { r: withHeapBytes(m.bytes, (p, n) => c.stageCom(p, n, m.cmdline || '', m.path || '')) }); break;
@@ -291,7 +314,15 @@ onmessage = (ev) => {
         case 'stageScript': reply(m.id, { r: withHeapBytes(m.bytes, (p, n) => c.stageScript(p, n, m.label || '')) }); break;
         case 'stageBatch': reply(m.id, { r: withHeapBytes(m.bytes, (p, n) => c.stageBatch(p, n, m.label || '')) }); break;
         case 'stageMusic': reply(m.id, { r: c.stageMusic() }); break;
-        case 'musicPlay': audioActiveReported = false; reply(m.id, { r: c.musicPlay(m.song) }); break;
+        case 'musicPlay':
+            audioActiveReported = false;
+            // 2 曲目以降 (= 差し替え) は前曲の残響を断つ (Approach A): リングをクリアして前曲の
+            // バッファ残量を破棄し、差し替え窓のあいだ無音を埋める。初回 (g_musicStarted=false) は
+            // 前曲が無いのでスキップ (イントロを削らない)。
+            if (g_musicStarted && audioOn && audioCtrl) { clearRing(); g_swapSilence = swapSilenceBlocks(); }
+            g_musicStarted = true;
+            reply(m.id, { r: c.musicPlay(m.song) });
+            break;
 
         case 'getExit': {
             const p = M._malloc(4);
