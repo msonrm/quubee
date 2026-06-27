@@ -1,8 +1,8 @@
 diff --git a/bios/bios.c b/bios/bios.c
-index 59758ca..39feb5e 100755
+index 59758ca..d932776 100755
 --- a/bios/bios.c
 +++ b/bios/bios.c
-@@ -410,6 +410,19 @@ static void setbiosseed(UINT8 *ptr, UINT size, UINT seedpos) {
+@@ -410,6 +410,20 @@ static void setbiosseed(UINT8 *ptr, UINT size, UINT seedpos) {
  	ptr[seedpos + 1] -= y;
  }
  
@@ -17,12 +17,13 @@ index 59758ca..39feb5e 100755
 +extern int qb_dos_batch_next_hook(void); /* qb: .bat 文インタプリタ「次コマンド?」(シェルの far CALL) */
 +extern int qb_dos_intdc_hook(void);   /* qb: INT DCh (PC-98 ファンクション/編集キー定義 BIOS) */
 +extern int qb_dos_int27_hook(void);   /* qb: INT 27h (Terminate and Stay Resident, 旧式 TSR — MS Mouse 等) */
++extern int qb_dos_int18_hook(void);   /* qb: INT 18h (CRT BIOS) 30 行モード時フロントエンド (30BIOS-API + パススルー) */
 +extern void qb_dos_install_trampolines(void);
 +
  void bios_initialize(void) {
  
  	BOOL	biosrom;
-@@ -463,6 +476,11 @@ void bios_initialize(void) {
+@@ -463,6 +477,11 @@ void bios_initialize(void) {
  		CopyMemory(mem + 0x0e8000, nosyscode, sizeof(nosyscode));
  		if ((!biosrom) && (!(pccore.model & PCMODEL_EPSON))) {
  			CopyMemory(mem + 0xe8dd8, neccheck, 0x25);
@@ -34,7 +35,7 @@ index 59758ca..39feb5e 100755
  			pos = LOADINTELWORD(itfrom + 2);
  			CopyMemory(mem + 0xf538e, itfrom + pos, 0x27);
  		}
-@@ -517,6 +535,9 @@ void bios_initialize(void) {
+@@ -517,6 +536,9 @@ void bios_initialize(void) {
  	mem[0xffff0] = 0xea;
  	STOREINTELDWORD(mem + 0xffff1, 0xfd800000);
  
@@ -44,7 +45,7 @@ index 59758ca..39feb5e 100755
  	CopyMemory(mem + 0x0fd800 + 0x0e00, keytable[0], 0x60 * 8);
  	
  	//fh = file_create_c(_T("emuitf.rom"));
-@@ -911,7 +932,7 @@ void biosioemu_proc(void) {
+@@ -911,7 +933,7 @@ void biosioemu_proc(void) {
  UINT MEMCALL biosfunc(UINT32 adrs) {
  
  	UINT16	bootseg;
@@ -53,7 +54,7 @@ index 59758ca..39feb5e 100755
  // np21w ver0.86 rev46 BIOS I/O emulation
  #if defined(BIOS_IO_EMULATION)
  	UINT32	oldEIP;
-@@ -1172,6 +1193,49 @@ UINT MEMCALL biosfunc(UINT32 adrs) {
+@@ -1172,6 +1194,53 @@ UINT MEMCALL biosfunc(UINT32 adrs) {
  			CPU_REMCLOCK -= 2000;
  			bootstrapload();
  			return(0);
@@ -100,6 +101,10 @@ index 59758ca..39feb5e 100755
 +		case 0xFEEB0:  /* INT 27h (Terminate and Stay Resident, 旧式 TSR) — MS Mouse 等 */
 +			CPU_REMCLOCK -= 50;
 +			return qb_dos_int27_hook();
++
++		case 0xFEEC0:  /* INT 18h フロントエンド (30 行モード時のみ) — 30BIOS-API + bios0x18 パススルー */
++			CPU_REMCLOCK -= 200;
++			return qb_dos_int18_hook();
  	}
  
  	if ((adrs >= 0xf9950) && (adrs <= 0x0f9990) && (!(adrs & 3))) {

@@ -138,6 +138,11 @@ int np2kai_set_chibioto(int on);
 __attribute__((visibility("default")))
 int np2kai_set_itf_post(int on);
 
+/* 仮想 30行BIOS: 30 行テキスト表示 (640×480) + 30BIOS-API のセッション限定オン/オフ。on で次の
+ * Run (loader-start) から有効。既定 OFF (= ゼロ回帰)。qbDebug.lines30(0|1) の実体。詳細: docs/30line_spec.md。 */
+__attribute__((visibility("default")))
+int np2kai_set_lines30(int on);
+
 /* CPU クロック倍率の live 設定 (快適化 A/B / async 自動クロック / ベンチ用)。倍率↑ = エミュ CPU
  * 高速化だが host 負荷も比例増 (CPU-bound 時。HLT-idle 時は HLT fast-forward でほぼ無影響)。
  * pull 型音声では host が追いつかない倍率にすると音声が枯れて途切れるので real-time を割らない

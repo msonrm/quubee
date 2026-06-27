@@ -54,4 +54,13 @@ int qb_dos_chdir(const char *raw_dos);
  * 状態を再現するために使う (qb_dos_tty_reset でルートへ戻された直後に呼ぶ)。 */
 void qb_dos_set_cwd_rel(const char *rel);
 
+/* 仮想 30行BIOS (qbDebug.lines30 / np2kai_set_lines30) のオン/オフ。ON のとき次の Run
+ * (loader-start) で 640×480・30 行表示 + 30BIOS-API が有効になる。既定 0 = ゼロ回帰。
+ * 詳細: docs/30line_spec.md。 */
+extern int qb_lines30_enabled;
+
+/* INT 18h フロントエンド (30 行モード時のみ IVT[0x18] が指す)。30BIOS-API を処理し、
+ * それ以外はオリジナル bios0x18 へパススルー。トランポリン 0xFEEC0 から biosfunc 経由で呼ばれる。 */
+int qb_dos_int18_hook(void);
+
 #endif /* QB_DOS_INT21_H */

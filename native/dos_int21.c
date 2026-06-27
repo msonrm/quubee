@@ -79,7 +79,11 @@ uint16_t qb_dos_exec_last_code(void);
 uint16_t qb_dos_first_mcb_seg(void);
 
 #define TEXT_COLS  80
-#define TEXT_ROWS  25
+/* テキスト画面の行数。25 (標準) か 30 (qbDebug.lines30 = 仮想 30行BIOS) を実行時に取る。
+ * #define を実行時変数へ差し替え、既存の TEXT_ROWS 使用箇所 (カーソル/スクロール境界) は無改変。
+ * 値は tty_sync_conarea が qb_lines30_enabled から設定する。詳細: docs/30line_spec.md。 */
+static int g_text_rows = 25;
+#define TEXT_ROWS  (g_text_rows)
 #define VRAM_CODE  0xA0000u
 #define VRAM_ATTR  0xA2000u
 #define DEF_ATTR   0xE1     /* 白文字、表示 ON (boot_hello と同じ値) */
@@ -123,16 +127,26 @@ static uint8_t g_tty_attr = DEF_ATTR;
 static int g_tty_lines20 = 0;   /* ESC[>3h: 20 行モード (l で 25 行) */
 static int g_tty_sysline = 0;   /* ESC[>1l: fkey 行表示 (h で非表示) */
 
+/* 仮想 30行BIOS (qbDebug.lines30 / np2kai_set_lines30)。ON のとき loader-start が 640×480・30 行へ
+ * 切替え、tty を 30 行・DOS ワーク 0x712=29 にし、INT 18h で 30BIOS-API を提供する。既定 OFF=ゼロ回帰。
+ * 詳細: docs/30line_spec.md。 */
+int qb_lines30_enabled = 0;
+
 static void tty_sync_conarea(void) {
-    int rows = (g_tty_lines20 ? 20 : 25) - (g_tty_sysline ? 1 : 0);
+    /* 30 行モード時は 30 行・行間なし固定 (lines20 より優先)。それ以外は従来 (20/25 行)。 */
+    int base = qb_lines30_enabled ? 30 : (g_tty_lines20 ? 20 : 25);
+    int rows = base - (g_tty_sysline ? 1 : 0);
+    /* VRAM の実行 row 数 (カーソル/スクロール境界)。20 行モードでも VRAM は 25 行のまま
+     * (従来挙動)、30 行モードのみ 30 行に拡張。 */
+    g_text_rows = qb_lines30_enabled ? 30 : 25;
     mem[0x711] = (uint8_t)(g_tty_sysline ? 1 : 0);
     mem[0x712] = (uint8_t)(rows - 1);
     /* 0:0713h = dosscrn_25 (20/25 行判定フラグ)。非ゼロ=25 行・ゼロ=20 行。
      * PC-98 版 VZ Editor の check_20 (SCRN98.ASM) がここを tstb で読み、
      * 行高 (lineh=15 か 19) を選ぶ。未設定 (=0) だと 25 行モードでも 20 行と
      * 誤認され縦方向のラスタ/カーソル計算がずれる。VZ は nonzero テストのみ
-     * なので 25 行=1 で足りる。 */
-    mem[0x713] = (uint8_t)(g_tty_lines20 ? 0 : 1);
+     * なので 25 行=1 で足りる。30 行も行間なし扱い=1。 */
+    mem[0x713] = (uint8_t)((qb_lines30_enabled || !g_tty_lines20) ? 1 : 0);
     mem[0x71D] = g_tty_attr;   /* 0:071Dh = CON の現在属性 (DOSBox-X dev_con.h と同じ位置) */
 }
 
@@ -2536,6 +2550,70 @@ void qb_dos_tty_reset(void) {
     g_softkey_len = 0;
     g_softkey_pos = 0;
     g_inject_head = g_inject_tail = 0;   /* ホスト IME 注入 FIFO も Run 毎にクリア (前 Run を持ち越さない) */
+}
+
+/* オリジナル PC-98 CRT/キーボード BIOS (NP2kai 合成 BIOS)。30 行モード時のパススルー先。 */
+extern void bios0x18(void);
+
+/* INT 18h フロントエンド (トランポリン 0xFEEC0)。30 行モード (qb_lines30_enabled) が ON のとき
+ * だけ loader-start が IVT[0x18] をここへ向ける。30BIOS-API (識別子 BX='30'+'行'=0xC0A3 の AH=0Bh、
+ * および AX=FFxx) を処理し、それ以外は全てオリジナル bios0x18 へパススルー (= フック無しと等価)。
+ * 仕様は docs/30line_spec.md (30BIOS/30TECH.DOC 由来)。OFF 時は IVT を触らないのでこのフックは走らない。 */
+int qb_dos_int18_hook(void) {
+    uint8_t  ah = CPU_AH;
+    uint16_t ax = (uint16_t)CPU_AX;
+    uint16_t bx = (uint16_t)CPU_BX;
+
+    /* --- インストールチェック / CRT モード取得 (AH=0Bh, BX=0xC0A3) --- */
+    if (ah == 0x0B && bx == 0xC0A3) {
+        uint8_t orig = mem[0x53C];               /* オリジナル CRT mode flag (bit3-1 用) */
+        uint8_t al = (uint8_t)(0x40             /* bit6 = 30BIOS 常駐 (最重要のインストールチェック) */
+                             | 0x10             /* bit4 = 拡張モード */
+                             | (orig & 0x0E));  /* bit3-1 = オリジナル BIOS と同じ */
+        /* bit7(VGA/Special)=0, bit5(CW/fkey)=0, bit0(行間)=0 (行間なし 30 行)。Phase 1 は Special。 */
+        CPU_AL = al;
+        /* ES:DI が "30BIOS_EXIST=0" を指すなら '0'→'1' に書換 (Ver0.20+ の厳密チェック) */
+        {
+            static const char sig[] = "30BIOS_EXIST=";   /* 13 文字 (= NUL 除く) */
+            uint16_t es = (uint16_t)CPU_ES, di = (uint16_t)CPU_DI;
+            int matched = 1;
+            for (int i = 0; i < 13; i++) {
+                if (mem[lin(es, (uint16_t)(di + i))] != (uint8_t)sig[i]) { matched = 0; break; }
+            }
+            if (matched && mem[lin(es, (uint16_t)(di + 13))] == '0')
+                mem[lin(es, (uint16_t)(di + 13))] = '1';
+        }
+        return 1;
+    }
+
+    /* --- 30BIOS 独自ファンクション (AX=FFxx)。オリジナル BIOS に FFh は無く素通りするだけなので
+     *     AH=0xFF 空間を 30BIOS-API に使ってよい (30TECH.DOC)。 --- */
+    if (ah == 0xFF) {
+        switch (ax & 0xFF) {                 /* AL = サブファンクション */
+        case 0x00:                           /* バージョン取得: AH=小数部, AL=整数部 */
+            CPU_AH = 40; CPU_AL = 1;         /* Ver1.40 を僭称 */
+            return 1;
+        case 0x01: case 0x02:                /* 画面モード PUSH/POP。30 行固定なので no-op 成功 */
+            CPU_AX = 0xFFFF;
+            return 1;
+        case 0x03:                           /* 画面行数 取得/変更 (BL=行数, 00=取得)。Phase 1 は 30 固定 */
+            CPU_AL = 29;                     /* 行間なし時の行数 - 1 */
+            CPU_AH = 29;                     /* 行間あり時の行数 - 1 */
+            return 1;
+        case 0x04:                           /* 設定可能行数: AL=上限, AH=下限 */
+            CPU_AL = 30; CPU_AH = 30;
+            return 1;
+        case 0x05:                           /* 行間空き時ラスタ数: AH=行間あり, AL=行間なし(=0x10) */
+            CPU_AH = 0x10; CPU_AL = 0x10;
+            return 1;
+        default:                             /* 未対応 FFxx は no-op (オリジナルも FFh は素通り) */
+            return 1;
+        }
+    }
+
+    /* --- それ以外はオリジナル CRT BIOS へ (キーボード AH=0/1、モード設定等)。= フック無しと等価。 --- */
+    bios0x18();
+    return 1;
 }
 
 int qb_dos_int21_hook(void) {

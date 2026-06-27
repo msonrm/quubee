@@ -68,6 +68,11 @@
  * (最後のバイト+1)、CS=PSP セグメント、終了コード常に 0。AH=31h (paragraph 単位) と等価だが
  * byte 単位。MS Mouse Driver 等の旧式マウスドライバが自身を常駐させるのに使う。NOP + IRET。 */
 #define QB_TRAMP_INT27          0xFEEB0u  /* F000:EEB0 */
+/* INT 18h (CRT/キーボード BIOS) フロントエンド。30 行モード (qbDebug.lines30) が ON のときだけ
+ * loader-start が IVT[0x18] をここへ向け、30BIOS-API (BX=0xC0A3 の AH=0Bh / AX=FFxx) を処理し、
+ * それ以外はオリジナル bios0x18 へパススルーする。OFF 時は IVT を触らない (= NP2kai 既定・ゼロ回帰)。
+ * NOP + IRET。詳細: docs/30line_spec.md。 */
+#define QB_TRAMP_INT18          0xFEEC0u  /* F000:EEC0 */
 
 /* PSP/COM のロードセグメント (PSP 自体もここに置く)。
  * EXE は PSP の直後 (256 byte = 16 paragraphs 先) に image を配置する慣例。 */

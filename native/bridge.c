@@ -546,6 +546,16 @@ int np2kai_set_itf_post(int on) {
 	return np2cfg.ITF_WORK;
 }
 
+/* 仮想 30行BIOS: 30 行テキスト表示 (640×480) + 30BIOS-API のセッション限定オン/オフ。
+ * フラグ (dos_int21.c の qb_lines30_enabled) を立てるだけで、実際の切替えは次の Run の
+ * loader-start (dos_loader.c) が行う (IVT[0x18] 横取り + GDC 480 ライン化 + tty 30 行)。
+ * 既定 OFF = ゼロ回帰。qbDebug.lines30(0|1) の実体。詳細: docs/30line_spec.md。 */
+int np2kai_set_lines30(int on) {
+	extern int qb_lines30_enabled;   /* dos_int21.c */
+	qb_lines30_enabled = on ? 1 : 0;
+	return qb_lines30_enabled;
+}
+
 
 /* CPU クロック倍率の live 設定 (快適化 A/B / async 自動クロック / ベンチ用)。
  * realclock = baseclock × multiple が 1 表示フレームあたりの実行 CPU クロック数

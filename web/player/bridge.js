@@ -2172,6 +2172,7 @@ async function makeWorkerEmu() {
     const getReg16    = M.cwrap('np2kai_debug_get_reg16',    'number', ['number', 'number']);
     const setFmgen    = M.cwrap('np2kai_set_fmgen',          'number', ['number']);
     const setItfPost  = M.cwrap('np2kai_set_itf_post',       'number', ['number']);
+    const setLines30  = M.cwrap('np2kai_set_lines30',        'number', ['number']);
     const setMul      = M.cwrap('np2kai_set_clock_multiple', 'number', ['number']);
     // 既定クロック倍率。multiple=20 × baseclock 2.4576MHz ≈ 49MHz (≈486DX2-50)。
     // 2026-06-26 に 27 (≈66MHz、ZUN 推奨環境相当) へ上げたが、ちびおと(ADPCM)既定 ON 後の
@@ -2295,6 +2296,10 @@ async function makeWorkerEmu() {
         // itfpost(1)=実機どおり POST を出す (ノスタルジー用)、itfpost(0)=既定どおりスキップ。
         // 設定後にゲーム/音楽を Run (reset) して反映。
         itfpost: (on = 1) => `ITF_WORK=${setItfPost(on ? 1 : 0)} (1=POST表示/0=スキップ) — 次の Run から反映`,
+        // 仮想 30行BIOS。lines30(1)=30 行テキスト表示 (640×480) + 30BIOS-API を有効化、lines30(0)/()=既定 OFF (25 行)。
+        // 実機 30行BIOS/30行計画 は ROM パッチ式で常駐できないので、その「常駐済み最終状態」を HLE が用意する。
+        // 設定後に対象を Run (reset) して反映。詳細: docs/30line_spec.md。
+        lines30: (on = 1) => `lines30=${setLines30(on ? 1 : 0)} (1=30行/0=25行) — 次の Run から反映`,
         // async 自動クロック (快適化, **既定 OFF**)。autoclock(1)=ON で host の余裕に応じ multiple を
         // floor..ceil 内で自動調整 (達成フレーム時間から逆算)。autoclock(0)=OFF で既定 20≈49MHz 固定。
         // 既定 OFF の理由: 倍率を上げる利得は小さく音楽テンポがもたつく実害がある (上の autoClock 定義参照)。
@@ -2495,6 +2500,8 @@ async function makeWorkerEmu() {
                 return `usefmgen=${on ? 1 : 0} (1=fmgen/0=opngen) — 次の Run から反映。同じゲームを再実行して聴き比べてください`; },
             itfpost: (on = 1) => { ctl('np2kai_set_itf_post', ['number'], [on ? 1 : 0]);
                 return `ITF_WORK=${on ? 1 : 0} (1=POST表示/0=スキップ) — 次の Run から反映`; },
+            lines30: (on = 1) => { ctl('np2kai_set_lines30', ['number'], [on ? 1 : 0]);
+                return `lines30=${on ? 1 : 0} (1=30行/0=25行) — 次の Run から反映。詳細 docs/30line_spec.md`; },
             vol: (o) => {
                 if (o !== undefined) {
                     const g = (k) => (o[k] === undefined ? -1 : (o[k] | 0));

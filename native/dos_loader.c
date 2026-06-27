@@ -24,6 +24,8 @@
 
 #include <i386c/cpumem.h>
 #include <i386c/ia32/cpu.h>
+#include <io/iocore.h>        /* 仮想 30行BIOS: gdcs (GDC state) */
+#include <io/gdc.h>           /* 仮想 30行BIOS: gdc / gdc_analogext / GDCANALOG_256E (256 色クリア用) */
 
 #include "dos_loader.h"
 #include "dos_int21.h"
@@ -1228,6 +1230,10 @@ void qb_dos_install_trampolines(void) {
      * 実際には signal_tsr が CPU を親/halt へリダイレクトするので IRET は踏まれない。 */
     put_trampoline(QB_TRAMP_INT27);
 
+    /* INT 18h フロントエンド (30 行モード時のみ IVT[0x18] が指す): NOP + IRET。
+     * C フックが 30BIOS-API を処理し、それ以外は bios0x18 へパススルー。 */
+    put_trampoline(QB_TRAMP_INT18);
+
     /* XMS ドライバ entry: far CALL で踏まれるので NOP + RETF (0xCB)。NOP が biosfunc を踏む。 */
     poke8(QB_TRAMP_XMS_ENTRY + 0, 0x90);  /* NOP */
     poke8(QB_TRAMP_XMS_ENTRY + 1, 0xCB);  /* RETF */
@@ -1501,6 +1507,30 @@ static void build_psp(uint16_t seg, const char *cmdline) {
     poke8(base + 0x81 + cl, 0x0D);  /* DOS cmdline 終端 */
 }
 
+/* 仮想 30行BIOS: INT 18h AH=30h 相当 (640×480・31kHz・30 行) を合成して GDC を 30 行表示へ。
+ * EXTs21 が使う拡張 CRT-BIOS と同じ経路 (bios0x18 case 0x30 → bios0x18_30)。レジスタ AX/BX は
+ * 直後に DOS 入口値 (CPU_EAX=0 等) で上書きされるので clobber して構わない。詳細: docs/30line_spec.md。 */
+extern void bios0x18(void);
+static void qb_dos_apply_lines30_gdc(void) {
+    CPU_AH = 0x30;   /* CRT モード設定 (31kHz 拡張) */
+    CPU_AL = 0x0C;   /* rate: bit3 (480 path) + bit2 (31kHz) */
+    CPU_BH = 0x32;   /* scrn: 0x30 (640×480) | 0x02 (30 行) */
+    bios0x18();
+    /* AH=30h の 640×480 経路は 256 色 (PEGC) アナログモードを強制 ON にする (bios0x18_30)。だが
+     * 256 色モードでは描画が空の 256 色プレーン (= 黒) になりテキスト面が見えなくなる (実測で確認)。
+     * 30 行テキストは 16 色 + テキスト面で十分なので、ここで 256 色だけ戻す。480 ラインの sync/CRTC は
+     * 維持されるので「640×480・16 色・30 行テキスト」になる。bios0x18_30 の非 480 経路と同じ inverse。 */
+    gdc_analogext(FALSE);                         /* GDCANALOG_256 (bit1) + VGA マッピングを戻す */
+    gdc.analog &= ~(1 << GDCANALOG_256E);         /* GDCANALOG_256E (bit2) も戻す */
+    /* bios0x18_30 は末尾でテキスト表示を OFF にして返す (実機では呼び元が AH=0Ch で再開する仕様)。
+     * 我々は呼び元なので AH=0Ch (テキスト表示開始) を続けて発行する。これが無いと描画ゲート
+     * (gdcs.textdisp & GDCSCRN_ENABLE) が落ちたままで画面が真っ黒になる (実測で確認した黒画面の真因)。 */
+    CPU_AH = 0x0C;
+    bios0x18();
+    gdcs.palchange = GDCSCRN_REDRAW;
+    gdcs.textdisp |= GDCSCRN_ALLDRAW2;            /* テキスト面の全再描画を通知 */
+}
+
 /* ---------------- loader-start フック (0xFEE00 から呼ばれる) ---------------- */
 
 int qb_dos_loader_start_hook(void) {
@@ -1584,6 +1614,16 @@ int qb_dos_loader_start_hook(void) {
     /* 合成 SFT を再構築し、最上位 image の stale エントリを書く (実 DOS が EXEC の
      * open→close 後に残すものの再現。AH=52h 経由の SFT walker が正規終端を得る)。 */
     qb_dos_sft_note_load(g_stage.name, (uint32_t)g_stage.file_bytes);
+
+    /* 仮想 30行BIOS (qbDebug.lines30) が ON のときだけ、INT 18h を横取りして 30BIOS-API を提供し、
+     * GDC を 30 行 (640×480) 表示へ切替える。OFF 時は IVT[0x18]=NP2kai 既定のまま (= ゼロ回帰)。
+     * tty ワークエリア (0x712=29 等) は直前の qb_dos_tty_reset → tty_sync_conarea が設定済。
+     * GDC 切替は AX/BX を clobber するが、直後の DOS 入口レジスタ設定で上書きされる。
+     * 詳細: docs/30line_spec.md。 */
+    if (qb_lines30_enabled) {
+        set_ivt(0x18, 0xF000, (uint16_t)(QB_TRAMP_INT18 & 0xFFFF));
+        qb_dos_apply_lines30_gdc();
+    }
 
     /* DOS プログラム入口のレジスタ。仕様で定義されるのは CS:IP/SS:SP/DS/ES と
      * AX (コマンドライン FCB のドライブ有効性。FCB を作らない我々は AL=AH=0 =
