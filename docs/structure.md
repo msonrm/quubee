@@ -93,12 +93,12 @@ qb/
 | 項目 | 当時 (VM2) | QuuBee (現在の NP21 構成) |
 |---|---|---|
 | CPU | V30 8MHz | i386c (IA-32, 386/486 命令) |
-| FPU | なし | DOSBox2 エミュレータ (486DX 相当) |
+| FPU | なし | Berkeley SoftFloat 3e (BSD、486DX 相当)。2026-06-26 にライセンス整合のため DOSBox2(GPL) から切替 |
 | メインメモリ | 640KB | 640KB |
 | 拡張メモリ | 数MB | 32MB (XMS 3.0 HLE で EMB として供給) |
 | グラフィック | 640×400 / 16色 | 同 + PEGC 256 色対応 |
-| サウンド | BEEP / 一部 FM | FM 音源 (OPNA / **fmgen** 既定) + BEEP + **MIDI** (RS-MIDI / MPU-PC98 → TinySoundFont + SF2、レシピ検出時に on-demand 有効化) |
-| クロック倍率 | x1 (実機) | **multiple=27 固定** (≈ 486DX2-66、ZUN 推奨環境相当。2026-06-26 に 20≈49MHz から引き上げ・実機で音切れ無し確認)。適応オートクロックは既定 OFF (qbDebug.autoclock(1) でオプトイン) |
+| サウンド | BEEP / 一部 FM | FM 音源 (OPNA / **fmgen** 既定) + BEEP + **ちびおと** (PC-9801-86 + ADPCM RAM = SOUND_SW 0x14、2026-06-27 に既定 ON。qbDebug.chibioto(0) で素の 86 へ) + **MIDI** (RS-MIDI / MPU-PC98 → TinySoundFont + SF2、レシピ検出時に on-demand 有効化) |
+| クロック倍率 | x1 (実機) | **multiple=20 固定** (≈ 486DX2-50、≈49MHz)。2026-06-26 に 27 (≈66MHz) へ上げたが、ちびおと既定 ON 後の FMDSP 等で音が詰まる実害を実機確認し 2026-06-27 に 20 へ差し戻し。適応オートクロックは既定 OFF (qbDebug.autoclock(1) でオプトイン) |
 
 ## CPU エミュレータ構成
 
