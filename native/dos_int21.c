@@ -710,7 +710,9 @@ static int dos_next_input_byte(void) {
 /* INT DCh ハンドラ (0xFEEA0 トランポリン → biosfunc 経由)。
  * CL=0Dh setkey: AX=0 で全体一括、AX=key# で 1 キー単位 (どちらも g_keytbl へ書く)。
  * CL=0Ch getkey: AX=0 で全体を DS:DX へ、AX=key# で 1 キーを DS:DX へ複製。
- * その他 CL (fkey 行表示 on/off 等) は良性 no-op。レジスタ・フラグは変えない。 */
+ * CL=10h 文字・画面制御: AH 別に既存 tty へ橋渡し (00h 1文字/01h $終端文字列/02h 属性/
+ *   03h カーソル位置/0Ah 画面消去/0Bh 行消去)。その他 CL は良性 no-op + 診断ログ。
+ * レジスタ・フラグは変えない。 */
 int qb_dos_intdc_hook(void) {
     uint8_t  cl  = (uint8_t)(CPU_CX & 0xFF);
     uint16_t ax  = (uint16_t)CPU_AX;
@@ -742,6 +744,46 @@ int qb_dos_intdc_hook(void) {
             for (int i = 0; len > 0 && i < len; i++)
                 mem[tbl + i] = g_keytbl_set ? g_keytbl[off + i] : 0;
         }
+    } else if (cl == 0x10) {                /* 文字・画面制御 (KANI/OTENKI/SimK PC98DCH が使用)。
+                                             * NEC PC-98 DOS の INT DCh コンソール BIOS。各 AH を既存
+                                             * tty (ESCパーサ/カーソル/属性/消去) へ橋渡しするだけ。
+                                             * 典拠 = lpproj gist + KANI/PC98DCH.COM の実トレース。 */
+        uint8_t ah = (uint8_t)((ax >> 8) & 0xFF);
+        uint8_t dl = (uint8_t)(CPU_DX & 0xFF);
+        uint8_t dh = (uint8_t)((CPU_DX >> 8) & 0xFF);
+        switch (ah) {
+        case 0x00:                          /* 1 文字表示 (DL=文字) */
+            tty_putc(dl);
+            break;
+        case 0x01:                          /* $ 終端文字列表示 (DS:DX、tty_putc が ESC を解釈) */
+            for (int i = 0; i < 8192; i++) {
+                uint8_t b = mem[(tbl + i) & 0xFFFFF];
+                if (b == 0x24) break;       /* '$' 終端 */
+                tty_putc(b);
+            }
+            break;
+        case 0x02:                          /* 文字属性設定 (DL=属性) */
+            g_tty_attr = dl;
+            break;
+        case 0x03:                          /* カーソル位置設定 (DH=行, DL=列, 0-based) */
+            g_cur_row = dh;
+            g_cur_col = dl;
+            csi_clamp_cursor();
+            break;
+        case 0x0A:                          /* 画面消去 (ESC[nJ 相当, DX=n) */
+        case 0x0B:                          /* 行消去   (ESC[nK 相当, DX=n) */
+            g_csi_param[0]  = (int)(CPU_DX & 0xFF);
+            g_csi_nparam    = 0;
+            g_csi_has_digit = 1;
+            g_csi_priv      = 0;
+            csi_dispatch(ah == 0x0A ? 'J' : 'K');
+            break;
+        /* AH=04-09 (カーソル移動)・0Ch-0Eh (行挿入/削除/漢字モード) は実需が出るまで no-op。 */
+        default:
+            break;
+        }
+    } else {                                /* 未対応 CL: 診断ログ (ブラウザ Console)。良性 no-op。 */
+        fprintf(stderr, "[intdc] unimpl CL=%02x AX=%04x\n", cl, ax);
     }
     return 1;
 }

@@ -1,5 +1,56 @@
 # CHANGELOG
 
+## [INT DCh CL=10h (文字・画面制御) を実装 — 蟹味噌の左上テキスト残留を根治 (OTENKI も推定根治)] — 2026-06-29
+
+### 背景 (OTENKI スクショ報告 + lpproj 氏の指摘 + ブラウザ実機)
+おてんきぶっく'91 (OTENKI.EXE) の文字描写不具合のスクリーンショット報告を発端に、lpproj 氏から
+「INT DCh が足りないのでは」との指摘と資料 (gist: FreeDOS(98) の INT DCh / IO.SYS 内部領域サポート
+状況) を頂いた。あわせて、長く未解決だった蟹味噌 (KANI123) の「起動直後に左上へ『KANI.SCRを作成
+します』が残り続ける」課題も同根と判明した。
+
+### 真因
+INT DCh は CL (サブ機能番号) で大きく枝分かれする。QuuBee は VZ/JED 対応で CL=0Ch/0Dh (プログラマ
+ブルキー定義の取得/設定) のみ実装し、CL=10h (文字・画面制御) を含む他の CL を良性 no-op で握り潰して
+いた。CL=10h は NEC PC-98 DOS のコンソール BIOS で、AH=00h 1文字/01h $終端文字列/02h 属性/03h カー
+ソル位置/0Ah 画面消去/0Bh 行消去… を提供する (DOS の AH=09h や ESC シーケンスを関数で叩く API に相当)。
+**蟹味噌は CL=10h AH=01h で `ESC[2J` (画面消去) を含む文字列を発行**しているが、QuuBee が CL=10h を
+無視するため消去が効かず、起動メッセージが残留していた。
+
+2026-06-06 の調査で「蟹味噌は HLE tty を通らず (AH=09h 皆無)、直書きでクリアしない」と結論したのは
+誤りだった。当時 INT DCh ハンドラ自体が存在せず (2026-06-20 追加) CL=10h 経由の消去を観測できな
+かったための見落とし。当時の自分も「断定には逆アセンブル/遷移時観測が必要」と未確定で残していた。
+
+### 切り分け (実トレース = 正典)
+- **蟹味噌 実トレース**: INT DCh ハンドラに診断ログを仕込み headless 起動 → CL=10h AH=01h が `ESC[2J`
+  を 3 回発行することを確認 (DS:DX の中身に `ESC[2J` が埋め込まれていた)。
+- **SimK 氏 (Neko Project 21/W 作者) 提供の TEXTTEST スイート**: 6 経路 (INT 21h/ESC/INT DCh/ADV×2/
+  VRAM 直書き) のテスト + np21w 正解スクリーンショット。実 PC98DCH.COM の CL=10h トレースで AH=01h/02h/
+  03h/0Ah/0Bh を網羅的に使うことを確認 (gist の AH 一覧と整合)。**同梱 .asm は実 .COM と内容が食い違って
+  おり (旧版が同梱されていた)、実 COM の dump が正典**だった (asm を信じて 2 度誤読した教訓)。
+- YY (テキスト ADV) は INT DCh 呼び出しゼロ = 別系統 (VRAM 直書き + dirty 疑い)。後回し。
+
+### 修正 (native/dos_int21.c のみ・既存 tty へ橋渡し)
+`qb_dos_intdc_hook` に CL=10h を実装。新規描画ロジックは皆無で、各 AH を既存 tty へ流すだけ:
+AH=00h → `tty_putc(DL)` / AH=01h → DS:DX を `$` まで `tty_putc` (ESC パーサ込みで蟹味噌の `ESC[2J` も
+解釈) / AH=02h → `g_tty_attr=DL` / AH=03h → `g_cur_row=DH; g_cur_col=DL` / AH=0Ah/0Bh →
+`csi_dispatch('J'/'K')`。AH=04-09 (カーソル移動)・0Ch-0Eh (行挿入/削除/漢字モード) は実需が出るまで
+no-op。未対応 CL は `[intdc] unimpl CL=xx` 診断ログ (ブラウザ Console) に恒久化。
+
+### 検証
+- **PC98DCH.COM**: 実装前は headless の text VRAM dump が空 → 実装後は本家相当に全行表示
+  ("…INT DCh CL=10h Console Test…")。
+- **DOSTXT/PC98ESC/PC98HW**: 実装前後で dump 完全同一 = 回帰ゼロ。
+- **蟹味噌**: ブラウザ実機で左上の「KANI.SCRを作成します」残留が消滅 (ユーザー確認)。headless では起動
+  メッセージ段階に到達しない (入力待ち) ため実機確認に委ねた。
+- **bio100_triage**: ALIVE21/RENDER4/CRASH0・描画到達25/動作確認27 = ベースライン一致 (回帰ゼロ)。
+- 恒久回帰 `tools/intdc_screen_test.js` (合成 COM が CL=10h で表示→画面消去→再描画し row0 空+row3
+  "CLEAN" を検証・corpus 非依存) + vz/jed/csi/sgr PASS。
+
+### 残・謝辞
+OTENKI はバイナリ未入手 (スクリーンショットのみ) で同経路と推定するが断定はしない。YY/PC98ADV1・2 は
+別系統で後回し (PC98HW.COM が足場)。指摘と資料を頂いた lpproj 氏、テストスイートを提供頂いた SimK 氏に
+感謝。
+
 ## [AMEL の MIDI モードを根治 — MIDRV を MIDI ドライバとして認識し on-demand MIDI 結線を発火] — 2026-06-28
 
 ### 背景 (amel133 作者報告・ブラウザ実機)
