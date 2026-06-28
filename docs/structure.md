@@ -74,6 +74,9 @@ qb/
 │   │   ├── 01_dos_loader_hooks.patch  # bios.c: トランポリン install + biosfunc case + 合成 ROM 文字列
 │   │   ├── 02_font_reset_fix.patch    # pccore_reset の fontrom ゼロ埋め抑止
 │   │   └── 03_rtc_y2k_clamp.patch     # RTC 年を 1999 にクランプ (Y2K 系の固定幅年バグ対策)
+│   ├── font_build/          # font.bmp 再生成パイプライン (makefont.cjs=irori/np2-wasm BSD-3 +
+│   │                        #   東雲 BDF=PD + base.bmp=SimK 修正BSD。漢字の縦位置を正規化。ビルド時のみ)
+│   ├── gen_keisen_glyphs.py # font.bmp の JIS 区8 罫線を自前生成して注入 (font_build の 2 段目・意図的拡張)
 │   └── testdata/            # テスト専用素材 (FreeDOS boot.d88 等。デプロイ対象外)
 │
 ├── games/                   # 検証用書庫のローカル置き場。**.gitkeep 以外は全て gitignore**
