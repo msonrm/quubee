@@ -13,7 +13,7 @@
 
 | ファイル | 目的 |
 |---|---|
-| `01_dos_loader_hooks.patch` | Phase 3 ミニマル DOS ローダ用のフック。`bios_initialize` 末尾で `qb_dos_install_trampolines()` 呼び出し + `biosfunc()` switch に 6 case 追加 (0xFEE00 ローダ起動 / 0xFEE10 INT 21h / 0xFEE20 INT 20h / 0xFEE50 INT 2Fh=XMS 検出・応答 / 0xFEE60 INT 67h=EMS 需要プローブ / 0xFEE70 XMS ドライバ entry) |
+| `01_dos_loader_hooks.patch` | Phase 3 ミニマル DOS ローダ用のフック。`bios_initialize` 末尾で `qb_dos_install_trampolines()` 呼び出し + `biosfunc()` switch に 11 case 追加 (0xFEE00 ローダ起動 / 0xFEE10 INT 21h / 0xFEE20 INT 20h / 0xFEE50 INT 2Fh=XMS 検出・応答 / 0xFEE60 INT 67h=EMS 需要プローブ / 0xFEE70 XMS ドライバ entry / 0xFEE80 INT 29h=DOS 高速文字出力 / 0xFEE90 .bat 文インタプリタ「次コマンド?」 / 0xFEEA0 INT DCh=編集キー定義 BIOS / 0xFEEB0 INT 27h=旧式 TSR / 0xFEEC0 INT 18h=仮想 30行BIOS フロントエンド)。加えて `bios_initialize` で E800:0DC0 に `"NEC N-88BASIC(86)"` を配置 (Turbo-C BGI 等の NEC 実機判定対策、life100 -egc 根治)。実際のハンドラ本体は `native/dos_*.c` 側 (このパッチはコア側の入口=トランポリン dispatch のみ) |
 | `02_font_reset_fix.patch` | `pccore_reset()` の `ZeroMemory(mem + FONT_ADRS, 0x08000)` を抑止。リセット毎に fontrom 先頭 0x8000 (= JIS 点 0..7 の漢字ブロック) が消去され、Wasm には再生成する hook_fontrom バックエンドが無いため、点1..7 の漢字 (あ/い/う 等) が永久に欠けるのを防ぐ |
 | `03_rtc_y2k_clamp.patch` | `calendar.c:date2bcd` で年 >=2000 を 1999 にクランプ。90 年代ゲームが PC-98 RTC (μPD4990A) から直読みする年が 2026→126 の 3 桁になり固定幅セーブを壊す Y2K バグを汎用シムで回避 (蟹味噌のテキスト残留の真因) |
 

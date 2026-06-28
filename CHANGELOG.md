@@ -1,5 +1,50 @@
 # CHANGELOG
 
+## [仮想 30行BIOS (qbDebug.lines30) — VZ で 30 行テキスト表示 (Phase 1)] — 2026-06-28
+
+### 背景
+PC-98 の「30 行表示」は、画面を 25 行から 30 行に拡張して情報量を増やす定番のカスタマイズで、
+実機では 30行BIOS / 30行計画 といった常駐ソフトが NEC の CRT-BIOS ROM をパッチして提供していた。
+QuuBee は本物の `bios.rom` を積まない (著作権クリーン) ため、これらの ROM パッチ型常駐は原理的に
+動かない (`30BIOS.COM` は「対応していないDOS」を表示して自滅する。実態はパッチ対象の CRT-BIOS コードを
+合成 BIOS から見つけられないだけ = neccheck 壁の一種)。一方、拡張 CRT-BIOS (INT 18h AH=30h) を直接叩く
+PC-9821 系ツール (EXTs21 等) は HLE 改変ゼロで 30 行が出ることを 2026-06-27 に確認済みだった。
+
+### アプローチ — 「30BIOS が常駐済みの最終状態」を HLE が用意する
+ROM パッチ型常駐そのものを動かすのではなく、その**到達点** (30BIOS-API が応答し、画面が 640×480・30 行に
+なっている状態) を HLE が直接合成する。一次情報は 30TECH.DOC (30BIOS-API 仕様)。既定 OFF =
+IVT[0x18] 不変 = ゼロ回帰。`qbDebug.lines30(1)` / `np2kai_set_lines30` で次の Run から ON。
+
+### 実装
+- **INT 18h フロントエンド** (`qb_dos_int18_hook`、新トランポリン 0xFEEC0、`native/dos_int21.c`): ON のとき
+  loader-start が IVT[0x18] をここへ横取りし、30BIOS-API を処理する。
+  - インストールチェック (AH=0Bh, BX=0xC0A3): AL に bit6 (常駐)・bit4 (拡張モード) を立てて返し、
+    ES:DI が `"30BIOS_EXIST=0"` を指していれば末尾を `0`→`1` に書換 (Ver0.20+ の厳密チェック対応)。
+  - 独自ファンクション (AX=FFxx): バージョン取得 / 画面モード PUSH・POP (30 行固定なので no-op 成功) /
+    画面行数取得 / 設定可能行数 / 行間ラスタ数 を返す。
+  - それ以外 (キーボード AH=0/1・モード設定等) はオリジナル `bios0x18` へパススルー = フック無しと等価。
+- **GDC 30 行化** (`qb_dos_apply_lines30_gdc`、`native/dos_loader.c`): loader-start で INT 18h AH=30h
+  (AL=0x0C / BH=0x32) を合成発行し 640×480・31kHz・30 行へ (EXTs21 が使う拡張 CRT-BIOS と同じ経路)。
+- **tty / DOS ワークエリア**: `g_text_rows` を実行時変数化して 30 行に拡張し、0:0712h=29 (行数−1)・
+  0:0713h=1 を `tty_sync_conarea` が `qb_lines30_enabled` から設定。
+- **黒画面根治**: AH=30h の 640×480 経路は 256 色 (PEGC) アナログモードを強制 ON にするが、それだと
+  テキスト面が見えなくなる。256 色だけ戻し (`gdc_analogext(FALSE)` + GDCANALOG_256E クリア)、続けて
+  AH=0Ch (テキスト表示開始) を発行して表示ゲートを開く (実機は呼び元が AH=0Ch で再開する仕様)。
+
+### Canvas-98 (グラフィックキャンバス) は Phase 2 として見送り
+30 行で増えるのはテキスト面のみで、グラフィック面は 400 ライン据置 (PC-98 16 色 VRAM が 1 プレーン
+0x8000B = 640×400 ちょうどで 480 ライン分が物理的に入らない)。Canvas-98 のようにグラフィック面を
+480 ラインに広げる描画は別クラスの難物のため、テキストエディタ系 (VZ) を実用到達点として Phase 1 で
+一区切り。詳細は [docs/30line_spec.md](docs/30line_spec.md) §4。
+
+### 検証
+- core 改変は bios.c の dispatch case 0xFEEC0 のみ (`01_dos_loader_hooks.patch` 再生成)。
+- `tools/lines30_test.js`: ON で 30BIOS-API 応答 + 0:0712=29 + フレームバッファ 640×480 にテキスト表示、
+  OFF で 640×400 (原 BIOS 挙動) を確認 = ゼロ回帰。
+- bio100 ALIVE21/CRASH0 一致・touhou 4/4・vz/jed/sft/int27/sgr/tsr_vsync 全 PASS。
+- **VZ Editor で 30 行テキスト表示をブラウザ実機確認済**。30行BIOS 作者 (恋塚氏)・30行計画作者
+  (さかきけい氏) と交流中。
+
 ## [games/ コーパスをカテゴリ別に整理 + bio100 triage を並列化してタイムアウトを根治] — 2026-06-27
 
 ### 背景 (ユーザー報告 2 件)
