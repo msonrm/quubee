@@ -1,5 +1,47 @@
 # CHANGELOG
 
+## [font.bmp の漢字の縦位置ズレを根治 — irori 版 (Shinonome 正規化) へ乗り換え + 再生成パイプラインを vendoring] — 2026-06-28
+
+### 背景 (ユーザー報告)
+「今使っている font.bmp は縦位置が微妙にズレている」。素材の **SimK 版 font.bmp** (さざなみ + 東雲 +
+美咲 + M+ + Ayu + Oradano + Kappa + NP2 内蔵の合成、修正 BSD) は複数フォントの寄せ集めでベースラインが
+不揃いで、漢字に**最大 1px のランダムな縦ズレ**がある (例: VZ で「閉」等が他の文字と縦位置がずれる)。
+ユーザーから irori 氏の np2-wasm `adjust-fontbmp` ブランチを教わり、内容・統合可否・ライセンス・優劣を調査した。
+
+### 調査結論
+- **irori 版の実体** = SimK 版を base に、**二バイト JIS グリフだけを東雲フォント (Shinonome `shnmk16.bdf`,
+  Public Domain) で上書きして縦位置を正規化**したもの (irori コミット a97249a が明言)。実測でも SimK base の
+  漢字は元々 ~99.7% が東雲 (6490 完全一致 + 743 が 1px ズレ東雲)、別デザインは区1-2 の記号 25 個のみ。
+- **非東雲は NEC 機種依存文字 (区9-13) と単バイト ANK だけ**で、irori はそこを上書きせず **SimK 版を保持** =
+  乗り換えても PC-98 固有グリフは失わない (実測で base==irori を確認)。
+- **ライセンス OK** = 東雲 (Public Domain) は既に `licenses/fonts/shinonome-LICENSE.txt` 同梱・base (修正 BSD) は
+  既に帰属済み・`makefont.cjs`/np2-wasm は BSD-3-Clause。新たな義務ゼロ。
+- **区8 罫線は irori 版も持たない** (0/32、makefont の `ispc98jis` が区8を除外) ので、乗り換え後も我々の
+  `gen_keisen_glyphs.py` での区8注入が引き続き必要 (実証済み)。→ 結論: **「irori の縦位置補正版 + 我々の区8」が最良**。
+
+### 区8 罫線の史実訂正 (重要)
+調査の副産物として、過去の理解の誤りを正した。**区8 (全角罫線 / 罫線素片) は JIS C 6226-1978 には無く、
+JIS X 0208-1983 で初追加**された。NEC PC-9800 は JIS78 ベースで、NEC 独自の罫線/グラフィックは **区9-11 の
+半角グラフィック (NEC 拡張領域)** に置かれた。よって **SimK 版・irori 版が区8 を持たないのは「欠け (バグ)」では
+なく実機 faithful**。QuuBee の区8 注入は「実機再現」ではなく、JIS83 区8 を前提に書く一部ソフト (VZ Editor の
+GAME 等) を動かす**意図的な拡張** (= 厳密エミュでなく「フリーソフトを再体験するプレイヤー」という立場と整合)。
+これに伴い 我々の font.bmp は「NEC PC-98 配列 + 区8 を足した superset」であり、EPSON 互換機 (JIS83 ベース) とは
+区8 の有無の一点でのみ似て、全体は NEC 配列のまま。
+
+### 実装 (`tools/font_build/` に再生成パイプラインを vendoring)
+- `makefont.cjs` (irori, BSD-3) + `base/base.bmp` (SimK 版) + 東雲 BDF×3 + `package.json`/`package-lock.json`
+  (ビルド時依存 `erkkah/BDF.js`=MPL2.0、配布物には入らない) を収録。`node_modules` と中間 `font.bmp` は gitignore。
+- 手順 = `cd tools/font_build && npm install && node makefont.cjs` → 出力を `web/assets/font.bmp` へコピー →
+  `python3 tools/gen_keisen_glyphs.py` で区8注入。`tools/font_build/README.md` に明記。
+- 再現性実証: `makefont.cjs` の出力は irori の `adjust-fontbmp` の `font.bmp` と **md5 完全一致**。
+- `web/assets/font.bmp` md5 `adf8d8`→`e6a4ab` (= irori 縦位置補正 + 区8)。runtime アセットなので wasm 不変。
+- `CREDITS.md` に irori (BSD-3)・東雲 (PD) の帰属と「区8 は意図的拡張」を明記。
+
+### 検証
+区8 注入 32/32・ラウンドトリップ一致、間の縦位置補正反映、NEC 機種依存 (区13 83/94)・NEC 半角 (区9 94/94) 保存を
+確認。**VZ Editor で「閉」等のベースライン整合・罫線無崩れをブラウザ実機確認 (ユーザー)**。区8 (0x84xx) は実機 NEC
+では空なので他用途と衝突せず回帰リスクなし。デプロイ済み。
+
 ## [仮想 30行BIOS (qbDebug.lines30) — VZ で 30 行テキスト表示 (Phase 1)] — 2026-06-28
 
 ### 背景
