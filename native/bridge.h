@@ -121,6 +121,13 @@ uint32_t np2kai_get_vol(int which);
 __attribute__((visibility("default")))
 int np2kai_set_beep_mute(int mute);
 
+/* BEEP (PC-98 内蔵ブザー) の音量ブースト。gain_pct=100 が素の np2kai (peak 2048 = -24dBFS)。
+ * vol_master が fmgen FM/TSF MIDI に効かず BEEP/ADPCM/PCM だけに効く性質を使い、ADPCM/PCM を相殺
+ * しつつ BEEP だけ増幅する。純設定の上限 ~383% (BEEP_VOL=3 × vol_master=255)。既定 400 (→クランプ
+ * 383)。戻り値 = 実際に適用した % (クランプ後)。qbDebug.beepgain(x) の実体。 */
+__attribute__((visibility("default")))
+int np2kai_set_beep_gain(int gain_pct);
+
 /* 86 ボードの割り込みを INT5/IRQ12 に寄せる (on) / 既定へ戻す (off)。PMD .M 単体再生の音楽
  * セッションでだけ on。常駐ドライバ同梱ゲームは既定 (off)。reset の前に設定すること。 */
 __attribute__((visibility("default")))

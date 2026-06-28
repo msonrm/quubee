@@ -264,5 +264,20 @@ function mainOf(recipe, entries) {
         'serializeStatements: C/I/E/G 行形式 (\\t 区切り・neg=1・target=文index)');
 }
 
+// ---- 20. AMEL の MIDI レシピ (amelmidi.bat) — MIDRV は MIDI ドライバ TSR として認識する ----
+// midrv.com (Midrv Ver1.60、MIDDRV とは別物) を MIDI_DRIVER_NAMES/DRIVER_NAMES に追加した回帰。
+// これが無いと usesMidi=false で on-demand MIDI 結線が発火せず、midrv が RS232C へ落ちても無音になる。
+{
+    const r = bat.parse(batBytes(['midrv.com', 'amel.exe %1 %2 %3 %4', 'midrv.com']));
+    const entries = ['amelmidi.bat', 'amel.exe', 'midrv.com', 'amel_00.dat'];
+    ok(bat.usesMidi(r), 'amelmidi: usesMidi=true (midrv で MIDI 結線が発火する)');
+    eq(mainOf(r, entries), 'amel.exe', 'amelmidi: 主プログラムは amel.exe (midrv はドライバ扱い)');
+    eq(bat.resolveSequence(r, entries, '').map((s) => s.name.toLowerCase()),
+        ['midrv.com', 'amel.exe', 'midrv.com'],
+        'amelmidi: 逐次列 = midrv(常駐)→amel.exe→midrv');
+    // FM レシピ (amelfm.bat) は MIDI を発火させない (回帰の取り違え防止)。
+    const rf = bat.parse(batBytes(['amel.exe /f %1 %2 %3 %4']));
+    ok(!bat.usesMidi(rf), 'amelfm: usesMidi=false (FM 専用は MIDI ロードしない)');
+}
+
 console.log(`\nbatscript_test: pass=${pass} fail=${fail}`);
-process.exit(fail ? 1 : 0);

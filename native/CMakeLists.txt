@@ -218,6 +218,7 @@ set(EXPORTED_FUNCTIONS
     _np2kai_set_vol
     _np2kai_get_vol
     _np2kai_set_beep_mute
+    _np2kai_set_beep_gain
     _np2kai_set_pmd_irq
     _np2kai_set_chibioto
     _np2kai_set_itf_post

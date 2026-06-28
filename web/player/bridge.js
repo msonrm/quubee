@@ -245,6 +245,7 @@ async function makeWorkerEmu() {
         async setPmdIrq(v)           { return (await call({ type: 'call', fn: 'np2kai_set_pmd_irq',  ret: 'number', argTypes: ['number'], args: [v] })).r; },
         async setChibiOto(v)         { return (await call({ type: 'call', fn: 'np2kai_set_chibioto', ret: 'number', argTypes: ['number'], args: [v] })).r; },
         async setBeepMute(v)         { return (await call({ type: 'call', fn: 'np2kai_set_beep_mute', ret: 'number', argTypes: ['number'], args: [v] })).r; },
+        async setBeepGain(pct)       { return (await call({ type: 'call', fn: 'np2kai_set_beep_gain', ret: 'number', argTypes: ['number'], args: [pct] })).r; },
         async setClockMultiple(m)    { return (await call({ type: 'call', fn: 'np2kai_set_clock_multiple', ret: 'number', argTypes: ['number'], args: [m] })).r; },
         async enableMidiNow()        { return (await call({ type: 'call', fn: 'np2kai_enable_midi_now', ret: 'number', argTypes: ['number'], prependHandle: true, args: [] })).r; },
         async stageImage(bytes, cmdline, path, isExe) { return (await call({ type: isExe ? 'stageExe' : 'stageCom', bytes, cmdline, path })).r; },
@@ -1205,6 +1206,8 @@ async function makeWorkerEmu() {
     const dosMusicPlay  = M.cwrap('np2kai_dos_music_play',  'number', ['string']);
     // 起動音 (ピポ = BEEP) のミュート。音楽セッションのブートでだけ消す (FM 曲は別音源で無傷)。
     const setBeepMute   = M.cwrap('np2kai_set_beep_mute',   'number', ['number']);
+    // BEEP 音量ブースト (% , 100=素の np2kai)。FM/MIDI を変えず BEEP だけ増幅。qbDebug.beepgain(x) の実体。
+    const setBeepGain   = M.cwrap('np2kai_set_beep_gain',   'number', ['number']);
     // 86 ボードの割り込みを IRQ12 に寄せる。我々の PMD .M 再生でだけ on (常駐ドライバ同梱ゲームは
     // 既定 IRQ を前提にするので off=既定でないと演奏が壊れる)。snd86opt は reset(board bind) 前に設定。
     const setPmdIrq     = M.cwrap('np2kai_set_pmd_irq',     'number', ['number']);
@@ -1263,6 +1266,7 @@ async function makeWorkerEmu() {
         async setPmdIrq(v) { return setPmdIrq(v); },
         async setChibiOto(v) { return setChibiOto(v); },
         async setBeepMute(v) { return setBeepMute(v); },
+        async setBeepGain(pct) { return setBeepGain(pct); },
         async setClockMultiple(m) { return setMul(m); },
         async enableMidiNow() { return enableMidiNow(handle); },
         async stageImage(bytes, cmdline, path, isExe) {
@@ -2256,6 +2260,16 @@ async function makeWorkerEmu() {
             const g = (k) => (o[k] === undefined ? -1 : (o[k] | 0));
             setVol(g('fm'), g('ssg'), g('rhythm'), g('adpcm'));
             return cur();
+        },
+        // BEEP (PC-98 内蔵ブザー = 多くのフリーソフトの効果音) の音量ブースト。x = 倍率 (1=素の np2kai)。
+        // np2kai 標準の BEEP は peak 2048 (-24dBFS) で頭打ちのため FM/MIDI 楽曲の下で SE が埋もれる
+        // (amel133 作者報告)。既定は 4 倍 (≈+12dB、BEEP peak ≈ MIDI 同等)。FM/MIDI/ADPCM には無影響。
+        // 例: qbDebug.beepgain(4) で 4 倍、qbDebug.beepgain(1) で素の np2kai に戻して聴き比べ。
+        // beep は即時反映、ADPCM/PCM の相殺は次の Run (reset) で反映。純設定の上限は約 3.83 倍。
+        beepgain: async (x = 4) => {
+            const pct = Math.max(50, Math.min(383, Math.round(x * 100)));
+            const got = await emu.setBeepGain(pct);
+            return `beepgain=${(got / 100).toFixed(2)}x (${got}%) — beep 即時反映 / ADPCM 相殺は次の Run で`;
         },
         // 音声/エミュ進行の計測ハーネス。曲を再生しながら呼ぶと、症状①(揺れ・スキップ)が
         // 「音声コールバックの遅刻 (cbLate)」由来か「エミュの追いつけなさ (emuSaturated)」由来かを

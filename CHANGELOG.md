@@ -1,5 +1,82 @@
 # CHANGELOG
 
+## [AMEL の MIDI モードを根治 — MIDRV を MIDI ドライバとして認識し on-demand MIDI 結線を発火] — 2026-06-28
+
+### 背景 (amel133 作者報告・ブラウザ実機)
+BEEP ブースト確認のついでに、AMEL (amel133.lzh) の MIDI モード (`amelmidi.bat`) で **FM は鳴るが MIDI が
+無音**と判明。画面の `midrv.com` (Midrv Ver1.60 Copyright(C)1994 Youderng) は「MPU・SB98 の装着が確認
+できないので RS232C へ出力します／Stayed on Memory.」と表示して RS-MIDI へフォールバック常駐していた。
+
+### 真因
+QuuBee の MIDI (MPU98II の attach・SF2 ロード・RS-MIDI 結線) は「**MIDI レシピを Run した時だけ**」
+on-demand で結線する (非 MIDI ゲームは 32MB の SF2 を一切落とさず即プレイ維持)。その判定 `qbBatScript.usesMidi`
+が認識する MIDI ドライバ名は `MIDDRV / MMD` 系だけで、**AMEL 同梱の `midrv.com` (MIDDRV とは別物) が
+漏れていた**。そのため `amelmidi.bat` を Run しても MIDI が一切結線されず、midrv が MPU98II を見つけられず
+(未 attach)・RS232C にフォールバックしてもその先 (cmmidi→TSF) が未結線で、どちらの経路も無音だった。
+
+### 修正 (JS のみ・`web/player/batscript.js`、Wasm 不変)
+`midrv` を MIDI ドライバとして登録:
+- `MIDI_DRIVER_NAMES` に追加 → `amelmidi.bat` で **on-demand MIDI 結線が発火** (ensureMidiLoaded →
+  SF2 fetch + `enable_midi_now` で MPU98II attach + RS-MIDI 結線)。midrv は MPU98II 検出時は MPU 経由、
+  検出に失敗しても RS-MIDI (com_serial→cmmidi→TSF) が結線済みなので、いずれの経路でも合成器に届く。
+- `DRIVER_NAMES` にも追加 → midrv をドライバ TSR として正しく分類 (見出しの主プログラムが `MIDRV.COM`
+  → 正しく `AMEL.EXE` に。逐次列は `midrv(常駐)→amel.exe→midrv` で不変)。
+
+### 検証
+- `tools/batscript_test.js` に AMEL の MIDI/FM レシピ回帰を追加 (amelmidi: usesMidi=true・主=amel.exe・
+  逐次列 midrv→amel→midrv / amelfm: usesMidi=false) → 55/0 PASS。`batch_test` 21/0 PASS。
+- **ブラウザ実機で MIDI が綺麗に鳴ることをユーザー確認 (2026-06-28)**。MIDDRV/MMD 以外の MIDI ドライバ TSR
+  も同様に名前を足せば対応できる (汎用の当たり方)。
+
+## [BEEP 音量を既定 ~4x にブースト — FM/MIDI 楽曲の下で効果音が埋もれる件を根治 (qbDebug.beepgain)] — 2026-06-28
+
+### 背景 (amel133 作者報告)
+AMEL (amel133.lzh) の作者から「**FM 音源は良いが BEEP 音が聴こえない・すごく小さい**」との感想。このゲームに
+限らず FM/BEEP/MIDI のバランスが適切かを headless 実測で検証した。
+
+### 実測 (修正前、`/tmp/.../audio_balance.js` 相当)
+各音源を単独再生し定常区間の peak/RMS を測定 (フルスケール=32767=0dBFS):
+| 音源 | peak | 備考 |
+|---|---|---|
+| FM (fmgen, PMD 曲) | 29766 (**-0.8dBFS**) | フルレンジを使う |
+| MIDI (TSF, 6 音和音) | 17015 (**-5.7dBFS**) | QB_OUT_SCALE=8000 設計どおり |
+| BEEP (連続矩形波, 既定) | 2048 (**-24.1dBFS**) | **peak 2048 で頭打ち** |
+
+→ **FM↔MIDI は ~5dB で問題なし** (両者は同時に鳴らず互いをマスクしない)。**BEEP は FM/MIDI より 18〜23dB
+低く**、楽曲の下で完全にマスクされて聴こえない (作者報告と一致)。原因は np2kai の BEEP 音量モデルで、
+`beepcfg.vol` が **0..3 の 4 段階 (DIP スイッチ相当・既定 2)** しか持たず、矩形波の振幅が `±4×vol×256` =
+**peak 2048 で頭打ち**になるため (最大 vol=3 でも 3072=+3.5dB で全く足りない)。一方 FM(fmgen)/MIDI(TSF) は
+16bit フルレンジを使う。QuuBee 固有のバグではなく np2kai 標準の音量設計だが、我々の fmgen FM がフルスケール
+まで使うぶん相対的に BEEP の小ささが際立つ。
+
+### 修正 — BEEP だけを既定 ~4x (+11.7dB) に持ち上げる (`np2kai_set_beep_gain`、native + Wasm)
+**`vol_master` は fmgen FM にも TSF MIDI にも効かず、BEEP と ADPCM/PCM だけに効く**という性質
+(`native/bridge.c` の既存知見) を利用。`vol_master` を上げて BEEP を持ち上げ、`vol_adpcm`/`vol_pcm` を
+同率で下げて相殺すれば、**FM・MIDI・ADPCM/PCM を一切変えず BEEP だけ**を増幅できる。
+- `np2kai_set_beep_gain(gain_pct)` を新設 (`native/bridge.c`/`.h`、CMakeLists エクスポート)。`vol_master`
+  (UINT8、上限 255) と `BEEP_VOL` (0..3 → 最大 ×1.5) の組合せで増幅し、`vol_adpcm`/`vol_pcm` を
+  `6400/vol_master` に補償。純設定での上限は **BEEP_VOL=3 × vol_master=255 ≈ 383% (+11.7dB)**。
+- `np2kai_create` が既定で `np2kai_set_beep_gain(400)` を呼ぶ (→クランプ 383%)。`np2kai_reset` は np2cfg を
+  再初期化しないので Run を跨いで保持。
+- **実行時 A/B ノブ `qbDebug.beepgain(x)`** (`web/player/bridge.js`、worker/local 両 emu に `setBeepGain`)。
+  x=倍率、既定 4。beep は即時反映 (beepg が `vol_master` を実時間で読む)、ADPCM/PCM 相殺は次の Run で反映。
+  worker 構成 (既定) でも `emu` 経由で worker エンジンに届く。`qbDebug.beepgain(1)` で素の np2kai に戻せる。
+
+### 検証 (実測・回帰ゼロ)
+- 修正後の BEEP peak = **7833 (-12.4dBFS) = 素の 3.82x (+11.7dB)**。`beepgain(1)` で 2048 に戻る。
+  **FM (29766)・MIDI (17015) は修正前と完全に同一** (= FM/MIDI 無影響を実測確認)。FM↔BEEP の差は
+  23.2dB→**11.6dB**、MIDI↔BEEP は **6.7dB** に縮小 = SE が楽曲の下で抜けてくる。
+- 新規回帰 `tools/beep_gain_test.js` (corpus 不要・PIT/sysport を叩く極小 COM): 既定 peak>=6000・
+  `beepgain(100)`=素レベル・倍率 ~3.8x を判定。3/3 PASS。
+- 既存音声回帰: `pmd_test` 2/0 (FM 不変)・`rhythm_test` 2/0・**`fmp_test` 3/3 (ちびおと/.ovi ADPCM が
+  peak 27746 で鳴る = 相殺補償が効いて回帰なし)**・`pmd_stereo_test` 2/0・`touhou_test` 4/0。
+- `bio100 triage` = **CRASH=0・描画到達25・動作確認27** でベースライン一致 (音声設定のみの変更で
+  実行/描画に無影響)。
+
+### 残
+最終的な音量バランスは耳で決める主観領域なので、ブラウザ実機での A/B (特に amel133 作者の確認) で
+4x が適切かを詰める。4x を超える増幅は要コア改変 (beepg.c のゲイン項) で、現状は純設定の上限 383% で打ち止め。
+
 ## [WinDy (wd113) の画面崩れを根治 — NEC ANSI CSI 私的マーカ '>' をパラメータの後でも受理 + FCB I/O 全数調査] — 2026-06-28
 
 ### 背景 (ユーザー報告 / X 経由)
