@@ -1,5 +1,50 @@
 # CHANGELOG
 
+## [WinDy (wd113) の画面崩れを根治 — NEC ANSI CSI 私的マーカ '>' をパラメータの後でも受理 + FCB I/O 全数調査] — 2026-06-28
+
+### 背景 (ユーザー報告 / X 経由)
+X で「QuuBee で表示がおかしい」という動作報告が 2 件。① **おてんきぶっく'91** (OTENKI.EXE、1991 年の雑誌付録、
+書庫は手元になく**スクショのみ**) は地図・タイトルは出るが右パネルの都市名が全部左端へ潰れて重なる。② ユーザーが
+追加した **WinDy (wd113.lzh)** はテキストエディタ兼ファイラ環境で、EXE 実行後に Enter 数回で初回コンフィグを抜けると
+メイン画面になり、そこで**画面が崩壊**する。
+
+### 真因 (wd113)
+WinDy はファンクションキー行の表示制御を `ESC[1>h` / `ESC[1>l` という **NEC PC-98 ANSI 形式 (パラメータ → '>' の順)**
+で送る (バイナリ内の ESC 列を `grep -P '\x1b\['` で確認: `ESC[1>h` `ESC[1>l` `ESC[2J` の 3 種のみ)。我々の tty CSI
+パーサ (`native/dos_int21.c`, TTY_CSI) は私的マーカ '>'/'?' を「'[' の直後 (数字より前)」でしか受理せず、**数字の後の
+'>' を終端文字に誤認** → `csi_dispatch('>')` が unimpl になり状態 NORMAL へ戻る → 続く **'h'/'l' を素の文字として描画**
+していた (メイン画面左上に居座る謎の 'h' の正体)。WinDy はこれを多用するため fkey 行制御が効かず画面が崩れる。
+
+### 修正
+- `'>'/'?'` を**位置によらず** `g_csi_priv` に記録 (TTY_CSI の条件から「数字より前」制約を除去)。これで `ESC[>1h`
+  (標準) と `ESC[1>h` (NEC param→'>') を同一視。標準系の挙動は不変 = ゼロ回帰。既存の `>1h/l`(fkey 行) `>3h/l`
+  (20/25 行) `>5h/l`(カーソル) ハンドラがそのまま適用される。コア (`core/np2kai`) 改変ゼロ・JS 不変。
+
+### FCB ファイル I/O の全数調査 (OTENKI の容疑潰し)
+OTENKI の都市名潰れを「**FCB I/O 未実装**が原因では」と仮説立て (FCB read 系 AH=0Fh/11h/14h/21h/27h は未実装で
+default 落ち)、bio_100 全 30 本を headless で走らせ未対応 DOS コール (`UNIMPL AH`) を集計 → **FCB レンジはゼロ**。
+疑われた **KANI123 も FCB 不使用** (`kani.scr` の open 失敗は初回スコアファイル不在の忠実通知で不具合でない)。FCB は
+1980 年代前半の CP/M 流儀で、90 年代の同人/フリーソフトはハンドル I/O (AH=3Dh/3Fh)。→ 「表示崩れ = FCB 未実装」
+の線は corpus では否定。OTENKI 本体はバイナリ未入手のため原因未確定 (報告者にコンソールログ/書庫を打診中)。
+**診断手段を確立**: `web/player/emu-worker.js` の `printErr→console.warn` により、`[int21h] UNIMPL AH=..` や EXEC/
+open 失敗が**ブラウザ DevTools コンソールに全部出る**ので、書庫が手元になくても報告者にログを頼める。
+
+### 検証
+- 新規回帰 `tools/csi_priv_test.js` (合成 ESC・corpus 不要): `ESC[1>h`/`ESC[1>l` 消費後に印字センチネル 'X' が (0,0) に
+  来る = 'h'/'l' 漏れなしを decisive 判定。PASS。
+- headless で wd113 を framebuffer→PNG ダンプし、左上の 'h' 消滅・メイン画面クリーン (緑ステータスバー + fkey 行
+  「機能 メニュー Editor Resume Jump 検索 eXec 改行」) を目視。
+- 回帰: `sgr_test` / `vz_test` / `touhou_test` (4/4) PASS。bio100 triage = ALIVE21/CRASH0・描画 25/動作 27 (基準と
+  完全一致 = ゼロ回帰)。
+- **ブラウザ実機確認済 (2026-06-28、ユーザー)**: WinDy の fkey 行が正しく表示され崩れ解消。
+
+### 残 (wd113)
+ファイラ画面の「ルート空」は find のバグではない (我々の `*.*` 列挙は `wildcard_find_test` PASS・`wd.def` FindFirst も
+成功)。WinDy の設定コンパイル後のファイラ到達状態を headless で安定駆動できず原因は未確定。各ソフトが独立した /run に
+隔離される QuuBee の構造上、ファイラの本領 (ディスク探索) が限定的という側面もある。実機側の追加情報待ち。
+
+詳細メモ: [[reference_pc98_nec_ansi_csi_priv]] / [[reference_browser_console_diagnostic]]。
+
 ## [font.bmp の漢字の縦位置ズレを根治 — irori 版 (Shinonome 正規化) へ乗り換え + 再生成パイプラインを vendoring] — 2026-06-28
 
 ### 背景 (ユーザー報告)

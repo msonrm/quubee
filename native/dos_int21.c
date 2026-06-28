@@ -487,7 +487,12 @@ static void tty_putc(uint8_t ch) {
         g_tty_state = TTY_NORMAL;
         return;
     case TTY_CSI:
-        if ((ch == '?' || ch == '>') && !g_csi_has_digit && g_csi_nparam == 0) {
+        if (ch == '?' || ch == '>') {
+            /* 私的マーカ。標準 ANSI は '[' 直後 (ESC[?25h) に置くが、NEC PC-98 の ANSI は
+             * パラメータの後にも許す: WinDy (wd113) は fkey 行制御を ESC[1>h / ESC[1>l と
+             * 「数字→'>'」順で送る。旧実装は数字後の '>' を priv 扱いせず終端文字に誤認し、
+             * 続く 'h'/'l' を素の文字として描画していた (メイン画面左上の謎の 'h' の正体)。
+             * 位置によらず priv に記録すれば ESC[>1h と ESC[1>h を同一視できる (標準系も不変)。 */
             g_csi_priv = (char)ch;
             return;
         }
