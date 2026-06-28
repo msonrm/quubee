@@ -1,5 +1,33 @@
 # CHANGELOG
 
+## [INT DCh CL=10h を AH=04-0Eh まで完成 — カーソル移動 / 行挿入・削除 / 漢字モード (追補)] — 2026-06-29
+
+### 背景
+前項で CL=10h の核 (AH=00/01/02/03/0A/0B) を実装したが、AH=04-09 (カーソル移動)・0Ch-0Dh (行挿入/削除)・
+0Eh (漢字-グラフモード) は「実需が出るまで no-op」で残していた。lpproj 氏の gist (FreeDOS(98) INT DCh
+サポート状況) ではこれらも全て「実装済 (○)」であり、忠実な HLE として穴を埋めるべきとのユーザー判断。
+
+### 修正 (native/dos_int21.c のみ・既存 tty 機構へ橋渡し)
+前項と同じ思想で、新規描画ロジックを最小化し既存の CSI ディスパッチへ流す:
+- **AH=06-09h (カーソル ↑↓→← n 移動)** → `intdc_csi('A'/'B'/'C'/'D', DX)`。DX=n、`n=0` は ESC[A 同様に
+  既定 1 移動 (`has_digit=(n!=0)` で csi_param に既定値を返させる)。
+- **AH=04h (1 行下移動, ESC D 相当)** → 行++、下端では LF と同じく `vram_scroll_one()`。
+  **AH=05h (1 行上移動, ESC E 相当)** → 行--、上端クランプ (逆スクロール非対応)。いずれも桁は保持。
+- **AH=0Ch/0Dh (行挿入/削除)** → 新ヘルパー `vram_insert_lines`/`vram_delete_lines` を追加し
+  `csi_dispatch('L'/'M')` 経由で呼ぶ。**CLAUDE.md が「ESC[nL/nM 未発火」と記していた既知ギャップも同時に
+  解消** (ESC シーケンス経路と関数経路の両方が同じ実体を叩く)。行ブロックは重なるので `memmove`。
+- **AH=0Eh (漢字/グラフモード ESC)0/ESC)3)** → no-op が忠実。我々の tty は SJIS リードバイトを常に直接
+  全角解釈し、切替モードを持たないため (グリフ化や状態破壊をしない明示的 no-op)。
+- ついでに **AH=02h (属性設定) で CON ワークエリア 0:071Dh も同期** (`ESC[m`/`tty_sync_conarea` と一貫)。
+- 未対応 AH は `[intdc] CL=10 unimpl AH=xx` 診断ログに恒久化 (旧 `default: break;` の沈黙を解消)。
+
+### 検証
+- **新規回帰 `tools/intdc_cursor_test.js`** (合成 COM、corpus 非依存、14 アサーション全 PASS): AH=06-09 の
+  上下左右移動 (clamp 込み)・AH=04/05 の 1 行移動・AH=0Ch 挿入 (下シフト)・AH=0Dh 削除 (上シフト) を
+  テキスト VRAM のセル配置で直接検証。行操作テスト同士の行シフトが干渉しない順序で配置。
+- 既存 `intdc_screen_test`/`csi_priv_test`/`sgr_test`/`vz_test`/`vz_cursor_test`/`touhou_test` 全 PASS。
+- **bio100_triage**: ALIVE21/CRASH0・描画到達25/動作確認27 = ベースライン一致 (回帰ゼロ)。
+
 ## [INT DCh CL=10h (文字・画面制御) を実装 — 蟹味噌の左上テキスト残留を根治 (OTENKI も推定根治)] — 2026-06-29
 
 ### 背景 (OTENKI スクショ報告 + lpproj 氏の指摘 + ブラウザ実機)

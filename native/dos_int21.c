@@ -236,6 +236,47 @@ static void csi_clamp_cursor(void) {
     if (g_cur_col >= TEXT_COLS) g_cur_col = TEXT_COLS - 1;
 }
 
+/* 行挿入 (CSI 'L' / INT DCh AH=0Ch): at_row に空行を n 行挿入し、以降を下へスクロール。
+ * 下端へ押し出された行は消滅 (画面外)。NEC PC-98 CON の ESC[nL 相当。カーソルは動かさない。
+ * 行ブロックは重なるので memmove を使う (memcpy では未定義動作)。 */
+static void vram_insert_lines(int at_row, int n) {
+    if (at_row < 0) at_row = 0;
+    if (at_row >= TEXT_ROWS) return;
+    if (n < 1) n = 1;
+    if (n > TEXT_ROWS - at_row) n = TEXT_ROWS - at_row;
+    int move_rows = TEXT_ROWS - at_row - n;          /* 下へずらす行数 */
+    if (move_rows > 0) {
+        size_t bytes = (size_t)move_rows * TEXT_COLS * 2;
+        memmove(&mem[VRAM_CODE + ((at_row + n) * TEXT_COLS) * 2],
+                &mem[VRAM_CODE + (at_row * TEXT_COLS) * 2], bytes);
+        memmove(&mem[VRAM_ATTR + ((at_row + n) * TEXT_COLS) * 2],
+                &mem[VRAM_ATTR + (at_row * TEXT_COLS) * 2], bytes);
+    }
+    for (int r = at_row; r < at_row + n; r++)        /* 空いた n 行を現在属性の空白で埋める */
+        for (int c = 0; c < TEXT_COLS; c++) vram_put_char(r, c, 0x20);
+    gdcs.textdisp |= GDCSCRN_ALLDRAW2;
+}
+
+/* 行削除 (CSI 'M' / INT DCh AH=0Dh): at_row から n 行削除し、以降を上へスクロール。
+ * 下端には空行が n 行できる。NEC PC-98 CON の ESC[nM 相当。カーソルは動かさない。 */
+static void vram_delete_lines(int at_row, int n) {
+    if (at_row < 0) at_row = 0;
+    if (at_row >= TEXT_ROWS) return;
+    if (n < 1) n = 1;
+    if (n > TEXT_ROWS - at_row) n = TEXT_ROWS - at_row;
+    int move_rows = TEXT_ROWS - at_row - n;          /* 上へずらす行数 */
+    if (move_rows > 0) {
+        size_t bytes = (size_t)move_rows * TEXT_COLS * 2;
+        memmove(&mem[VRAM_CODE + (at_row * TEXT_COLS) * 2],
+                &mem[VRAM_CODE + ((at_row + n) * TEXT_COLS) * 2], bytes);
+        memmove(&mem[VRAM_ATTR + (at_row * TEXT_COLS) * 2],
+                &mem[VRAM_ATTR + ((at_row + n) * TEXT_COLS) * 2], bytes);
+    }
+    for (int r = TEXT_ROWS - n; r < TEXT_ROWS; r++)  /* 下端に空行 n 行 */
+        for (int c = 0; c < TEXT_COLS; c++) vram_put_char(r, c, 0x20);
+    gdcs.textdisp |= GDCSCRN_ALLDRAW2;
+}
+
 /* "見えた" param の数 (digit が一つでも来ていれば >=1)。default 値は 1 が多いが
  * 'J' / 'K' は 0、'H'/'f' は 1 が default。ここでは caller が補正する。 */
 static int csi_count(void) { return g_csi_has_digit ? (g_csi_nparam + 1) : 0; }
@@ -258,6 +299,8 @@ static void csi_dispatch(uint8_t final) {
     case 'B': g_cur_row += csi_param(0, 1); csi_clamp_cursor(); break;
     case 'C': g_cur_col += csi_param(0, 1); csi_clamp_cursor(); break;
     case 'D': g_cur_col -= csi_param(0, 1); csi_clamp_cursor(); break;
+    case 'L': vram_insert_lines(g_cur_row, csi_param(0, 1)); break;  /* 行挿入 (PC-98 CON 拡張) */
+    case 'M': vram_delete_lines(g_cur_row, csi_param(0, 1)); break;  /* 行削除 (PC-98 CON 拡張) */
     case 'J': {
         int p = csi_param(0, 0);
         if (p == 2) { vram_clear_all(); g_cur_row = 0; g_cur_col = 0; }
@@ -707,12 +750,24 @@ static int dos_next_input_byte(void) {
     return ch;
 }
 
+/* INT DCh CL=10h のカーソル移動/消去/行操作で使う: DX を CSI param0 にして final を dispatch。
+ * DX=0 は ESC[<final> (パラメータ省略=既定 1、消去系は既定 0) と同義 (NEC PC-98 CON 準拠)。
+ * has_digit を (n!=0) にすることで、n=0 のとき csi_param が各 final の既定値を返す。 */
+static void intdc_csi(uint8_t final, uint16_t n) {
+    g_csi_param[0]  = (int)n;
+    g_csi_nparam    = 0;
+    g_csi_has_digit = (n != 0);
+    g_csi_priv      = 0;
+    csi_dispatch(final);
+}
+
 /* INT DCh ハンドラ (0xFEEA0 トランポリン → biosfunc 経由)。
  * CL=0Dh setkey: AX=0 で全体一括、AX=key# で 1 キー単位 (どちらも g_keytbl へ書く)。
  * CL=0Ch getkey: AX=0 で全体を DS:DX へ、AX=key# で 1 キーを DS:DX へ複製。
  * CL=10h 文字・画面制御: AH 別に既存 tty へ橋渡し (00h 1文字/01h $終端文字列/02h 属性/
- *   03h カーソル位置/0Ah 画面消去/0Bh 行消去)。その他 CL は良性 no-op + 診断ログ。
- * レジスタ・フラグは変えない。 */
+ *   03h カーソル位置/04-09h カーソル移動/0Ah 画面消去/0Bh 行消去/0Ch 行挿入/0Dh 行削除/
+ *   0Eh 漢字-グラフモード)。AH 一覧と意味は lpproj gist (FreeDOS(98) INT DCh) に対応。
+ *   その他 CL は良性 no-op + 診断ログ。レジスタ・フラグは変えない。 */
 int qb_dos_intdc_hook(void) {
     uint8_t  cl  = (uint8_t)(CPU_CX & 0xFF);
     uint16_t ax  = (uint16_t)CPU_AX;
@@ -748,9 +803,10 @@ int qb_dos_intdc_hook(void) {
                                              * NEC PC-98 DOS の INT DCh コンソール BIOS。各 AH を既存
                                              * tty (ESCパーサ/カーソル/属性/消去) へ橋渡しするだけ。
                                              * 典拠 = lpproj gist + KANI/PC98DCH.COM の実トレース。 */
-        uint8_t ah = (uint8_t)((ax >> 8) & 0xFF);
-        uint8_t dl = (uint8_t)(CPU_DX & 0xFF);
-        uint8_t dh = (uint8_t)((CPU_DX >> 8) & 0xFF);
+        uint8_t  ah = (uint8_t)((ax >> 8) & 0xFF);
+        uint8_t  dl = (uint8_t)(CPU_DX & 0xFF);
+        uint8_t  dh = (uint8_t)((CPU_DX >> 8) & 0xFF);
+        uint16_t dx = (uint16_t)(CPU_DX & 0xFFFF);
         switch (ah) {
         case 0x00:                          /* 1 文字表示 (DL=文字) */
             tty_putc(dl);
@@ -764,22 +820,34 @@ int qb_dos_intdc_hook(void) {
             break;
         case 0x02:                          /* 文字属性設定 (DL=属性) */
             g_tty_attr = dl;
+            mem[0x71D] = dl;                /* CON ワークエリアの現在属性も同期 (ESC[m と一貫) */
             break;
         case 0x03:                          /* カーソル位置設定 (DH=行, DL=列, 0-based) */
             g_cur_row = dh;
             g_cur_col = dl;
             csi_clamp_cursor();
             break;
-        case 0x0A:                          /* 画面消去 (ESC[nJ 相当, DX=n) */
-        case 0x0B:                          /* 行消去   (ESC[nK 相当, DX=n) */
-            g_csi_param[0]  = (int)(CPU_DX & 0xFF);
-            g_csi_nparam    = 0;
-            g_csi_has_digit = 1;
-            g_csi_priv      = 0;
-            csi_dispatch(ah == 0x0A ? 'J' : 'K');
+        case 0x04:                          /* カーソル 1 行下移動 (ESC D 相当)。下端で LF 同様スクロール。 */
+            g_cur_row++;
+            if (g_cur_row >= TEXT_ROWS) { vram_scroll_one(); g_cur_row = TEXT_ROWS - 1; }
             break;
-        /* AH=04-09 (カーソル移動)・0Ch-0Eh (行挿入/削除/漢字モード) は実需が出るまで no-op。 */
-        default:
+        case 0x05:                          /* カーソル 1 行上移動 (ESC E 相当)。上端ではクランプ (逆スクロール非対応)。 */
+            if (g_cur_row > 0) g_cur_row--;
+            break;
+        case 0x06: intdc_csi('A', dx); break;   /* カーソル上 n (ESC[nA) */
+        case 0x07: intdc_csi('B', dx); break;   /* カーソル下 n (ESC[nB) */
+        case 0x08: intdc_csi('C', dx); break;   /* カーソル右 n (ESC[nC) */
+        case 0x09: intdc_csi('D', dx); break;   /* カーソル左 n (ESC[nD) */
+        case 0x0A: intdc_csi('J', dx); break;   /* 画面消去 (ESC[nJ, DX=n) */
+        case 0x0B: intdc_csi('K', dx); break;   /* 行消去   (ESC[nK, DX=n) */
+        case 0x0C: intdc_csi('L', dx); break;   /* 行挿入 n (ESC[nL) */
+        case 0x0D: intdc_csi('M', dx); break;   /* 行削除 n (ESC[nM) */
+        case 0x0E:                          /* 漢字/グラフモード切替 (ESC)0 / ESC)3)。我々の tty は
+                                             * SJIS リードバイトを常に直接全角解釈するので別モードは
+                                             * 持たず、切替は no-op が忠実 (グリフ化や状態破壊をしない)。 */
+            break;
+        default:                            /* 未対応 AH: 診断ログ (ブラウザ Console)。良性 no-op。 */
+            fprintf(stderr, "[intdc] CL=10 unimpl AH=%02x DX=%04x\n", ah, dx);
             break;
         }
     } else {                                /* 未対応 CL: 診断ログ (ブラウザ Console)。良性 no-op。 */
