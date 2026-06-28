@@ -1,0 +1,9 @@
+{
+  "name": "quubee-font-build",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Regenerate web/assets/font.bmp from SimK base + Shinonome (irori adjust-fontbmp pipeline). Build-time only.",
+  "devDependencies": {
+    "bdf": "github:erkkah/BDF.js#a412e123af992d2b54b74803cb1fa59499780da9"
+  }
+}

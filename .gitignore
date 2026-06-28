@@ -54,5 +54,9 @@ __pycache__/
 .DS_Store
 Thumbs.db
 
+# font_build: ビルド時依存と中間生成物 (最終成果物は web/assets/font.bmp、package-lock.json は追跡)
+/tools/font_build/node_modules/
+/tools/font_build/font.bmp
+
 # debug/作業用スクリーンショット (ユーザ共有のため一時的に置く)
 /Screenshot*.png
