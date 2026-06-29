@@ -91,6 +91,10 @@ static int g_text_rows = 25;
 static int g_cur_row = 0;
 static int g_cur_col = 0;
 
+/* ESC[s / ESC[u (カーソル・属性の保存/復元) 用スロット。PC-98 CON は属性も一緒に保存する。 */
+static int     g_saved_row = 0, g_saved_col = 0;
+static uint8_t g_saved_attr = DEF_ATTR;
+
 /* ---------------- ESC/ANSI シーケンス state ---------------- */
 /* PC-98 DOS は ANSI X3.64 風のシーケンスを console driver が解釈する。
  * 我々は driver を持たないので tty_putc 内で最小パーサを動かす。
@@ -103,10 +107,13 @@ typedef enum {
     TTY_ESC,      /* 直前が ESC */
     TTY_CSI,      /* "ESC [" 後、パラメータ収集中 */
     TTY_SJIS2,    /* 直前が Shift-JIS 第1バイト、第2バイト待ち */
+    TTY_ESC_EQ_ROW,  /* "ESC =" 後、行バイト待ち (VT52/PC-98 直接カーソル位置指定) */
+    TTY_ESC_EQ_COL,  /* "ESC =" 後、列バイト待ち */
 } tty_state_t;
 
 static tty_state_t g_tty_state = TTY_NORMAL;
 static uint8_t g_sjis_lead;    /* TTY_SJIS2 中: 保留した Shift-JIS 第1バイト */
+static uint8_t g_esc_eq_row;   /* TTY_ESC_EQ_COL 中: 保留した行バイト */
 static int     g_csi_param[8];
 static int     g_csi_nparam;   /* "見えた" param の最大 index (0 = まだ何も) */
 static int     g_csi_has_digit;
@@ -377,10 +384,33 @@ static void csi_dispatch(uint8_t final) {
         /* それ以外の mode は無視 */
         break;
     }
-    case 'n':
-    case 's': case 'u':
+    case 'n': {
+        /* DSR (Device Status Report)。応答を入力ストリームへ注入する (実機 CON は応答を
+         * キーバッファへ流し、プログラムが getchar で読む)。注入 FIFO 経由なので BIOS INT 18h
+         * 直読み / DOS AH=01-08 のどれで読んでも届く ([[project_host_ime_input]] の経路を流用)。
+         *   6n → カーソル位置 ESC[<row>;<col>R (1-based)、5n → 端末ステータス ESC[0n (異常なし)。
+         * 私的マーカ付き (ESC[>6n 等) には応答しない。 */
+        int p = csi_param(0, 0);
+        if (g_csi_priv == 0 && p == 6) {
+            char rep[24];
+            int n = snprintf(rep, sizeof rep, "\x1b[%d;%dR", g_cur_row + 1, g_cur_col + 1);
+            if (n > 0) qb_dos_inject_input((const uint8_t *)rep, n);
+        } else if (g_csi_priv == 0 && p == 5) {
+            static const uint8_t ok[] = { 0x1b, '[', '0', 'n' };   /* 端末異常なし */
+            qb_dos_inject_input(ok, sizeof ok);
+        }
+        break;
+    }
+    case 's':   /* カーソル位置 (+ PC-98 では属性) を保存 */
+        g_saved_row = g_cur_row; g_saved_col = g_cur_col; g_saved_attr = g_tty_attr;
+        break;
+    case 'u':   /* 保存したカーソル位置・属性を復元 */
+        g_cur_row = g_saved_row; g_cur_col = g_saved_col;
+        g_tty_attr = g_saved_attr; mem[0x71D] = g_saved_attr;
+        csi_clamp_cursor();
+        break;
     case 'r':
-        /* device status report / save-restore cursor / scroll region — 無視 */
+        /* スクロール領域 (top;bottom マージン)。全画面スクロール固定のため未対応 (良性無視)。 */
         break;
     default:
         fprintf(stderr, "[tty] unimpl CSI '%c%c' (params:", g_csi_priv ? g_csi_priv : ' ', final);
@@ -526,7 +556,40 @@ static void tty_putc(uint8_t ch) {
             g_tty_state = TTY_NORMAL;
             return;
         }
+        if (ch == 'D') {            /* ESC D = index: 1 行下、下端でスクロール (桁保持)。INT DCh AH=04h の生 ESC 版 */
+            g_cur_row++;
+            if (g_cur_row >= TEXT_ROWS) { vram_scroll_one(); g_cur_row = TEXT_ROWS - 1; }
+            g_tty_state = TTY_NORMAL;
+            return;
+        }
+        if (ch == 'E') {            /* ESC E = next line: 桁 0 + 1 行下、下端でスクロール */
+            g_cur_col = 0;
+            g_cur_row++;
+            if (g_cur_row >= TEXT_ROWS) { vram_scroll_one(); g_cur_row = TEXT_ROWS - 1; }
+            g_tty_state = TTY_NORMAL;
+            return;
+        }
+        if (ch == 'M') {            /* ESC M = reverse index: 1 行上、上端で逆スクロール (上に空行) */
+            if (g_cur_row > 0) g_cur_row--;
+            else vram_insert_lines(0, 1);    /* 上端: 全体を 1 行下げ最上行を空ける */
+            g_tty_state = TTY_NORMAL;
+            return;
+        }
+        if (ch == '=') {            /* ESC = l c = VT52/PC-98 直接カーソル位置指定 (次の 2 バイトで行/列) */
+            g_tty_state = TTY_ESC_EQ_ROW;
+            return;
+        }
         /* 未知の ESC X — X を捨てて NORMAL に戻す */
+        g_tty_state = TTY_NORMAL;
+        return;
+    case TTY_ESC_EQ_ROW:            /* ESC = の行バイト: row = byte - 0x20 (0-based)。次は列 */
+        g_esc_eq_row = ch;
+        g_tty_state = TTY_ESC_EQ_COL;
+        return;
+    case TTY_ESC_EQ_COL:            /* ESC = の列バイト: col = byte - 0x20。カーソル確定 */
+        g_cur_row = (int)g_esc_eq_row - 0x20;
+        g_cur_col = (int)ch - 0x20;
+        csi_clamp_cursor();
         g_tty_state = TTY_NORMAL;
         return;
     case TTY_CSI:

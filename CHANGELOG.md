@@ -1,5 +1,39 @@
 # CHANGELOG
 
+## [ESC/CSI シーケンスの「消費するが無視」系を根治 — DSR / カーソル保存復元 / 逆インデックス (SimK TEXTTEST)] — 2026-06-29
+
+### 背景
+SimK 氏 (Neko Project 21/W 作者) 提供のテキスト画面テスト群 TEXTTEST (DOSTXT/PC98ESC/PC98ADV1/
+PC98ADV2/PC98HW/PC98DCH、ChatGPT 生成・np21w 正解スクショ付き) を QuuBee でヘッドレス全数実行し、
+未対応機能を洗い出した。**INT 21h / INT DCh の API レベルは未対応ゼロ**だったが、tty/CSI パーサが
+「受理はするが何もしない」ANSI シーケンスが数点あり、これらは診断ログに出ないまま挙動だけ崩れていた
+(実行画面ダンプとソース突合で発見)。とりわけ **ESC[6n を無視していたため PC98ADV1 が応答待ちでハング**
+(PAGE 6 で停止し pages 7-8 に到達せず) していた。
+
+### 修正 (native/dos_int21.c のみ・既存機構を流用)
+- **ESC[6n (DSR・カーソル位置レポート)**: 応答 `ESC[<row>;<col>R` (1-based) を**入力ストリームへ注入**
+  (`qb_dos_inject_input`、ホスト IME 注入 FIFO→0x502 経路を流用)。BIOS INT 18h 直読み / DOS AH=01-08 の
+  どれで読んでも届く。`ESC[5n` には端末異常なし `ESC[0n` を返す。私的マーカ付き (ESC[>6n) には無応答。
+- **ESC[s / ESC[u (カーソル位置・属性の保存/復元)**: PC-98 CON は属性も保存するので
+  `g_saved_row/col/attr` を一組保持し、復元時に CON ワークエリア 0:071Dh も同期。
+- **ESC M / ESC D / ESC E (生 ESC の単一文字シーケンス)**: tty ESC パーサが未知 ESC として破棄していたのを実装。
+  ESC D=index (1 行下・下端スクロール)、ESC E=next line (桁0+1行下)、ESC M=reverse index (1 行上・上端で
+  `vram_insert_lines(0,1)` 逆スクロール)。INT DCh AH=04/05 の生 ESC 版に相当。
+- **ESC = l c (VT52/PC-98 直接カーソル位置指定)**: `ESC = <0x20+row-1> <0x20+col-1>`。tty 状態に
+  `TTY_ESC_EQ_ROW`/`TTY_ESC_EQ_COL` を足し、2 バイトを行/列として確定 (`row=byte-0x20`)。**ブラウザ実機で
+  ユーザーが PC98ESC PAGE 5 (PC-98 specific) の上半分の崩れを発見**して判明 — 旧実装は `ESC =` を未知 ESC として
+  破棄し、続く位置バイト 2 つを素の文字として描画していた (カーソルが動かず文字が散らばる真因)。
+- **ESC[r (スクロール領域)** は全画面スクロール固定のため意図的に未対応 (良性無視、コメントに明記)。
+
+### 検証
+- **新規回帰 `tools/esc_seq_test.js`** (合成 COM・10 アサーション全 PASS): DSR 応答を 0x502 キーバッファから直接
+  検証 ("ESC[14;51R")・save/restore のカーソル+属性復元・reverse index の逆スクロール/1 行上・ESC= の位置指定
+  (Q@(7,9)・位置バイト漏れなし) を VRAM で検証。
+- **TEXTTEST 全 6 本が "completed/Done" まで完走** (修正前は PC98ADV1 が ESC[6n でハング)。全 6 本で
+  `UNIMPL`/`unimpl`/`unimpl CSI` 診断ログ **ゼロ**。
+- 既存 `intdc_screen`/`intdc_cursor`/`csi_priv`/`sgr`/`vz`/`vz_cursor`/`touhou(4/4)` 全 PASS。
+- **bio100_triage (--fresh)**: ALIVE21/CRASH0・描画到達25/動作確認27 = ベースライン一致 (回帰ゼロ)。
+
 ## [INT DCh CL=10h を AH=04-0Eh まで完成 — カーソル移動 / 行挿入・削除 / 漢字モード (追補)] — 2026-06-29
 
 ### 背景
