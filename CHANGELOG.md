@@ -1,5 +1,37 @@
 # CHANGELOG
 
+## [CON の IOCTL device info を 0x80D3 に修正 — YY のオープニングが入力前に表示されない不具合を根治] — 2026-06-30
+
+### 背景 (前日の誤結論の訂正)
+bio_100「ある勇者の憂鬱」(YY、MARKA 1991、TurboC 製テキスト ADV) は triage で WAIT/colors=1。前日 (2026-06-29)
+「YY は起動時に getch を先読みする作りで、出力は入力後にしか出ない = 実機同様 faithful・直す対象なし」と結論したが、
+**これは誤りだった**。ユーザーが公式レビュー (bio100.jp/game_review/game12.html — YY は「状況を読んで Yes/No や方角を選ぶ」
+read-then-choose な ADV と明記) を根拠に「入力前に何か出るのが自然」と再指摘。詰め直すと真因が判明した。
+
+### 真因 (stdout の full-buffer 化)
+**決定的証拠**: 入力前 (最初の getch でブロック中) にメモリを走査すると、プロンプト文字列 "Y)es or N)o" が **2 箇所**に存在
+(EXE 原本には 1 回のみ)。余分な 1 つは **TurboC の stdio バッファのコピー** = YY はオープニング+プロンプトを getch の
+**前に** printf 済みで、バッファに溜まっているだけだった (バッファ内に改行があるのに 1 行も画面に出ていない = full-buffer)。
+真因 = **INT 21h AH=44h AL=00 (IOCTL Get Device Info) が CON に不完全な値 0x82 を返していた**こと。実機 DOS は CON に
+**0x80D3** を返す。欠けていた **bit6 (0x40)** が無いと TurboC ランタイムが stdout を「リダイレクト先のファイル」と判定して
+full-buffer 化し、`conio` の `getch()` (=AH=07h、stdio を flush しない) で待つ YY のオープニングがバッファ滞留したまま
+最初の入力まで画面に出なかった (BUFSIZ 到達か exit まで AH=40h が発行されない)。
+
+### 修正 (native/dos_int21.c)
+- AH=44h AL=00 の CON ハンドル (0/1/2) を **0x80D3** (実機 CON 値: char/console-in/console-out/special(INT29h)/非EOF) に。
+  ビット二分法で**決め手は bit6 (0x40)** と特定 (AX ミラーは不要・TurboC は DX を読む)。AUX/PRN (3/4) は従来の 0x80 を維持。
+- **効果**: YY が**入力前にオープニング全文+「[ Y)es or N)o ? ]」を表示**し入力待ちになる (実機/公式レビュー通り)。
+  TurboC 系の printf→getch 型プログラム全般に効く systemic な修正。
+
+### 検証
+- **入力ゼロで YY のオープニングが framebuffer に描画**されることをスクショ確認 (triage の YY も colors 1→2 に変化)。
+- 入力前のメモリ走査で stdout バッファのコピー出現 = 真因の直接証明。
+- 新規回帰 `tools/dev_info_test.js` (CON 0/1/2 が 0x80D3・bit6 込みを合成 COM で検証)。
+- 全テスト (graph_mode/sgr/esc_seq/intdc_*/csi_priv)・touhou 4/4・bio100 triage (ALIVE21/RENDER4/CRASH0) 回帰ゼロ
+  (samegame 等 5 ハンドルを照会する系も不変)。
+- **教訓**: 「AH=40h が getch 前に無い」≠「printf していない」(full-buffer なら溜まるだけ)。前日の早合点はこの取り違え。
+  ユーザーの粘り (公式レビュー提示) と「原本 vs メモリのコピー数」での切り分けが決め手。[[reference_dos_con_device_info_buffering]]
+
 ## [グラフ文字モード (ESC)0/)3・INT DCh AH=0Eh) を実装 + SGR 2 縦線属性を根治 (TEXTTEST 突合)] — 2026-06-29
 
 ### 背景

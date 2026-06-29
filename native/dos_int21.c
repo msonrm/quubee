@@ -1944,11 +1944,21 @@ static void int21_44_ioctl(void) {
     int h = (int)CPU_BX;
     switch (CPU_AL) {
     case 0x00:  /* Get Device Info */
-        if (h >= 0 && h <= 4) {
-            uint16_t dx = 0x0080;
-            if (h == 0) dx |= 0x0001;   /* stdin */
-            if (h == 1) dx |= 0x0002;   /* stdout */
-            CPU_DX = dx;
+        if (h >= 0 && h <= 2) {
+            /* CON (stdin/stdout/stderr) は実機 DOS が返す device info 0x80D3 を返す:
+             *   bit7=char device, bit1=console output, bit0=console input,
+             *   bit4=special (INT 29h 高速出力対応), bit6=非EOF (対話デバイスが生きている)。
+             * 旧実装は 0x82 (char + output のみ) で bit0/bit4/bit6 を欠いていた。すると TurboC
+             * ランタイムが stdout を「リダイレクト先のファイル」と判定して **full-buffer 化** し、
+             * printf→getch 型のプログラム (YY「ある勇者の憂鬱」等、conio の getch=AH=07h は
+             * stdio を flush しない) のオープニングが stdio バッファに滞留したまま、最初の入力まで
+             * 画面に出ない不具合になっていた (バッファが BUFSIZ に達するか exit 時まで AH=40h が
+             * 出ない)。**決め手は bit6 (0x40)**: これが立つと TurboC は stdout を対話コンソール用
+             * (行/無バッファ) として扱い、出力が即フラッシュされて入力前にオープニングが表示される。
+             * 0x80D3 は実機 CON の正規値なので faithful。検証 tools/dev_info_test.js。 */
+            CPU_DX = 0x80D3;
+        } else if (h == 3 || h == 4) {
+            CPU_DX = 0x0080;            /* AUX/PRN: char device のみ */
         } else if (fh_get(h)) {
             CPU_DX = 0x0000;
         } else {
