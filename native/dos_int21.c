@@ -949,6 +949,11 @@ static int      g_la_active;
 static uint32_t g_la_buf;
 static uint8_t  g_la_len;
 
+/* AH=3Fh handle 0 (STDIN cooked 行入力) を再ポーリング跨ぎで継続するための状態。 */
+static int      g_3f_active;
+static uint32_t g_3f_dst;
+static uint16_t g_3f_len;
+
 /* DOS は大小を区別しないが Emscripten FS (MEMFS) は区別する。両者を埋めるため
  * DOS パス → host パス変換は「コンポーネント単位で /run 配下を case-insensitive に
  * 実在名へ解決する」リゾルバ方式を採る (旧実装の「両側で強制小文字化」ハックは廃止)。
@@ -1822,8 +1827,57 @@ static void int21_46_dup2(void) {
     CPU_FLAG &= ~C_FLAG;
 }
 
+/* AH=3Fh handle 0 (STDIN) = CON の cooked 行入力。実 DOS は CON を行モードで読み、
+ * Enter まで待って「行 + CR LF」を返す (np21w: "Hello"+Enter → 48 65 6C 6C 6F 0D 0A、count=7)。
+ * 行編集 (BS) とエコーあり (AH=0Ah と同じ cooked 挙動)。再ポーリング跨ぎ状態を g_3f_* に保持。
+ * これが無いと fh_get(0)=NULL で AX=6 を返し、TurboC の getchar/scanf/gets (= AH=3Fh handle 0)
+ * が全滅する (SimK 氏「stdin がおかしい」の真因)。raw(binary)モードは未対応 = cooked 固定。 */
+static void int21_3f_read_stdin(uint32_t dst, uint16_t want) {
+    if (want == 0) { CPU_AX = 0; CPU_FLAG &= ~C_FLAG; return; }
+    uint16_t len;
+    if (g_3f_active && g_3f_dst == dst) {
+        len = g_3f_len;                        /* 再ポーリング継続 */
+    } else {
+        len = 0; g_3f_active = 1; g_3f_dst = dst;
+    }
+    for (;;) {
+        int w = kb_get_word();
+        if (w < 0) {                           /* 入力待ち → 再ポーリング (AH=0Ah と同手法) */
+            g_3f_len = len;
+            CPU_FLAG |= I_FLAG;
+            CPU_IP--; CPU_REMCLOCK = -1; g_int21_repoll = 1;
+            return;
+        }
+        uint8_t ch = (uint8_t)(w & 0xFF);
+        if (ch == 0x0D) {                      /* Enter: 行末に CR LF を付けて確定 */
+            uint16_t total = len;
+            if (total < want) poke8(dst + total++, 0x0D);
+            if (total < want) poke8(dst + total++, 0x0A);
+            tty_putc(0x0D); tty_putc(0x0A);
+            g_3f_active = 0;
+            CPU_AX = total;
+            CPU_FLAG &= ~C_FLAG;
+            return;
+        }
+        if (ch == 0x08) {                      /* BS 行編集 */
+            if (len > 0) { len--; tty_putc(0x08); tty_putc(0x20); tty_putc(0x08); }
+            continue;
+        }
+        if ((int)len + 2 < (int)want) {        /* CR LF 用に 2 残す (満杯は実 DOS 同様だまって無視) */
+            poke8(dst + len, ch);
+            len++;
+            tty_putc(ch);                      /* echo (cooked) */
+        }
+    }
+}
+
 static void int21_3f_read(void) {
     int h = (int)CPU_BX;
+    if (h == 0) {                              /* STDIN = CON cooked 行入力 (AH=40h が h=1/2 を tty へ
+                                                * 分岐するのと対称。これが無いと AX=6 で getchar 等が全滅) */
+        int21_3f_read_stdin(lin(CPU_DS, CPU_DX), CPU_CX);
+        return;
+    }
     FILE *fp = fh_get(h);
     if (!fp) { CPU_AX = 6; CPU_FLAG |= C_FLAG; return; }
     uint16_t want = CPU_CX;
@@ -2759,6 +2813,9 @@ void qb_dos_tty_reset(void) {
     g_la_active = 0;
     g_la_buf = 0;
     g_la_len = 0;
+    g_3f_active = 0;     /* AH=3Fh STDIN 行入力の途中状態 */
+    g_3f_dst = 0;
+    g_3f_len = 0;
     g_0c_flushing = 0;   /* AH=0Ch flush ラッチ (再ポーリング途中での中断対策) */
     /* INT DCh キー定義テーブルも Run 毎にクリア (前 image の再定義を持ち越さない) */
     g_keytbl_set = 0;

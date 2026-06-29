@@ -1,5 +1,32 @@
 # CHANGELOG
 
+## [AH=3Fh handle 0 (STDIN) の cooked 行入力を実装 — getchar/scanf/gets が全滅していた stdin バグを根治 (SimK PC98IN)] — 2026-06-30
+
+### 背景
+SimK 氏が X で「QuuBee の stdin がおかしいかも」と指摘し、検証用に TEXTTEST(2) に **PC98IN.COM (コンソール入力テスト)** を
+追加 (AH=01/06/07/08/0A/0B/0C/3F を網羅、np21w 正解スクショ 9 枚付き)。全数突合した。
+
+### 真因 (AH=3Fh が STDIN を読めない非対称)
+AH=01/07/08/0A/0B/0C は既存実装で正常 (PC98IN1 = AH=01 ページが np21w とコード一致: qwertyui→AL=71/77/65/72/74/79/75/69)。
+**唯一壊れていたのが AH=3Fh (Read Handle)**。`int21_3f_read` は handle を `fh_get(h)` で引くが、**標準ハンドル 0-2 は g_fh に
+登録されておらず** (ユーザハンドルは 5+)、`fh_get(0)=NULL` で **STDIN 読みが AX=6 (invalid handle) エラー**になっていた。
+AH=40h (write) は h=1/2 を tty へ特別分岐するのに、**read 側に STDIN の分岐が無い非対称**。これにより **TurboC の
+getchar/scanf/gets/fgets(stdin) (= cooked モードで AH=3Fh handle 0 を使う) が全滅**していた。np21w (PC98IN8) は実機通り
+"Hello"+Enter → **行 + CR LF を返す** (48 65 6C 6C 6F 0D 0A、count=7)。
+
+### 修正 (native/dos_int21.c)
+- AH=3Fh で **handle 0 を STDIN cooked 行入力に分岐** (`int21_3f_read_stdin`)。Enter まで待ち、行 + CR LF を返す。
+  行編集 (BS)・エコーあり (AH=0Ah と同じ cooked 挙動)。再ポーリング跨ぎ状態を `g_3f_*` に保持し `qb_dos_tty_reset` で初期化。
+  raw(binary) モードは未対応 = cooked 固定 (実需は cooked 行入力)。
+- **効果**: AH=3Fh STDIN 読みが np21w 通り「行 + CR LF」を返す。getchar/scanf/gets 型の TurboC プログラム全般が直る。
+
+### 検証
+- **新規回帰 `tools/stdin_read_test.js`**: 合成 COM で AH=3Fh BX=0 → "Hi"+Enter が **count=4・48 69 0d 0a ("Hi"<CR><LF>)** を
+  返すことを確認 (np21w PC98IN8 の "Hello"→48..6F 0D 0A と同書式)。
+- PC98IN を headless 駆動し **AH=01 ページが np21w PC98IN1 とコード/エコー一致**を確認 (基本入力経路は正常)。
+- 全テスト (stdin_read/dev_info/graph_mode/sgr/esc_seq/intdc_*/csi_priv)・touhou 4/4・bio100 triage (ALIVE21/CRASH0) 回帰ゼロ。
+- 残: 拡張キー (ファンクション/矢印の 00+scancode) は np21w 参照が通常キーのみで未比較。[[reference_dos_con_device_info_buffering]]
+
 ## [CON の IOCTL device info を 0x80D3 に修正 — YY のオープニングが入力前に表示されない不具合を根治] — 2026-06-30
 
 ### 背景 (前日の誤結論の訂正)
