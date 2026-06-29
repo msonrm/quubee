@@ -1,5 +1,52 @@
 # CHANGELOG
 
+## [グラフ文字モード (ESC)0/)3・INT DCh AH=0Eh) を実装 + SGR 2 縦線属性を根治 (TEXTTEST 突合)] — 2026-06-29
+
+### 背景
+SimK 氏 TEXTTEST の np21w 正解スクショ (実機照合済) と QuuBee の現表示を全 6 本・全ページで上下に並べて
+突合 (1bpp/4bpp BMP デコーダ + 各ページのブロック点自動検出捕捉 + 比較 PNG 生成)。**先日の DSR (ESC[6n)・
+ESC=・INT DCh AH=0Ch/0Dh の修正がグリフ/バイト単位で np21w と一致**することを確認した上で、残る本質的な差を
+3 点に絞り、うち 2 系統 (グラフ文字モード・SGR 2 縦線属性) を根治した。
+
+### グラフ文字モード (ESC)0 / ESC)3 と INT DCh CL=10h AH=0Eh DX=0/3) — native/dos_int21.c
+- **正体**: 「漢字 2 バイト結合の ON/OFF」。グラフモード (ESC)3 / DX=3) は SJIS 第1バイトを全角結合せず
+  各バイトを ANK 1 文字として描く (実機/np21w: SJIS "テ"=83h 65h の 65h が 'e' として出る)。漢字モード
+  (ESC)0 / DX=0) で 2 バイト結合へ戻る。
+- **修正**: ① `g_graph_mode` フラグ新設 (既定 OFF=漢字)。② tty ESC パーサに `ESC ) n` / `ESC ( n` を消費する
+  `TTY_ESC_DESIG` 状態を追加 (`n=='3'`→グラフ、それ以外→漢字)。**旧実装は `ESC )` を 2 バイトで消費して末尾
+  `0`/`3` を文字として描画していた** (行末に "テスト0"/"テスト3" が残る漏れ) のを根治。③ TTY_NORMAL でグラフ
+  モード中は漢字結合せず各バイトを `tty_normal_putc` (ANK) へ。④ INT DCh AH=0Eh を **no-op から `g_graph_mode`
+  操作へ** (旧「SJIS 直接解釈なので no-op が忠実」は誤りで、np21w 実機照合でグラフモードは表示が変わると判明)。
+  ⑤ `qb_dos_tty_reset` でリセット。**ESC/INT DCh 両経路とも np21w とグリフ一致** (PC98ADV1 P8 / PC98DCH P7)。
+
+### SGR 2 (縦線属性) が 2x4 ブロックに化けるのを根治 — gdc.mode1 DEGB を OFF に
+- **真因**: np2kai maketext は属性 bit `0x10` を **`gdc.mode1` bit0 (DEGB=簡易グラフィックモード) で二義的に
+  解釈** — DEGB=0 なら縦線 (TXTATR_VL)、DEGB=1 なら 2x4 ブロック (TXTATR_BG)。我々の SGR 2→0x10 写像は正しい
+  が、QuuBee は **np2kai POST 既定の `gdc.mode1=0x99` (DEGB=1) を引き継ぎ** ブロックに化けていた。実機 + 実
+  MS-DOS はブート時にテキストモードを整え DEGB=0 (縦線) になる (np21w は同じ maketext で縦線表示 = DEGB=0 の証)。
+- **修正**: `qb_dos_tty_reset` で `gdc.mode1 &= ~0x01` (DEGB OFF) + 全セル再描画通知。実 MS-DOS 起動状態の再現
+  なので faithful・ゼロ回帰 (簡易グラフを使うソフトは自分で OUT 0x68 して設定する)。SGR 2 が np21w 通り縦線で
+  表示 (PC98ADV2 P5)。
+
+### 検証
+- **新規回帰 `tools/graph_mode_test.js`** (4 アサーション): ESC)3 / INT DCh DX=3 でテ(83 65) が ANK 2 文字
+  ((r,0)=83 (r,1)=65='e')・ESC)0 / DX=0 で全角結合 ((r,1)!=0x65)。
+- `tools/sgr_test.js` に **DEGB=0 ガード**を追加 (gdc.mode1 bit0==0)。
+- 全回帰 PASS (esc_seq/intdc_screen/intdc_cursor/csi_priv/sgr/graph_mode)・touhou 4/4・bio100 triage
+  ベースライン一致 (ALIVE21/RENDER4/WAIT2/CRASH0)。
+- **未対応に留めた差** (ユーザー判断): ① fkey 表示行 (実 MS-DOS の機能・HLE は持たない) と それに伴う 24 行
+  スクロール領域、② 20 行モードのセル高 (GDC 再プログラム)、③ SGR 5/blink の捕捉位相差 (バグでない)。
+- 比較方法は np21w 兄弟ゆえ強い参照だが絶対の正解ではない (ユーザー指摘)。グラフモード/DEGB の結論は
+  ソース (maketext.c の TXTATR_BG/VL 二重定義・bios18.c の DEGB セット) と gdc.mode1 実測で np21w 非依存。
+
+### 副産物: YY (bio_100「ある勇者の憂鬱」) の WAIT を調査し正常と確定 (コード変更なし)
+ユーザーの「DEGB 修正で YY が表示されるのでは」という見立てを検証。YY は **DEGB/グラフモードを未使用**
+(属性 0x10 セル=0) で DEGB 修正とは無関係だったが、**INT 21h AH=40h (stdout) で日本語を正しく描画**し動作は正常。
+triage の WAIT/colors=1 は「起動時に getch を先読みする作り (最初の 1 キーを読んでからタイトル/本文/プロンプト/
+答えをまとめて出力)」で**出力が最初の入力後にしか出ない**ためと判明 (C 側 stdout 書き込みダンプで getch→出力の順を
+実データ確認)。入力前に何も出ないのは実機 PC-98 でも同じ=faithful なので、でっち上げ表示はしない方針 (調査用の
+一時計装は撤去・コード変更ゼロ)。詳細 [[reference_int_dch_cl10_screen]] / [[feedback_hle_honest_failure]]。
+
 ## [ESC/CSI シーケンスの「消費するが無視」系を根治 — DSR / カーソル保存復元 / 逆インデックス (SimK TEXTTEST)] — 2026-06-29
 
 ### 背景

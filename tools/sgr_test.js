@@ -60,6 +60,7 @@ const NP2KaiModule = require(path.join(WEB, 'np2kai_core.js'));
     const runFrame = M.cwrap('np2kai_run_frame', null, ['number']);
     const getExit  = M.cwrap('np2kai_dos_get_exit', 'number', ['number']);
     const textdisp = M.cwrap('np2kai_debug_get_textdisp', 'number', ['number']);
+    const gdcMode1 = M.cwrap('np2kai_debug_get_gdc_mode1', 'number', ['number']);
 
     const ptr = M._malloc(COM.length);
     M.HEAPU8.set(COM, ptr);
@@ -94,9 +95,14 @@ const NP2KaiModule = require(path.join(WEB, 'np2kai_core.js'));
     const w71d = peek8(handle, 0x71D) & 0xff;
     const tdisp = textdisp(handle) & 0x80;
     if (!(w711 === 0 && w712 === 24 && w71d === 0xE1 && tdisp === 0x80)) pass = false;
+    /* DEGB (gdc.mode1 bit0 = 簡易グラフィックモード) は OFF であること。ON だと属性 0x10 が
+     * 縦線でなく 2x4 ブロックに化け、SGR 2 (vertical-line) が np21w と食い違う (2026-06-29 根治)。
+     * qb_dos_tty_reset が POST 既定 (0x99) から bit0 を落とすことのガード。 */
+    const degb = gdcMode1(handle) & 0x01;
+    if (degb !== 0) pass = false;
     for (const l of lines) console.log('  ' + l);
     console.log(`  conarea: 0711=${w711} 0712=${w712} 071D=0x${w71d.toString(16)}` +
-                ` textdisp&0x80=0x${tdisp.toString(16)} exited=${exited}`);
+                ` textdisp&0x80=0x${tdisp.toString(16)} DEGB=${degb} exited=${exited}`);
 
     if (pass) {
         console.log('PASS — SGR→PC-98 属性写像 (NEC 絶対指定/別系色/反転背景/空param) + >5 no-op + CON ワークエリアを確認');

@@ -109,11 +109,16 @@ typedef enum {
     TTY_SJIS2,    /* 直前が Shift-JIS 第1バイト、第2バイト待ち */
     TTY_ESC_EQ_ROW,  /* "ESC =" 後、行バイト待ち (VT52/PC-98 直接カーソル位置指定) */
     TTY_ESC_EQ_COL,  /* "ESC =" 後、列バイト待ち */
+    TTY_ESC_DESIG,   /* "ESC )" / "ESC (" 後、文字集合指定バイト待ち (漢字/グラフモード切替) */
 } tty_state_t;
 
 static tty_state_t g_tty_state = TTY_NORMAL;
 static uint8_t g_sjis_lead;    /* TTY_SJIS2 中: 保留した Shift-JIS 第1バイト */
 static uint8_t g_esc_eq_row;   /* TTY_ESC_EQ_COL 中: 保留した行バイト */
+/* グラフ文字モード (ESC)3 / INT DCh AH=0Eh DX=3)。ON のとき SJIS 第1バイトを全角結合せず
+ * 各バイトを ANK 1 文字として描く (実機/np21w の挙動: "テ"=83h 65h の 65h が 'e' として出る)。
+ * 既定 OFF=漢字モード (2 バイト結合)。通常ゲームは ESC) を送らないのでゼロ回帰。 */
+static int     g_graph_mode = 0;
 static int     g_csi_param[8];
 static int     g_csi_nparam;   /* "見えた" param の最大 index (0 = まだ何も) */
 static int     g_csi_has_digit;
@@ -524,8 +529,9 @@ static void tty_putc(uint8_t ch) {
     switch (g_tty_state) {
     case TTY_NORMAL:
         if (ch == 0x1B) { g_tty_state = TTY_ESC; return; }
-        /* Shift-JIS 第1バイト (0x81-0x9F, 0xE0-0xFC) なら次バイトと合成して全角描画 */
-        if ((ch >= 0x81 && ch <= 0x9F) || (ch >= 0xE0 && ch <= 0xFC)) {
+        /* Shift-JIS 第1バイト (0x81-0x9F, 0xE0-0xFC) なら次バイトと合成して全角描画。
+         * ただしグラフ文字モード (ESC)3) 中は結合せず各バイトを ANK 1 文字として描く。 */
+        if (!g_graph_mode && ((ch >= 0x81 && ch <= 0x9F) || (ch >= 0xE0 && ch <= 0xFC))) {
             g_sjis_lead = ch;
             g_tty_state = TTY_SJIS2;
             return;
@@ -579,7 +585,17 @@ static void tty_putc(uint8_t ch) {
             g_tty_state = TTY_ESC_EQ_ROW;
             return;
         }
+        if (ch == ')' || ch == '(') { /* ESC ) n / ESC ( n = 文字集合指定。次の 1 バイト (n) で
+                                       * 漢字/グラフモードを切替える (PC-98 CON)。指定バイトを必ず消費し
+                                       * 文字漏れを防ぐ (旧実装は ESC) を 2 バイトで消費し n を描画していた)。 */
+            g_tty_state = TTY_ESC_DESIG;
+            return;
+        }
         /* 未知の ESC X — X を捨てて NORMAL に戻す */
+        g_tty_state = TTY_NORMAL;
+        return;
+    case TTY_ESC_DESIG:            /* ESC ) / ESC ( の指定バイト: '3' = グラフモード、それ以外 = 漢字モード */
+        g_graph_mode = (ch == '3');
         g_tty_state = TTY_NORMAL;
         return;
     case TTY_ESC_EQ_ROW:            /* ESC = の行バイト: row = byte - 0x20 (0-based)。次は列 */
@@ -905,9 +921,11 @@ int qb_dos_intdc_hook(void) {
         case 0x0B: intdc_csi('K', dx); break;   /* 行消去   (ESC[nK, DX=n) */
         case 0x0C: intdc_csi('L', dx); break;   /* 行挿入 n (ESC[nL) */
         case 0x0D: intdc_csi('M', dx); break;   /* 行削除 n (ESC[nM) */
-        case 0x0E:                          /* 漢字/グラフモード切替 (ESC)0 / ESC)3)。我々の tty は
-                                             * SJIS リードバイトを常に直接全角解釈するので別モードは
-                                             * 持たず、切替は no-op が忠実 (グリフ化や状態破壊をしない)。 */
+        case 0x0E:                          /* 漢字/グラフモード切替 (ESC)0 / ESC)3 の INT DCh 版)。
+                                             * DX=3 → グラフモード (各バイトを ANK 1 文字)、DX=0 等 → 漢字モード
+                                             * (2 バイト結合)。np21w 実機照合で表示が変わると判明 (2026-06-29、
+                                             * 旧「no-op が忠実」は誤り)。tty の g_graph_mode を直接操作。 */
+            g_graph_mode = (dl == 3);
             break;
         default:                            /* 未対応 AH: 診断ログ (ブラウザ Console)。良性 no-op。 */
             fprintf(stderr, "[intdc] CL=10 unimpl AH=%02x DX=%04x\n", ah, dx);
@@ -2697,6 +2715,7 @@ void qb_dos_tty_reset(void) {
     g_cur_col = 0;
     g_tty_state = TTY_NORMAL;
     g_sjis_lead = 0;
+    g_graph_mode = 0;   /* グラフ文字モードは image 起動ごとに漢字モードへ戻す */
     g_csi_nparam = 0;
     g_csi_has_digit = 0;
     g_csi_priv = 0;
@@ -2706,6 +2725,15 @@ void qb_dos_tty_reset(void) {
     g_tty_lines20 = 0;
     g_tty_sysline = 0;
     g_tty_attr = DEF_ATTR;
+    /* GDC mode1 bit0 (DEGB = 簡易グラフィックモード) を OFF にする。np2kai POST は既定で
+     * これを 1 にする (gdc.mode1=0x99) が、実 PC-98 + 実 MS-DOS はブート時にテキストモードを
+     * 整え DEGB=0 になる。maketext は属性 bit 0x10 を DEGB=1 のとき「簡易グラフ (2x4 ブロック)」、
+     * DEGB=0 のとき「縦線 (バーチカルライン)」と解釈する (TXTATR_BG と TXTATR_VL の二重定義)。
+     * NEC CON の ESC[2m → 縦線属性 (0x10) を実機/np21w 通り縦線で出すには DEGB=0 が必要。
+     * 簡易グラフを使うソフトは自分で OUT 0x68 して設定するので (実 MS-DOS 下でも DEGB=0 開始)、
+     * ここで 0 へ戻すのは faithful・ゼロ回帰。bit5 (コードアクセス) は vram_put_kanji 側で別途保証。 */
+    gdc.mode1 &= (uint8_t)~0x01;
+    gdcs.textdisp |= GDCSCRN_ALLDRAW2;   /* 解釈変更を次フレーム全セル再描画へ反映 */
     tty_sync_conarea();
     /* image 再起動ごとに開きっぱなしのハンドルを掃除 + DTA を既定に戻す。
      * 同様に findfirst イテレータも閉じる。 */
