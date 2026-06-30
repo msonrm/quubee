@@ -10,8 +10,12 @@
 //   - 各エントリは「直前文字列を終端する NUL (0x00)」または「空スロット印 (0xFF)」を指す
 //   - 自己参照的: nulAfter(E[i]+1) === E[i+1] (E[i] の文字列の終端 NUL が次エントリ)
 //   - 文字列本体は E[i]+1 から次 NUL まで (Shift_JIS)
-//   - 正準スロット順: [0..2]=予約 (PCM/PPZ/PPS ファイル名, 多くは空 0xFF)、
-//     [3]=曲名、[4]=作曲、[5]=編曲、[6..]=コメント行
+//   - MC バージョンで予約スロット数が変わる (PMDDATA.DOC AH=1Dh 準拠):
+//       MC < v4.2a  : 1 予約 (PCMFile のみ)       → [1]=曲名
+//       MC v4.2a-v4.7x: 2 予約 (PPSFile+PCMFile)  → [2]=曲名
+//       MC v4.8a+   : 3 予約 (PPZFile+PPSFile+PCMFile) → [3]=曲名
+//     titleOffset は ent[0] が 0xFF (PPZFile 空) かヘッダサイズで検出
+//   - 正準スロット (以降): [titleOffset]=曲名、+1=作曲、+2=編曲、+3..=コメント行
 //
 // 後方走査で楽曲データの 1 ワードを過剰に拾うことがあるが、(a) 区切りバイト判定と
 // (b) 自己参照チェーン整合トリムの 2 段で偽エントリを落とす (推測でなく構造で確定)。
@@ -47,7 +51,7 @@
                 cand.push(w); prev = w;
             } else break;
         }
-        if (cand.length < 4) return null;
+        if (cand.length < 2) return null;
         cand.reverse();   // 昇順 (ファイル先頭→末尾)
 
         // 自己参照チェーンが成立する最長サフィックスへ刈り込む (先頭の偽エントリを除去)。
@@ -57,7 +61,22 @@
         }
         while (start > 0 && nulAfter(data, cand[start - 1] + 1) === cand[start]) start--;
         const ent = cand.slice(start);
-        if (ent.length < 5) return null;   // 曲名(3)+作曲(4) に届かない構造は memo 無しとみなす
+
+        // .M ヘッダ先頭 2 バイト LE = パートオフセット表サイズ (PMD86=0x1A, PMDPPZ>=0x2A)。
+        // ent[0] が 0xFF なら PPZFile 空スロット (MC v4.8a+) → 3 予約スロット。
+        // それ以外はヘッダサイズで判定。
+        const headerSize = data[0] | (data[1] << 8);
+        let titleOffset;
+        if (data[ent[0]] === 0xFF) {
+            titleOffset = 3;
+        } else if (headerSize >= 0x2A) {
+            titleOffset = 3;
+        } else if (headerSize >= 0x1A) {
+            titleOffset = 2;
+        } else {
+            titleOffset = 1;
+        }
+        if (ent.length <= titleOffset) return null;
 
         const td = (typeof TextDecoder !== 'undefined') ? new TextDecoder('shift_jis') : null;
         const decode1 = (e) => {
@@ -69,10 +88,10 @@
         };
 
         return {
-            title:    decode1(ent[3]),
-            composer: decode1(ent[4]),
-            arranger: decode1(ent[5]),
-            memo:     ent.slice(6).map(decode1).filter((s) => s.trim().length > 0),
+            title:    decode1(ent[titleOffset]),
+            composer: decode1(ent[titleOffset + 1]),
+            arranger: decode1(ent[titleOffset + 2]),
+            memo:     ent.slice(titleOffset + 3).map(decode1).filter((s) => s.trim().length > 0),
         };
     }
 
