@@ -523,7 +523,7 @@ static void tty_kanji_putc(uint8_t sjis_hi, uint8_t sjis_lo) {
  * 埋まるため、必要なときだけ 1 にする (SJIS バイトも "Invalid UTF-8" 警告を量産する)。 */
 static int g_tty_echo_dbg = 0;
 
-static void tty_putc(uint8_t ch) {
+static void tty_putc_raw(uint8_t ch) {
     if (g_tty_echo_dbg) fputc(ch, stderr);
 
     switch (g_tty_state) {
@@ -637,6 +637,33 @@ static void tty_putc(uint8_t ch) {
         g_tty_state = TTY_NORMAL;
         return;
     }
+}
+
+/* DOS CON カーソル座標ワークエリア: 0:0710h = カーソル行 (Y, 0 起点) / 0:071Ch = カーソル列 (X, 0 起点)。
+ * 実 PC-98 DOS は文字出力ルーチンが毎回ここを読み書きするので、ゲストが ESC/INT を介さず
+ * この番地へ座標を直接書き込むだけでカーソルを動かせる (WORKTEST.COM の挙動・NP21W と一致)。
+ * 我々はカーソルを g_cur_row/g_cur_col で保持するため、出力の前後でこの番地と双方向同期する:
+ *   load = 出力直前にゲストの直書きを取り込む / store = 出力後に自前の前進を反映。
+ * ワークエリアを触らないソフトでは load→store が恒等往復になり挙動不変 (ゼロ回帰)。
+ * 番地は 0x711/0712/0713/071D の既存 CON ワーク (tty_sync_conarea) と重ならない。 */
+static void tty_load_cursor(void) {
+    g_cur_row = (uint8_t)mem[0x710];
+    g_cur_col = (uint8_t)mem[0x71C];
+    csi_clamp_cursor();
+}
+static void tty_store_cursor(void) {
+    mem[0x710] = (uint8_t)g_cur_row;
+    mem[0x71C] = (uint8_t)g_cur_col;
+}
+
+/* tty_putc の単一チョークポイント版: 1 文字出力の前後でカーソル座標ワークエリアと同期する。
+ * 全 DOS コンソール出力 (AH=02/06/09/40・INT 29h・INT DCh CL=10h AH=00/01・cooked エコー) は
+ * この tty_putc を通るので、ここで同期すれば全経路が WORKTEST 互換になる。INT DCh の
+ * カーソル直接移動系 (CL=10h AH=03-09) は tty_putc を経由しないため、そちらは intdc 側で別途同期。 */
+static void tty_putc(uint8_t ch) {
+    tty_load_cursor();
+    tty_putc_raw(ch);
+    tty_store_cursor();
 }
 
 /* ---------------- メモリヘルパ ----------------
@@ -886,6 +913,10 @@ int qb_dos_intdc_hook(void) {
         uint8_t  dl = (uint8_t)(CPU_DX & 0xFF);
         uint8_t  dh = (uint8_t)((CPU_DX >> 8) & 0xFF);
         uint16_t dx = (uint16_t)(CPU_DX & 0xFFFF);
+        /* カーソル移動系 (AH=03-09) は tty_putc を経由せず g_cur_row/col を直接動かすので、
+         * ブロックの前後でカーソル座標ワークエリアと同期する (AH=00/01 出力は tty_putc 内でも
+         * 同期するが、ここで囲めば全 AH が一様に直書きを取り込み・前進を反映できる)。 */
+        tty_load_cursor();
         switch (ah) {
         case 0x00:                          /* 1 文字表示 (DL=文字) */
             tty_putc(dl);
@@ -931,6 +962,7 @@ int qb_dos_intdc_hook(void) {
             fprintf(stderr, "[intdc] CL=10 unimpl AH=%02x DX=%04x\n", ah, dx);
             break;
         }
+        tty_store_cursor();                 /* AH=03-09 のカーソル移動をワークエリアへ反映 */
     } else {                                /* 未対応 CL: 診断ログ (ブラウザ Console)。良性 no-op。 */
         fprintf(stderr, "[intdc] unimpl CL=%02x AX=%04x\n", cl, ax);
     }
@@ -2788,6 +2820,7 @@ void qb_dos_tty_write(const uint8_t *bytes, int len) {
 void qb_dos_tty_reset(void) {
     g_cur_row = 0;
     g_cur_col = 0;
+    tty_store_cursor();         /* DOS CON カーソル座標ワーク 0:0710h/071Ch をルート (0,0) に初期化 */
     g_tty_state = TTY_NORMAL;
     g_sjis_lead = 0;
     g_graph_mode = 0;   /* グラフ文字モードは image 起動ごとに漢字モードへ戻す */

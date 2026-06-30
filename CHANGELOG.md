@@ -1,5 +1,44 @@
 # CHANGELOG
 
+## [DOS CON カーソル座標ワークエリア (0:0710h/071Ch) を同期] — 2026-06-30
+
+### 背景
+X で `WORKTEST.COM` の不具合報告 (不適切な描画=QuuBee / 適切な描画=Neko Project 21/W を
+並べたスクショ + 判定用テストプログラムのソース)。プログラムが ESC/INT を使わず PC-98 DOS の
+カーソル座標ワークエリア `0060:0110` (linear 0x710 = カーソル行 Y) / `0060:011C` (0x71C =
+カーソル列 X、いずれも 0 起点) へ座標を**直接書き込んでから** `AH=02h` で `A` を出力すると、
+実 DOS (NP21W) は出力直前にこの番地を読むので `A` が 10 行 30 列へ飛ぶ。QuuBee では `A` が
+基準位置 (`基準位置:` の直後) に残っていた。
+
+### 真因
+HLE tty はカーソルを C 側変数 `g_cur_row` / `g_cur_col` で保持し、DOS CON ワークエリアには
+`0x711`(sysline)・`0x712`(行数−1)・`0x713`(20/25 行)・`0x71D`(属性) を同期していたが、
+**`0x710`(行) / `0x71C`(列) のカーソル座標は同期対象に入っていなかった**。既存の master.lib
+0x712 / VZ 0x713 / 属性 0x71D と同じワークエリア直読み・直書き慣用の**カーソル座標版**が
+未配線だった。
+
+### 修正 (`native/dos_int21.c`)
+- カーソル座標ワークエリアと `g_cur_row/g_cur_col` を**双方向同期**するヘルパを追加:
+  - `tty_load_cursor()` — 出力直前に `mem[0x710]/[0x71C]` を取り込む (ゲストの直書きを反映)
+  - `tty_store_cursor()` — 出力後に自前の前進を `mem[0x710]/[0x71C]` へ書き戻す
+- **全 DOS コンソール出力は `tty_putc` に集約**されているので、内側を `tty_putc_raw` にリネームし
+  `tty_putc` を「load → raw → store」ラッパに。これで AH=02/06/09/40・INT 29h・INT DCh CL=10h
+  AH=00/01・cooked エコーの**全経路が一括で WORKTEST 互換**になる (取りこぼし不能)。
+- INT DCh CL=10h の **カーソル直接移動系 (AH=03-09)** は `tty_putc` を経由せず `g_cur_row/col` を
+  直接動かすため、CL=10h ブロックの前後でも load/store して同期。
+- `qb_dos_tty_reset` でカーソル座標ワーク `0x710/0x71C` を (0,0) に初期化。
+- **無害性**: ワークエリアを触らないソフトでは load→store が恒等往復になり挙動不変。
+
+### 検証
+- 新規 `tools/worktest_cursor_test.js` (corpus 非依存の合成 COM、WORKTEST.COM を模す):
+  直書き後 `A` が row9 col29、`基準位置` 相当は row4、`A` は BASE: 直後に残らない、
+  ワークエリア readback 0x710=9 / 0x71C=30 (出力後の列前進) — 5/5 PASS。
+- tty/INT DCh 系の既存回帰 (intdc_screen / intdc_cursor / esc_seq / graph_mode / sgr / csi_priv) 全 PASS。
+- stdin/echo (stdin_read / stdin_partial_line / dev_info) 全 PASS。
+- touhou 4/4 PASS。bio100 triage **--fresh 全件再計算で ALIVE21/RENDER4/BOOT3/WAIT2/EXIT0/CRASH0**
+  (描画到達 25・動作確認 27) = ベースライン完全一致・回帰ゼロ。
+- Wasm 再ビルド済 (`dos_int21.c` のみ再コンパイル)。ブラウザ実機 T3 確認待ち。
+
 ## [PMD memo titleOffset を MC バージョン別に動的検出] — 2026-06-30
 
 ### 背景
