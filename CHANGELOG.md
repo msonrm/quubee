@@ -1,5 +1,45 @@
 # CHANGELOG
 
+## [PMD memo titleOffset を MC バージョン別に動的検出] — 2026-06-30
+
+### 背景
+ユーザー報告「.M ファイルのタイトルが取得できないと全部ずれちゃう」。
+`pmdmeta.js` が `ent[3]` を固定でタイトルスロットとして読んでいたため、
+MC v4.2a-v4.7x (2 予約スロット) でコンパイルされた .M ファイルでタイトルが 1 ずれていた。
+
+### 真因 (MC バージョンによる予約スロット数の違い)
+PMD memo ブロックのスロット割り当ては MC バージョンで変化する (PMDDATA.DOC AH=1Dh AL 値):
+
+| MC バージョン | 予約スロット数 | スロット構成 | タイトル位置 |
+|---|---|---|---|
+| < v4.2a (1993 以前) | 1 | `[0]`=PCMFile | `ent[1]` |
+| v4.2a-v4.7x | 2 | `[0]`=PPSFile `[1]`=PCMFile | `ent[2]` |
+| v4.8a+ (1994-) | 3 | `[0]`=PPZFile `[1]`=PPSFile `[2]`=PCMFile | `ent[3]` |
+
+旧コードは 3 予約スロット形式を前提に `ent[3]` 固定参照 → 旧バージョン MC の曲で 1〜2 スロットずれてタイトルではなく作曲者や PCMFile 名を返していた。
+
+### 修正 (web/player/pmdmeta.js)
+`titleOffset` を以下の 2 段で動的検出:
+1. **`data[ent[0]] === 0xFF`**: PPZFile 空スロットマーカー (MC v4.8a+) → `titleOffset=3`
+2. **ヘッダサイズ** (`.M` 先頭 2 バイト LE = PMD パートオフセット表サイズ):
+   - `>= 0x2A` (42) → PMDPPZ 形式 → `titleOffset=3`
+   - `>= 0x1A` (26) → PMD86 形式 + MC v4.2a-v4.7x → `titleOffset=2`
+   - それ未満 → 旧 PMD → `titleOffset=1`
+
+`ent.length <= titleOffset` で最小エントリチェックも更新 (旧: `ent.length < 5` 固定)。
+`cand.length < 4` → `< 2` に緩和 (1 スロット形式対応)。
+
+### 修正範囲
+サイドバー下部 (ファイル選択時の `♪ タイトル` 表示) と Play ダイアログ (タイトル/作曲/編曲/コメント) の
+両方に効く。`parseMemo` の呼び出しは `openMusic` の 1 箇所のみで、両表示で `meta` を共有しているため。
+
+### 検証
+- `tools/pmd_meta_test.js` に 1/2/3 スロット形式の合成 .M バイナリテストを追加 (3/3 PASS)。
+- 東方旧作コーパス 45/45 回帰なし (全て MC v4.8a+ = 3 スロット形式で `ent[0]=0xFF` 検出)。
+- JS のみの変更・Wasm 不変。デプロイ済。
+
+---
+
 ## [AH=3Fh cooked 行入力の 3 点修正 — 拡張キー NUL / SJIS BS / want<2] — 2026-06-30
 
 ### 背景
