@@ -1833,7 +1833,8 @@ static void int21_46_dup2(void) {
  * これが無いと fh_get(0)=NULL で AX=6 を返し、TurboC の getchar/scanf/gets (= AH=3Fh handle 0)
  * が全滅する (SimK 氏「stdin がおかしい」の真因)。raw(binary)モードは未対応 = cooked 固定。 */
 static void int21_3f_read_stdin(uint32_t dst, uint16_t want) {
-    if (want == 0) { CPU_AX = 0; CPU_FLAG &= ~C_FLAG; return; }
+    /* want<2 は CR+LF 両方が入らないため行入力不能 — 0 バイト読み取りとして返す */
+    if (want < 2) { CPU_AX = 0; CPU_FLAG &= ~C_FLAG; return; }
     uint16_t len;
     if (g_3f_active && g_3f_dst == dst) {
         len = g_3f_len;                        /* 再ポーリング継続 */
@@ -1849,6 +1850,7 @@ static void int21_3f_read_stdin(uint32_t dst, uint16_t want) {
             return;
         }
         uint8_t ch = (uint8_t)(w & 0xFF);
+        if (ch == 0x00) continue;              /* 拡張キー (矢印/Fn 等): cooked モードでは無視 */
         if (ch == 0x0D) {                      /* Enter: 行末に CR LF を付けて確定 */
             uint16_t total = len;
             if (total < want) poke8(dst + total++, 0x0D);
@@ -1860,7 +1862,17 @@ static void int21_3f_read_stdin(uint32_t dst, uint16_t want) {
             return;
         }
         if (ch == 0x08) {                      /* BS 行編集 */
-            if (len > 0) { len--; tty_putc(0x08); tty_putc(0x20); tty_putc(0x08); }
+            if (len > 0) {
+                /* SJIS 2 バイト文字: 直前バイトがリードバイトならトレイルごと 2 バイト削除 */
+                int del = 1;
+                if (len >= 2) {
+                    uint8_t prev = (uint8_t)peek8(dst + len - 2);
+                    if ((prev >= 0x81 && prev <= 0x9F) || (prev >= 0xE0 && prev <= 0xFC))
+                        del = 2;
+                }
+                len -= del;
+                for (int i = 0; i < del; i++) { tty_putc(0x08); tty_putc(0x20); tty_putc(0x08); }
+            }
             continue;
         }
         if ((int)len + 2 < (int)want) {        /* CR LF 用に 2 残す (満杯は実 DOS 同様だまって無視) */
@@ -1987,9 +1999,8 @@ static void int21_43_attr(void) {
 static void int21_44_ioctl(void) {
     /* AL = sub-function。AL=0 (Get Device Info) のみ実装。
      * 実機 DOS では h=0..4 が標準で開いている char device (CON/AUX/PRN):
-     *   0: stdin  (CON)  → bit 7 (char dev) + bit 0 (= is stdin)
-     *   1: stdout (CON)  → bit 7 + bit 1
-     *   2: stderr (CON)  → bit 7
+     *   0-2: CON (stdin/stdout/stderr) → 0x80D3 (bit15=char dev, bit6=non-EOF,
+     *        bit4=INT29h, bit1=console out, bit0=console in。CON は双方向共有デバイス)
      *   3: stdaux (AUX)  → bit 7
      *   4: stdprn (PRN)  → bit 7
      * 同 .exe (さめがめ) はこの全 5 ハンドルを起動時に IOCTL してチェック。

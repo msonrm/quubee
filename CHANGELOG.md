@@ -1,5 +1,41 @@
 # CHANGELOG
 
+## [AH=3Fh cooked 行入力の 3 点修正 — 拡張キー NUL / SJIS BS / want<2] — 2026-06-30
+
+### 背景
+コードレビュー (Sonnet) で `int21_3f_read_stdin` に 3 点の正確性バグを発見・修正した。
+
+### 修正内容 (native/dos_int21.c)
+
+1. **拡張キー (矢印/Fn) が NUL バイトとしてバッファに書き込まれる**
+   - 真因: `kb_get_word()` が拡張キーを `0xXX00` で返すと `ch = (uint8_t)(w & 0xFF) = 0x00` になるが、
+     `0x0D`/`0x08` どちらにも一致しないため容量ガードを通過して `poke8(dst+len, 0x00)` が発火していた。
+     AH=0Ah は `dos_next_input_byte()` 経由で `softkey_fill(scan)` を呼ぶが、この経路には同処理がなかった。
+   - 修正: `ch == 0x00` なら `continue`（矢印/Fn キーを cooked モードで無視）。
+
+2. **SJIS 2 バイト文字入力後の BS がリードバイトをバッファに残す**
+   - 真因: `kb_get_word()` は SJIS のリード/トレイルを 1 バイトずつ 2 回に分けて返し、各回 `poke8+len++`。
+     BS は `len--` を 1 回だけ行いトレイルのみ論理的に除去するため、リードバイト (例: 0x83) が
+     `dst[len-1]` に孤立したまま残り、Enter 確定時に不正な SJIS 文字列として返っていた。
+   - 修正: BS 処理時に `peek8(dst+len-2)` が SJIS リードバイト範囲 (0x81-0x9F / 0xE0-0xFC) なら
+     `del=2` にして 2 バイト同時削除し、BS エコーも 2 回分 (`0x08 0x20 0x08` × del) 出力する。
+
+3. **want==1 のとき文字が全て捨てられ Enter で CR のみ返る**
+   - 真因: 容量ガード `(int)len + 2 < (int)want` は `want=1, len=0` で `2 < 1 = false` となり、
+     いかなる文字も poke8 できず。Enter 時は CR のみ書かれ (LF なし) AX=1。typed 文字は
+     エコーもされず消えていた (want<2 の時点で行入力として CR+LF 両方が収まらない)。
+   - 修正: `if (want == 0)` を `if (want < 2)` に拡張して早期リターン (AX=0, CF=0)。
+
+### 付随修正
+- IOCTL `case 0x00` の外側コメントが旧来のハンドル別ビット割り当て (h=0→bit0, h=1→bit1, h=2→bit7) を
+  記述したままだったのを、現実装 (h=0/1/2 全て 0x80D3) に合わせて更新。
+
+### 検証
+- `tools/stdin_read_test.js` / `tools/dev_info_test.js` が全て PASS (回帰なし)。
+- touhou 4/4 + bio100 (ALIVE21/CRASH0) 回帰ゼロ。
+
+---
+
 ## [AH=3Fh handle 0 (STDIN) の cooked 行入力を実装 — getchar/scanf/gets が全滅していた stdin バグを根治 (SimK PC98IN)] — 2026-06-30
 
 ### 背景
