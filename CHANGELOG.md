@@ -1,5 +1,42 @@
 # CHANGELOG
 
+## [PMD memo パーサを正典 (KAJA PMD ドライバ get_memo) の版判定へ全面置換] — 2026-06-30
+
+### 背景
+2026-06-30 の titleOffset 動的検出 (7d5a491) を入れても「.M のタイトル等がプレビューでずれる」
+報告が継続。ユーザーの指摘「バージョン判定が甘いのかも」を端緒に正典ソースまで辿った。
+
+### 旧実装の真因
+東方コーパス 45 本を全数ダンプして判明: ① `pmdmeta.js` は `.M` 先頭ワードを「ヘッダサイズ」と
+して版判定したが実値は `data[0]|data[1]<<8`=**0x1A00** (バイト順取り違えで分岐死亡)、かつ 0x1A は
+**ドライバ形式 (PMD86) を表すだけで MC バージョンと独立**。② 代わりの `ent[0]==0xFF→titleOffset=3`
+固定が**先頭予約スロットが空の 2 スロット形式 (PPS 未使用) を 3 と誤判定**し曲名が 1 ズレていた。
+
+### 正典の特定 (KAJA PMD 公開ソース)
+- `games/music/PMD48O.LZH` 同梱 `pmddata.doc` AH=1Dh: メモ番号 **-2 #PPZFile / -1 #PPSFile /
+  0 #PCMFile・#PPCFile / 1 #Title / 2 #Composer / 3 #Arranger / 4.. #Memo**。
+- KAJA 公開ソース (`d2lmirrors/pmd`) を取得し **PMP.ASM `memo_put`** を確認 → PMP 自身は解析せず
+  ドライバの `pmd get_memo` (INT 60h AH=1Dh) を「番号 1=Title…」と固定で呼ぶだけ。
+- 実体 **`PMD.ASM` `get_memo`** が正典アルゴリズム = 内容を見ず **MC バージョンから titleOffset を
+  決定論的に算出**: `word[0]==0x001A` (PMD86)・`P=word[0x18]`・version=`word[P-2]` (上位 0FEh・下位 ver)・
+  table=`word[P-4]`。メモ番号 al=N; ver>=42h で +1; ver>=48h で +1; 無条件 +1; テーブルを al 進めた
+  word が文字列オフセット。**.M は先頭に 0/1 バイトのプレフィックスがあり (東方は 0x00 が 1 個=base 1)**。
+
+### 修正 (`web/player/pmdmeta.js`、全面書き換え)
+- 構造ヒューリスティック (末尾走査+スロット内容判定) を捨て、**上記 get_memo をそのまま移植**。
+  base ∈ {0,1} 検出 → MC バージョン読取り → titleOffset を版で決定。**内容を一切見ないので
+  ASCII 曲名 ("OP.M" 等) もファイル名形の曲名も原理的に誤判定しない**。PMD86 形式でない (先頭
+  word != 0x001A)・バージョン検証 NG は null (driver 同様。誤メタを出すより安全)。
+
+### 検証
+- `tools/pmd_meta_test.js` を正典フォーマット生成 (part 表+バージョンマーカ+前方テーブル) に刷新。
+  合成 10 件 = ver 0x40/0x42/0x48 のスロット数分岐・base 0/1・ASCII 曲名・予約に実 PCM 名・
+  バージョン検証 (0FEh マーカ無し/MC<=4.1 → null)・非 PMD86 → null。
+- 東方コーパス 45/45 (全曲 作曲=「ＺＵＮ（太田）」を **composer に「太田」を含む correctness 検査**)。
+  独自移植 (canon.js) でドライバ get_memo が corpus 45/45 と一致することも事前確認済。
+- JS のみ・Wasm 不変 (memo 解析は UI 表示用、再生エンジンに影響なし)。残: PMDPPZ 等 非 PMD86 形式は
+  実サンプル無く未対応 (null=メタ非表示。誤表示はしない)。
+
 ## [DOS CON カーソル座標ワークエリア (0:0710h/071Ch) を同期] — 2026-06-30
 
 ### 背景

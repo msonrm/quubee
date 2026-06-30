@@ -1,98 +1,105 @@
-// PMD (.M) 曲データの memo (曲名/作曲/コメント) パーサ。
+// PMD (.M) 曲データの memo (曲名/作曲/編曲/コメント) パーサ。
 //
-// KAJA の PMD で .M をコンパイルすると、曲データ末尾に作者注釈 (#Title/#Composer/
-// #Arrangement/#Memo に由来する文字列) が「memo ブロック」として埋め込まれる。
-// これを取り出して「ファイルをタップ→曲名/作曲者/作者コメントを表示」に使う。
+// KAJA の PMD で .M をコンパイルすると、曲データ中に作者注釈 (#Title/#Composer/
+// #Arranger/#Memo・#PCMFile 等) が「memo」として埋め込まれる。これを取り出して
+// 「ファイルをタップ→曲名/作曲者/作者コメントを表示」に使う。
 //
-// フォーマット (東方旧作 BGM の実コーパス 45 本で全数検証, 2026-06-16):
-//   - ファイル末尾 2 byte = 0x00 0x00 (インデックス表の終端)
-//   - その手前に 2 byte LE のエントリが「EOF へ向かって昇順」で並ぶ (= index 表)
-//   - 各エントリは「直前文字列を終端する NUL (0x00)」または「空スロット印 (0xFF)」を指す
-//   - 自己参照的: nulAfter(E[i]+1) === E[i+1] (E[i] の文字列の終端 NUL が次エントリ)
-//   - 文字列本体は E[i]+1 から次 NUL まで (Shift_JIS)
-//   - MC バージョンで予約スロット数が変わる (PMDDATA.DOC AH=1Dh 準拠):
-//       MC < v4.2a  : 1 予約 (PCMFile のみ)       → [1]=曲名
-//       MC v4.2a-v4.7x: 2 予約 (PPSFile+PCMFile)  → [2]=曲名
-//       MC v4.8a+   : 3 予約 (PPZFile+PPSFile+PCMFile) → [3]=曲名
-//     titleOffset は ent[0] が 0xFF (PPZFile 空) かヘッダサイズで検出
-//   - 正準スロット (以降): [titleOffset]=曲名、+1=作曲、+2=編曲、+3..=コメント行
+// **正典 (KAJA PMD ソース) の方法をそのまま移植**:
+//   PMP.COM 自身は memo を解析せず、常駐ドライバの INT 60h AH=1Dh (get_memo) を
+//   「メモ番号 1=Title / 2=Composer / 3=Arranger / 4..=Memo (先頭 '/' で終端)」と
+//   固定で呼ぶだけ (PMP.ASM memo_put)。実体の get_memo (PMD.ASM) は内容を一切見ず
+//   **.M ヘッダの MC バージョンから titleOffset を決定論的に決める**:
+//     1. PMD データ先頭の part ポインタ表 word[0] == 0x001A (PMD86 形式)。.M は先頭に
+//        0/1 バイトのプレフィックスがあり得るので base ∈ {0,1} を検出 (PMP がロードする
+//        mmlbuf 位置に対応。東方コーパスは先頭に 0x00 が 1 個=base 1)。
+//     2. P = word[base+0x18]。バージョン語 = word[base+P-2] (上位=0xFEh マーカ・下位=MC ver、
+//        Ver4.0 のみ 00h でも可)。memo テーブル先頭 = base + word[base+P-4]。
+//     3. メモ番号 N の取り出し: al=N; ver>=42h で +1 (#PPSFile 予約); ver>=48h で +1
+//        (#PPZFile 予約); 無条件 +1。テーブルを al 個進めた word が文字列オフセット
+//        (base 相対、0=未定義)。文字列は SJIS で NUL 終端。
+//   メモ番号割り当て (正典 PMDDATA.DOC AH=1Dh): -2 #PPZFile / -1 #PPSFile / 0 #PCMFile・
+//   #PPCFile / 1 #Title / 2 #Composer / 3 #Arranger / 4.. #Memo。= MC バージョンが
+//   PPS/PPZ 予約スロットの有無を決め、それで Title の位置 (titleOffset 1/2/3) が動く。
+//   内容を見ないので ASCII 曲名 (例 "OP.M") やファイル名形の曲名でも誤判定しない。
 //
-// 後方走査で楽曲データの 1 ワードを過剰に拾うことがあるが、(a) 区切りバイト判定と
-// (b) 自己参照チェーン整合トリムの 2 段で偽エントリを落とす (推測でなく構造で確定)。
-//
-// 回帰: tools/pmd_meta_test.js (ローカルコーパス展開→45/45 で曲名/作曲を抽出)。
+// 対応形式 = PMD86 (word==0x001A)。それ以外 (PMDPPZ 等で header 値が違う) は memo 取得不可
+// として null を返す (driver も同様。誤ったメタを出すより安全)。
+// 回帰: tools/pmd_meta_test.js (合成 .M で ver 0x40/0x42/0x48 + base 0/1 の分岐、東方コーパス 45/45)。
 (function (root) {
     'use strict';
 
-    function nulAfter(data, s) {
-        const i = data.indexOf(0, s);
-        return i >= 0 ? i : data.length;
+    function w16(data, o) {
+        return (o >= 0 && o + 1 < data.length) ? (data[o] | (data[o + 1] << 8)) : -1;
     }
 
-    function allFF(u) {
-        for (let i = 0; i < u.length; i++) if (u[i] !== 0xff) return false;
-        return u.length > 0;
+    // PMD86 .M データの開始位置 (base) を検出。part ポインタ表先頭 word == 0x001A。
+    // .M は先頭に 0 か 1 バイトのプレフィックスがあり得る (排他: 同時に両方は成立しない)。
+    function detectBase(data) {
+        if (w16(data, 0) === 0x001A) return 0;
+        if (w16(data, 1) === 0x001A) return 1;
+        return -1;
     }
 
     // bytes (Uint8Array | ArrayBuffer) → { title, composer, arranger, memo:[...] } | null。
     // decodeFn(Uint8Array)->string を渡すと SJIS 復号に使う (省略時は TextDecoder('shift_jis'))。
-    // 既定デコーダはブラウザ/Node とも利用可。bridge.js は NEC 罫線対応の decodeSjisText を渡す。
+    // bridge.js は NEC 罫線対応の decodeSjisText を渡す。
     function parseMemo(bytes, decodeFn) {
-        const data = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
-        const n = data.length;
-        if (n < 6 || data[n - 1] !== 0 || data[n - 2] !== 0) return null;
+        const data = (bytes instanceof Uint8Array) ? bytes : new Uint8Array(bytes);
 
-        // 末尾の index 表エントリを後方収集: 区切りバイト (0x00/0xFF) を指し、昇順を保つものだけ。
-        const cand = [];
-        let prev = n;
-        for (let p = n - 4; p >= 0; p -= 2) {
-            const w = data[p] | (data[p + 1] << 8);
-            if (w > 0 && w < n && w <= prev && (data[w] === 0x00 || data[w] === 0xff)) {
-                cand.push(w); prev = w;
-            } else break;
-        }
-        if (cand.length < 2) return null;
-        cand.reverse();   // 昇順 (ファイル先頭→末尾)
+        const base = detectBase(data);
+        if (base < 0) return null;                 // PMD86 形式でない → driver 同様 memo 取得不可
 
-        // 自己参照チェーンが成立する最長サフィックスへ刈り込む (先頭の偽エントリを除去)。
-        let start = cand.length - 1;
-        for (let i = 0; i < cand.length - 1; i++) {
-            if (nulAfter(data, cand[i] + 1) === cand[i + 1]) { start = i; break; }
+        const P = w16(data, base + 0x18);
+        if (P < 2) return null;
+        const verWord = w16(data, base + P - 2);
+        if (verWord < 0) return null;
+        const bl = verWord & 0xFF, bh = (verWord >> 8) & 0xFF;
+        // バージョン検証 (get_memo と同じ): Ver4.0(40h)は無条件 OK、以外は 0FEh マーカ必須 & bl>=41h。
+        if (bl !== 0x40) {
+            if (bh !== 0xFE) return null;
+            if (bl < 0x41) return null;
         }
-        while (start > 0 && nulAfter(data, cand[start - 1] + 1) === cand[start]) start--;
-        const ent = cand.slice(start);
-
-        // .M ヘッダ先頭 2 バイト LE = パートオフセット表サイズ (PMD86=0x1A, PMDPPZ>=0x2A)。
-        // ent[0] が 0xFF なら PPZFile 空スロット (MC v4.8a+) → 3 予約スロット。
-        // それ以外はヘッダサイズで判定。
-        const headerSize = data[0] | (data[1] << 8);
-        let titleOffset;
-        if (data[ent[0]] === 0xFF) {
-            titleOffset = 3;
-        } else if (headerSize >= 0x2A) {
-            titleOffset = 3;
-        } else if (headerSize >= 0x1A) {
-            titleOffset = 2;
-        } else {
-            titleOffset = 1;
-        }
-        if (ent.length <= titleOffset) return null;
+        const tableOff = w16(data, base + P - 4);
+        if (tableOff < 0) return null;
 
         const td = (typeof TextDecoder !== 'undefined') ? new TextDecoder('shift_jis') : null;
-        const decode1 = (e) => {
-            if (e === undefined) return '';
-            const u = data.subarray(e + 1, nulAfter(data, e + 1));
-            if (u.length === 0 || allFF(u)) return '';
+        const decode1 = (u) => {
+            if (u.length === 0) return '';
             if (decodeFn) return decodeFn(u);
             return td ? td.decode(u) : '';
         };
 
-        return {
-            title:    decode1(ent[titleOffset]),
-            composer: decode1(ent[titleOffset + 1]),
-            arranger: decode1(ent[titleOffset + 2]),
-            memo:     ent.slice(titleOffset + 3).map(decode1).filter((s) => s.trim().length > 0),
-        };
+        // メモ番号 n (1=Title..) の文字列を get_memo と同じ手順で取り出す。
+        function getMemo(n) {
+            let al = n;
+            if (bl >= 0x42) al++;                  // #PPSFile スロットあり
+            if (bl >= 0x48) al++;                  // #PPZFile スロットあり
+            al++;                                  // 無条件 inc
+            let si = base + tableOff;
+            let off = 0;
+            for (let i = 0; i < al; i++) {
+                off = w16(data, si);
+                if (off <= 0) return '';           // 未定義 (entry==0 / 範囲外)
+                si += 2;
+            }
+            const start = base + off;
+            let end = data.indexOf(0, start);
+            if (end < 0) end = data.length;
+            if (start >= end) return '';
+            return decode1(data.subarray(start, end));
+        }
+
+        const title = getMemo(1);
+        if (!title) return null;                   // 曲名が取れなければ memo 無し扱い
+        const composer = getMemo(2);
+        const arranger = getMemo(3);
+        const memo = [];
+        for (let n = 4; n < 4 + 64; n++) {         // PMP: 未定義 or 先頭 '/' で終端 (安全弁 64 行)
+            const s = getMemo(n);
+            if (!s || s.charCodeAt(0) === 0x2F /* '/' */) break;
+            memo.push(s);
+        }
+        return { title, composer, arranger, memo };
     }
 
     const api = { parseMemo };
