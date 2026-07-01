@@ -1,5 +1,40 @@
 # CHANGELOG
 
+## [PMD memo 文字化け2件を修正 — 区9 2バイト半角文字 / ANSI エスケープ直書き] — 2026-07-02
+
+### 背景
+ユーザー報告: `games/music/pmddata.lzh` の `.M` をプレビュー演奏すると曲名が文字化けするものがある
+(スクショ提供)。`DE_TOW.M` は曲名の一部が `◆` の羅列に、`ANDRO_02.M` はエスケープシーケンスの文字列
+がそのまま曲名に混入していた。
+
+### 真因1: JIS 区9 (SJIS 0x85xx) は PC-98 フォント ROM の「2バイト半角文字」域
+`DE_TOW.M` の `#Title` に直書きされた `"[ Dungeon Explorer ]"` が、区3 全角英数字と対になる**半角版**
+(8x16・1セル幅の英数字/記号を 2 バイト SJIS コードでアクセスする表) で符号化されていた。ブラウザの
+`TextDecoder('shift_jis')` も CP932 もこの領域を知らず `U+FFFD` に潰していた。`web/assets/font.bmp` の
+区9 (94 点全定義) を実データ照合し、ANK 8x16 とは別書体ながら同一文字であることを確認 (D/u/a/z/0/*/\/[/]
+等を目視比較)。trail バイト→ASCII の変換式 (区3 全角英数字と同型の JIS ten オフセット則) を実装。
+
+### 真因2: ANSI (ANSI.SYS) の CSI エスケープシーケンス直書き
+`ANDRO_02.M` の `#Title` に `ESC[4;34m反生命戦機...ESC[m` という生の ANSI カラー/装飾コードが直書き
+されていた (実機で ANSI.SYS 常駐時の色付き表示を意図したものと見られる)。QuuBee の PMD メモ表示は
+プレーンテキストなので CSI シーケンスをそのまま可視文字として出してしまっていた。
+
+### 修正
+- `web/player/bridge.js` の `decodeSjisText` に `decorAsciiFromTrail` を追加 (区9 の2バイト半角英数字
+  を半角 ASCII へ復元。既存の NEC 罫線 [区11・0x86xx] 変換と同じ構造)。未定義の trail 値は復元せず
+  従来通り `U+FFFD` のまま (誤った当て推量をしない、[[feedback_hle_honest_failure]])。
+- `web/player/pmdmeta.js` に `stripAnsi` を追加し、`getMemo` の全スロット (曲名/作曲/編曲/コメント)
+  の復号結果に適用。
+
+### 検証
+- 実ファイル (`games/music/pmddata.lzh` の `DE_TOW.M`/`ANDRO_02.M`) で修正前後を突合し、いずれも
+  クリーンな表示に (`街の曲 [ Dungeon Explorer ]` / `反生命戦機アンドロギュヌス ／ IN THE WAKE OF
+  ANDROGYNUS`)。ブラウザ実機で確認済み。
+- `tools/pmd_meta_test.js` に回帰を追加: 合成 .M での ANSI 除去、`decodeSjisText` 単体の区9/NEC罫線
+  ユニットテスト、`pmddata.lzh` があればローカルで実ファイル再現検証 (無ければ SKIP)。東方コーパス
+  45/45 は不変。
+- 作曲/編曲/コメント欄にも同じ復号経路が通ることを合成データで確認 (両修正とも全スロットに一律適用)。
+
 ## [PMD memo パーサを正典 (KAJA PMD ドライバ get_memo) の版判定へ全面置換] — 2026-06-30
 
 ### 背景

@@ -580,12 +580,26 @@ async function makeWorkerEmu() {
         0x86c6: 0x2524, 0x86c7: 0x2525, 0x86ca: 0x2528, 0x86cd: 0x252b, 0x86ce: 0x252c, 0x86d1: 0x252f, 0x86d2: 0x2530, 0x86d5: 0x2533,
         0x86d6: 0x2534, 0x86d9: 0x2537, 0x86da: 0x2538, 0x86dd: 0x253b, 0x86de: 0x253c, 0x86e1: 0x253f, 0x86e4: 0x2542, 0x86ed: 0x254b,
     };
-    // SJIS バイト列をテキスト復号する。NEC 罫線 (0x86xx) だけ上表で Unicode 罫線へ差し替え、
-    // それ以外の連続バイトは標準の TextDecoder にまとめて委ねる (漢字/かな/区8罫線はそのまま正しく出る)。
+    // JIS 区9 (SJIS 0x85xx) は PC-98 フォント ROM の「2バイト半角文字」域 — 区3 全角英数字と対で、
+    // 半角 (8x16, 1セル幅) の英数字/記号を 2 バイト SJIS コードでアクセスする表 (font.bmp の区9・
+    // 94 点全定義を実データ照合し、ANK 8x16 とは別書体ながら同一文字であることを確認済み。区9=半角、
+    // 区11=半角罫線 [[reference_pc98_halfwidth_graphics]] と役割が対応する)。
+    // PMD .M の #Title に直書きされた曲名で実見: games/music/pmddata.lzh の DE_TOW.M
+    // "[ Dungeon Explorer ]" が丸ごとこの符号化で、標準デコーダには U+FFFD の羅列にしか見えない。
+    // 見た目 (半角幅) は再現できないので同じ文字の素の ASCII へ復元する。未定義の trail 値 (区9 の
+    // 範囲外、区10 側) は復元せず在来の U+FFFD のまま = 誠実な失敗を優先 (feedback_hle_honest_failure)。
+    function decorAsciiFromTrail(t) {
+        if (t >= 0x40 && t <= 0x7e) return t - 0x1f;   // ascii 0x21-0x5f (記号+大文字)
+        if (t >= 0x80 && t <= 0x9e) return t - 0x20;   // ascii 0x60-0x7e (小文字+記号)
+        return -1;
+    }
+    // SJIS バイト列をテキスト復号する。NEC 罫線 (0x86xx) は上表で Unicode 罫線へ、区9 の2バイト半角
+    // 英数字 (0x85xx) は半角 ASCII へ差し替え、それ以外の連続バイトは標準の TextDecoder にまとめて
+    // 委ねる (漢字/かな/区8罫線はそのまま正しく出る)。
     // 注: 0x86 は SJIS のトレイルバイトにもなり得る (トレイル範囲 0x40-0x7E / 0x80-0xFC)。バイト単位で
     // 「0x86=罫線リード」と決め打つと、トレイルが 0x86 で終わる漢字の直後に罫線トレイル集合 (a2 a3 a4 a5
     // = 半角カナ ｢｣､･ 等) が続いたとき、前の漢字のリードが孤立して化ける。そこで通常の SJIS 2 バイト
-    // 文字はリード+トレイルを必ず一緒に消費し、トレイル 0x86 をリードとして再走査させない。
+    // 文字はリード+トレイルを必ず一緒に消費し、トレイル 0x86 をリードとして再走査させない (0x85 も同様)。
     function decodeSjisText(bytes) {
         let out = '';
         let run = [];
@@ -597,7 +611,12 @@ async function makeWorkerEmu() {
                 const u = NEC_RULED_TO_UNICODE[(0x86 << 8) | bytes[i + 1]];
                 if (u !== undefined) { flush(); out += String.fromCodePoint(u); i++; continue; }
             }
-            // 通常の SJIS 2 バイト文字 (0x86 が通常リードの場合も含む) はトレイルごと消費する。
+            // 0x85xx が区9 の2バイト半角英数字テーブルにあれば半角 ASCII へ差し替える。
+            if (b === 0x85 && i + 1 < bytes.length) {
+                const a = decorAsciiFromTrail(bytes[i + 1]);
+                if (a >= 0) { flush(); out += String.fromCharCode(a); i++; continue; }
+            }
+            // 通常の SJIS 2 バイト文字 (0x85/0x86 が通常リードの場合も含む) はトレイルごと消費する。
             const isLead = (b >= 0x81 && b <= 0x9f) || (b >= 0xe0 && b <= 0xfc);
             if (isLead && i + 1 < bytes.length) { run.push(b, bytes[i + 1]); i++; continue; }
             run.push(b);

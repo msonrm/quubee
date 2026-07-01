@@ -107,11 +107,56 @@ function syntheticTest() {
     // PMD86 形式でない (先頭 word != 0x001A) → null
     checkNull('非PMD86ヘッダ → null', Uint8Array.from([0x2a, 0x00, 0, 0, 0, 0]));
 
+    // memo 中の生 ANSI CSI エスケープは除去される (ANDRO_02.M で実見: ESC[4;34m...ESC[m)。
+    check('ANSI CSI 除去 (色付け直書き)',
+        makeMemoM(0x48, ['', '', '', '\x1b[4;34mTITLE\x1b[m', 'ZUN']), 'TITLE');
+
     console.log(`合成テスト: ${failures === 0 ? 'PASS' : `FAIL(${failures}件)`}`);
     return failures;
 }
 
+// bridge.js は DOM (document/window) 前提で Node から直接 require できないため、decodeSjisText
+// (+ 依存する NEC_RULED_TO_UNICODE/decorAsciiFromTrail) の実ソースだけを切り出して評価する
+// (別実装を書くと本体からドリフトするリスクがあるため、本体そのものをテストする)。
+function loadDecodeSjisTextFromBridge() {
+    const src = fs.readFileSync(path.join(ROOT, 'web', 'player', 'bridge.js'), 'utf8');
+    const startMarker = '    const NEC_RULED_TO_UNICODE = {';
+    const endMarker = '\n    // Unicode → Shift-JIS エンコーダ';
+    const start = src.indexOf(startMarker);
+    const end = src.indexOf(endMarker, start);
+    if (start < 0 || end < 0) throw new Error('bridge.js から decodeSjisText の切り出しに失敗 (マーカ不一致)');
+    const snippet = src.slice(start, end);
+    const sjis = new TextDecoder('shift_jis');
+    return new Function('sjis', snippet + '\nreturn decodeSjisText;')(sjis);
+}
+
+// decodeSjisText 単体の回帰: NEC 罫線 (0x86xx) 既存動作 + 区9 の2バイト半角英数字 (0x85xx) 新規復元。
+// DE_TOW.M の実バイト列 "[ Dungeon Explorer ]" (0x85xx の2バイト半角文字そのもの) で検証する。
+function decodeSjisTextTest() {
+    let failures = 0;
+    const decodeSjisText = loadDecodeSjisTextFromBridge();
+    function check(label, hex, want) {
+        const got = decodeSjisText(Uint8Array.from(Buffer.from(hex, 'hex')));
+        if (got !== want) {
+            console.error(`  FAIL ${label}: got=${JSON.stringify(got)} want=${JSON.stringify(want)}`);
+            failures++;
+        } else if (process.env.VERBOSE) {
+            console.log(`  OK   ${label}: ${JSON.stringify(got)}`);
+        }
+    }
+    check('NEC 罫線 0x86xx (既存動作の保護)', '86a2', '─');
+    check('区9 の2バイト半角英数字 (DE_TOW.M 実バイト列)',
+        '857a2085638595858e85878585858f858e20856485988590858c858f85928585859220857c',
+        '[ Dungeon Explorer ]');
+    console.log(`decodeSjisText テスト: ${failures === 0 ? 'PASS' : `FAIL(${failures}件)`}`);
+    return failures;
+}
+
 const synFails = syntheticTest();
+const decodeFails = decodeSjisTextTest();
+// 合成テストはコーパスに依存しないので、コーパス不在で SKIP する前に確定させる
+// (そうしないと corpus 不在環境で合成テストの FAIL が exit(0) に埋もれてしまう)。
+if (synFails > 0 || decodeFails > 0) process.exit(1);
 if (!fs.existsSync(CORPUS)) skip('コーパス games/touhou/pmd_music 不在 (ローカル限定テスト)');
 
 const lzhs = fs.readdirSync(CORPUS).filter((f) => /\.lzh$/i.test(f));
@@ -159,4 +204,47 @@ if (fails.length) {
 }
 if (mFiles.length === 0) skip('.M が展開されなかった');
 if (fails.length > 0 || synFails > 0) process.exit(1);
+
+// games/music/pmddata.lzh (実 PC-98 フリーソフト同人音楽コーパス、再配布不可でローカル限定・
+// gitignore 対象) があれば、報告された実バグの再現を追加検証する:
+//   DE_TOW.M   = 区9 の2バイト半角英数字 (0x85xx) が曲名に直書き → decodeSjisText の復元を確認
+//   ANDRO_02.M = ANSI CSI エスケープが曲名に直書き → stripAnsi の除去を確認
+// 不在なら黙ってスキップ (CI 安全・他コーパスと同じ方針)。
+const PMDDATA = path.join(ROOT, 'games', 'music', 'pmddata.lzh');
+const pmddataExtract = haveCmd('lha') ? 'lha' : (haveCmd('lhasa') ? 'lhasa' : null);
+if (fs.existsSync(PMDDATA) && pmddataExtract) {
+    const TMP2 = fs.mkdtempSync('/tmp/pmd_meta_test_real_');
+    const wantTitle = {
+        'de_tow.m': '街の曲 [ Dungeon Explorer ]',
+        'andro_02.m': '反生命戦機アンドロギュヌス ／ IN THE WAKE OF ANDROGYNUS',
+    };
+    let realFails = 0;
+    try {
+        if (pmddataExtract === 'lha') cp.execSync(`lha -xqw=${TMP2} "${PMDDATA}" de_tow.m andro_02.m`, { stdio: 'ignore' });
+        else                          cp.execSync(`cd ${TMP2} && lhasa -xq "${PMDDATA}" de_tow.m andro_02.m`, { stdio: 'ignore' });
+        const decodeSjisText = loadDecodeSjisTextFromBridge();
+        for (const [f, want] of Object.entries(wantTitle)) {
+            const fp = path.join(TMP2, f);
+            if (!fs.existsSync(fp)) { console.log(`  SKIP pmddata/${f}: 展開されず`); continue; }
+            const data = new Uint8Array(fs.readFileSync(fp));
+            const meta = parseMemo(data, (u) => decodeSjisText(u));
+            const got = meta && meta.title;
+            if (got !== want) {
+                console.error(`  FAIL pmddata/${f}: title=${JSON.stringify(got)} want=${JSON.stringify(want)}`);
+                realFails++;
+            } else if (process.env.VERBOSE) {
+                console.log(`  OK   pmddata/${f}: ${JSON.stringify(got)}`);
+            }
+        }
+        console.log(`pmddata.lzh 実バグ再現テスト: ${realFails === 0 ? 'PASS' : `FAIL(${realFails}件)`}`);
+    } catch (e) {
+        console.log('  SKIP pmddata.lzh 展開失敗: ' + e.message);
+    } finally {
+        fs.rmSync(TMP2, { recursive: true, force: true });
+    }
+    if (realFails > 0) process.exit(1);
+} else if (process.env.VERBOSE) {
+    console.log('SKIP pmddata.lzh 不在 (ローカル限定テスト)');
+}
+
 console.log('PASS');

@@ -24,12 +24,22 @@
 //
 // 対応形式 = PMD86 (word==0x001A)。それ以外 (PMDPPZ 等で header 値が違う) は memo 取得不可
 // として null を返す (driver も同様。誤ったメタを出すより安全)。
+// memo 文字列中の ANSI CSI エスケープ (実機の ANSI.SYS 常駐を当て込んだ色付けが直書きされる
+// ケースが実在: ANDRO_02.M) は stripAnsi で除去する。PC-98 フォント ROM の「2バイト半角文字」域
+// (0x85xx 等) の復元は decodeFn (bridge.js の decodeSjisText) 側の責務。
 // 回帰: tools/pmd_meta_test.js (合成 .M で ver 0x40/0x42/0x48 + base 0/1 の分岐、東方コーパス 45/45)。
 (function (root) {
     'use strict';
 
     function w16(data, o) {
         return (o >= 0 && o + 1 < data.length) ? (data[o] | (data[o + 1] << 8)) : -1;
+    }
+
+    // memo 文字列には稀に ANSI (ANSI.SYS 相当) の色/装飾 CSI シーケンスがそのまま埋め込まれている
+    // (ANDRO_02.M の #Title で実見: ESC[4;34m反生命戦機...ESC[m。実機で ANSI.SYS 常駐時の色付き
+    // 表示を意図したものと見られる)。表示側はプレーンテキストなので CSI シーケンスを丸ごと除去する。
+    function stripAnsi(s) {
+        return s.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '').replace(/\x1b/g, '');
     }
 
     // PMD86 .M データの開始位置 (base) を検出。part ポインタ表先頭 word == 0x001A。
@@ -65,8 +75,8 @@
         const td = (typeof TextDecoder !== 'undefined') ? new TextDecoder('shift_jis') : null;
         const decode1 = (u) => {
             if (u.length === 0) return '';
-            if (decodeFn) return decodeFn(u);
-            return td ? td.decode(u) : '';
+            const s = decodeFn ? decodeFn(u) : (td ? td.decode(u) : '');
+            return stripAnsi(s);
         };
 
         // メモ番号 n (1=Title..) の文字列を get_memo と同じ手順で取り出す。
