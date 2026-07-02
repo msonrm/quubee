@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 // SimK 氏の EXECTEST.COM (DOS 子プロセス/EXEC テスト) を headless 実行し、
 // 各 pause (AH=08h キー待ち) 時点の framebuffer PNG + テキスト VRAM ダンプを保存する。
-// np21w 同梱スクリーンショット (games/EXECTEST.zip の np21w/*.bmp) との突合用。
+// np21w 同梱スクリーンショット (games/fixture/EXECTEST.zip の np21w/*.bmp) との突合用。
+// TEXTTEST 系 (games/fixture/TEXTTEST3.zip の PC98RET/PC98WORK/PC98WDOS 等、キー待ち
+// pause のある COM) にもそのまま使える汎用ランナー。
 // 使い方: node tools/exectest_run.js <EXECTEST.COM のパス> <出力 dir>
 const path = require('path'); const fs = require('fs'); const zlib = require('zlib');
 const ROOT = path.join(__dirname, '..'); const WEB = path.join(ROOT, 'web');
