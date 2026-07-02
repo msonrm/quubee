@@ -1,5 +1,43 @@
 # CHANGELOG
 
+## [np2.h 二重定義 (ODR 違反) を根治 — MIDI 有効 + EXE 直接起動のブラウザ全面ハング] — 2026-07-03
+
+### 症状
+MIMPI に .mid を渡してブラウザで Run すると、soundfont ロード後 "starting..." で
+**タブごと完全にフリーズ** (worker/?local 両モード・qbDebug も効かない = JS に制御が
+返らない C 無限ループ)。headless では「EXE 直接 stage (np2kai_dos_stage_exe) + MIDI
+有効」の組み合わせでのみ再現 (script/EXEC 経由は正常)。
+
+### 真因 = NP2OSCFG 構造体の定義が 2 つあった (ODR 違反)
+`native/np2.h` は NP2kai の np2.h を最小スタブ化した QuuBee 版だが、include path の
+先頭は native/ なので **qb_ini.c (np2oscfg の実体を定義) はミニ版レイアウト**、一方
+**sdl/cmmidi.c は自ディレクトリの sdl/np2.h (mpu メンバ入りのフル版)** でコンパイル
+されていた。cmmidi_create が読む `np2oscfg.mpu.direct` はミニ版実体の**範囲外 =
+隣接する無関係なグローバル変数**で、その値は起動経路依存:
+- script/EXEC 経路: たまたま 0 → hmidiout=-1 → VERMOUTH(TSF) 経路 = 正常 (これまでの
+  MIDI 動作実績は全部この「たまたま」の上に乗っていた)
+- EXE 直接 stage: たまたま 70 → `if(np2oscfg.mpu.direct) hmidiout=0` (LIBRETRO/
+  EMSCRIPTEN 共用分岐) → **fd 0 を実 MIDI デバイスと誤認** → midiout_device →
+  midi_write の gettimeofday busy-wait ループ = run_frame が永遠に返らない
+
+### 根治
+`native/np2.h` を**削除**し、全翻訳単位を sdl/np2.h に統一 (レイアウト一意化)。
+mpu.direct は BSS ゼロ初期化の正しい実体を指し、常に VERMOUTH 経路が選ばれる。
+native 側の他コード (qb_joymng.c の JOYPAD1 等) は元々 sdl 版レイアウト前提であり
+コンパイル変更ゼロで通る。
+
+### 調査手法 (V8 プロファイラでの Wasm ハング解析)
+`node --prof` はハング中に SIGTERM で殺してもログが残る → `--prof-process` で
+ホット関数を特定できる (今回 midiout_device/fd_write が判明)。関数名が出ないときは
+リンクフラグに `--profiling-funcs` を一時追加。printf の犯人探しには Module.stderr/
+stdout の 1 文字フック + fs.writeSync (Node の console.log はイベントループ停止で
+バッファが失われる)。
+
+### 検証
+run_mimpi.js 全 5 モード完走 (exe-midi = ブラウザ同等経路で I/F = MPU・ハングなし /
+exe・mid = BEEP faithful / noargs = Song file does not exist)。既存回帰 20 本 PASS
+(mpu_midi・midi_serial・pmd_session・fmp・touhou 4/4 ほか) = 回帰ゼロ。
+
 ## [MIMPI (MIDI プレイヤー) 調査 — LIO 表示ページバグ根治 + ディレクトリ open 拒否] — 2026-07-03
 
 ### 背景
