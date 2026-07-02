@@ -19,12 +19,12 @@
 | 56 / 57 | Rename / Get-Set ファイル日時 | 中（temp→rename セーブ・書庫ツール） | 未対応 |
 | 59 | Get Extended Error | 中（エラー後の詳細コード取得） | 未対応 |
 | 63 | Get DBCS Lead-Byte Table | 中（日本語特有。多くはハードコードにフォールバック） | ✅ 2026-06-09 実装（東方 op.exe の壁①） |
-| 62 / 50 / 51 | Get/Set PSP | 中 | 未対応 |
+| 62 / 50 / 51 | Get/Set PSP | 中 | ✅ 2026-07-02 実装（`g_cur_psp` を BX で往復するだけ。SimK 氏 EXECTEST で顕在化 — 62h 未実装だと BX=0 のまま返り、子が ES=0 の IVT を PSP と誤読して command tail 表示が漢字化けする。回帰 `tools/exec_psp_test.js`） |
 | 00 | Terminate（旧式） | 低（終了は INT 20h / 4Ch 想定） | 未対応 |
 | 2B / 2D | Set Date / Set Time | 低（Get のみ実装） | 未対応 |
 | 38 | Get/Set Country Info | 中（QB 日本語ランタイム等が起動時に呼ぶ） | ✅ 2026-07-02 実装（日本 country 81 固定・YMD・通貨 "\"・24h・case-map は far RET スタブ。Set は日本以外を正直に拒否。回帰 `tools/country_info_test.js`） |
 | 5B / 5A / 67 / 68 … | 排他作成 / temp / handle 数 / commit | 低〜中 | 未対応 |
-| 4B AL=01,03 | Load-only / オーバーレイ | 中（大きめゲームの overlay） | AL=03 ✅ 2026-06-09 実装（東方 op→main 遷移）。AL=01 未対応 |
+| 4B AL=01,03 | Load-only / オーバーレイ | 中（大きめゲームの overlay） | AL=03 ✅ 2026-06-09 実装（東方 op→main 遷移）。AL=01 ✅ 2026-07-02 実装（exec_load の load-only モード: CPU は切り替えずパラメータブロック +0Eh..+15h に初期 SP/SS/IP/CS を書き戻し、current PSP は子へ。COM は AX 初期値 word を積んで SP=FFFC = np21w 一致。回帰 `tools/exec_psp_test.js`） |
 
 ## 2. 実装済みだが実 DOS と挙動が異なる点
 
@@ -178,9 +178,14 @@
   （C1 解消済、2026-06-04。`build_child_env` で子固有 env を確保）。
 - **環境変数は `COMSPEC=A:\COMMAND.COM` と `PATH=A:\` の 2 つだけ**（`build_env`、2026-06-11 に COMSPEC 追加）。
   COMSPEC は実 DOS が必ず設定する変数で、存在チェックして起動拒否するソフトがある（Canvas-98 は無いと exit 5）。
-  **差異**: 変数は設定するが**実ファイル A:\COMMAND.COM は置かない** — `%COMSPEC%` を EXEC するシェルアウトは
-  file not found（AX=2）で正直に失敗する（ミニシェルは .bat 文テーブル前提のため汎用シェルとして再入できない）。
-  `set` 非対応なのでゲストから変数の追加・変更はできない。
+  実ファイル A:\COMMAND.COM は置かないが、✅ 2026-07-02 から **`%COMSPEC%` を `/C <cmd>` 付きで EXEC する
+  シェルアウト（TurboC 系 `system()` / SimK 氏 EXECTEST）は通る** — EXEC 先の basename が COMMAND.COM かつ
+  tail が `/C` の時だけ、約 40byte の COM スタブ（自己縮小 → `AX=4B00h` で `<cmd>` を EXEC → `AH=4Ch` code=0）
+  を合成して通常の exec_load に流す（`build_comspec_stub`）。実 DOS 同様に中間プロセスが立つので PSP 連鎖
+  （子の PSP:16h = COMMAND の PSP）も「/C は子の終了コードを破棄して 0」（AH=4Dh=0000）も忠実。`<cmd>` の
+  拡張子無しは .COM → .EXE を補完。**差異**: `/C` 無し（対話シェル）・`.bat` ターゲット・内部コマンド
+  （`del`/`copy` 等）・リダイレクトは非対応で、従来どおり file not found（AX=2）で正直に失敗する。
+  `set` 非対応なのでゲストから変数の追加・変更はできない。回帰 `tools/exec_psp_test.js`。
 - **EXEC ネストは 8 段**（`g_exec_stack[8]`）、**子 EXE は 256KB・最上位 EXE は 640KB 上限**。
   ✅ 2026-06-11 から子 EXE の上限は**ロードイメージ（MZ ヘッダ記載の header+body+reloc 表）に対して**適用 —
   実 DOS のローダ同様、ファイル末尾の付加データは読まない（FINALTY finmain.exe = 628KB 中ロード対象 138KB が

@@ -1213,15 +1213,16 @@ static void resolve_dir(const char *reldir, char *out, size_t cap) {
     }
 }
 
-/* DOS パス (seg:off) を /run 配下の host パスに解決する。
+/* /run 相対の正準形 rel_in ("dir/leaf") を host パスへ解決する (dos_path_to_host の後段。
+ * guest ポインタ起点と、C 文字列起点 (COMSPEC /C のコマンド解決) で共用)。
  * 戻り値 (呼び出し側で DOS error code に使う):
  *   0 = 末端まで実在 (= 既存ファイル)
  *   1 = 親までは実在、末端ファイルのみ欠 → file-not-found (AX=2)
  *   2 = 途中ディレクトリが欠 → path-not-found (AX=3)
  * いずれの場合も out には「作るならここ」という確定パスを書く (create 用)。 */
-static int dos_path_to_host(uint16_t seg, uint16_t off, char *out, size_t cap) {
+static int dos_rel_to_host(const char *rel_in, char *out, size_t cap) {
     char rel[192];
-    read_dos_rel(seg, off, rel, sizeof(rel));
+    snprintf(rel, sizeof(rel), "%s", rel_in);
 
     /* 末端コンポーネント (leaf) と親ディレクトリに分割 */
     char *slash = strrchr(rel, '/');
@@ -1250,6 +1251,45 @@ static int dos_path_to_host(uint16_t seg, uint16_t off, char *out, size_t cap) {
     if (!dir_exists) return 2;   /* path not found */
     if (!leaf_hit)   return 1;   /* file not found (親はある) */
     return 0;
+}
+
+/* DOS パス (seg:off) を /run 配下の host パスに解決する。戻り値は dos_rel_to_host と同じ。 */
+static int dos_path_to_host(uint16_t seg, uint16_t off, char *out, size_t cap) {
+    char rel[192];
+    read_dos_rel(seg, off, rel, sizeof(rel));
+    return dos_rel_to_host(rel, out, cap);
+}
+
+/* ASCII 大小無視の文字列一致 (strcasecmp 相当。<strings.h> 非依存)。 */
+static int ci_ascii_equal(const char *a, const char *b) {
+    while (*a && *b) {
+        if (tolower((unsigned char)*a++) != tolower((unsigned char)*b++)) return 0;
+    }
+    return *a == '\0' && *b == '\0';
+}
+
+/* C 文字列版 read_dos_rel: DOS パス表記 (drive letter・'\\'・DBCS) を /run 相対の正準形へ。
+ * ゲストメモリでなくホスト側で組んだ文字列 (COMSPEC /C のコマンドトークン) の解決用。 */
+static void cstr_dos_rel(const char *s, char *rel, size_t cap) {
+    if (s[0] && s[1] == ':') s += 2;             /* drive letter "X:" をスキップ */
+    char raw[256];
+    size_t n = 0;
+    while (*s && n + 2 < sizeof(raw)) {
+        uint8_t c = (uint8_t)*s++;
+        if (c == ' ') continue;
+        if (sjis_is_lead(c) && *s) { raw[n++] = (char)c; raw[n++] = *s++; continue; }
+        raw[n++] = (c == '\\') ? '/' : (char)c;
+    }
+    raw[n] = '\0';
+    int absolute = (raw[0] == '/');
+    const char *core = raw;
+    while (*core == '/') core++;
+    if (!absolute && g_cwd[0] != '\0') {
+        if (*core) snprintf(rel, cap, "%s/%s", g_cwd, core);
+        else       snprintf(rel, cap, "%s", g_cwd);
+    } else {
+        snprintf(rel, cap, "%s", core);
+    }
 }
 
 /* ---------------- ファイルハンドルテーブル ---------------- */
@@ -2331,32 +2371,108 @@ static void int21_4b_overlay(void) {
     CPU_FLAG &= ~C_FLAG;
 }
 
+/* ---- 合成 COMMAND.COM (COMSPEC /C 専用スタブ) ----
+ * 実ファイル A:\COMMAND.COM は置かない方針 (env の COMSPEC は存在チェック対策のみ) のまま、
+ * 「COMSPEC /C <cmd>」で子を起動するプログラム (TurboC 系 system() / SimK EXECTEST) を通す。
+ * EXEC 先が COMMAND.COM かつ tail が /C の時だけ、約 40byte の COM スタブを合成して通常の
+ * exec_load へ流す。実 DOS と同じく中間プロセスが立つ (独自 PSP・親子連鎖・終了コード 0 =
+ * 実 COMMAND.COM /C は子の終了コードを破棄する) ので、AH=62h の PSP 連鎖も AH=4Dh も忠実。
+ * スタブ: 自己縮小 (AH=4Ah, KEEP=0x40 para) → AX=4B00h で <cmd> を EXEC → AH=4Ch code=0。
+ * /C 無し (対話シェル) や <cmd> 解決失敗は従来どおり正直に失敗 (呼び出し側で CF=1 AX=2)。
+ * cmdtail は int21_4b_exec が組む先頭スペース込みの C 文字列。成功でスタブ長、負=不成立。 */
+static long build_comspec_stub(const char *cmdtail, uint8_t *out, size_t cap) {
+    const char *p = cmdtail;
+    while (*p == ' ' || *p == '\t') p++;
+    if (p[0] != '/' || (p[1] != 'C' && p[1] != 'c')) return -1;
+    p += 2;
+    while (*p == ' ' || *p == '\t') p++;
+    if (*p == '\0') return -1;
+    char prog[160];
+    size_t pl = 0;
+    while (*p && *p != ' ' && *p != '\t' && pl + 1 < sizeof(prog)) prog[pl++] = *p++;
+    prog[pl] = '\0';
+    if (*p == ' ') p++;                          /* 引数との区切り 1 個 (残りは生のまま渡す) */
+    const char *args = p;
+
+    /* <prog> を解決。拡張子無しなら実 COMMAND.COM 同様 .COM → .EXE を補完して実在を探す
+     * (.BAT と内部コマンドはスタブの射程外 = 不成立で正直に失敗)。 */
+    const char *leaf = strrchr(prog, '\\');
+    leaf = leaf ? leaf + 1 : prog;
+    int has_ext = (strchr(leaf, '.') != NULL);
+    char cand[172], rel[192], host[256];
+    int found = 0;
+    for (int i = has_ext ? 0 : 1; i < (has_ext ? 1 : 3); i++) {
+        static const char *sfx[3] = { "", ".COM", ".EXE" };
+        snprintf(cand, sizeof(cand), "%s%s", prog, sfx[i]);
+        cstr_dos_rel(cand, rel, sizeof(rel));
+        if (dos_rel_to_host(rel, host, sizeof(host)) == 0) { found = 1; break; }
+    }
+    if (!found) {
+        fprintf(stderr, "[int21h/4B] COMSPEC /C コマンド不在: \"%s\"\n", prog);
+        return -2;
+    }
+
+    static const uint8_t code[] = {
+        0xFA,                   /* cli */
+        0xBC, 0xFE, 0x03,       /* mov sp,03FEh (スタックを KEEP 内へ退避) */
+        0xFB,                   /* sti */
+        0xB4, 0x4A,             /* mov ah,4Ah */
+        0xBB, 0x40, 0x00,       /* mov bx,0040h (KEEP=1KB: PSP+コード+スタック) */
+        0xCD, 0x21,             /* int 21h (COM エントリの ES=PSP で自己縮小) */
+        0x8C, 0xC8,             /* mov ax,cs */
+        0xA3, 0x00, 0x00,       /* mov [pb+4],ax — tail far ptr の segment (実行時充填) */
+        0xB8, 0x00, 0x4B,       /* mov ax,4B00h */
+        0xBA, 0x00, 0x00,       /* mov dx,path */
+        0xBB, 0x00, 0x00,       /* mov bx,pb */
+        0xCD, 0x21,             /* int 21h (EXEC <cmd>) */
+        0xB8, 0x00, 0x4C,       /* mov ax,4C00h */
+        0xCD, 0x21,             /* int 21h */
+    };
+    size_t pb    = sizeof(code);                 /* パラメータブロック 14B: env=0/tail ptr/FCB×2 */
+    size_t path  = pb + 14;
+    size_t plen  = strlen(cand);
+    size_t tail  = path + plen + 1;
+    size_t alen  = strlen(args);
+    if (alen > 126) alen = 126;
+    size_t total = tail + 1 + alen + 1;
+    if (total > cap || 0x100 + total > 0x3E0) return -3;   /* KEEP 内・スタック手前に収める */
+    memset(out, 0, total);
+    memcpy(out, code, sizeof(code));
+    uint16_t pb_off = (uint16_t)(0x100 + pb), path_off = (uint16_t)(0x100 + path);
+    uint16_t tail_off = (uint16_t)(0x100 + tail);
+    out[15] = (uint8_t)(pb_off + 4); out[16] = (uint8_t)((pb_off + 4) >> 8);
+    out[21] = (uint8_t)path_off;     out[22] = (uint8_t)(path_off >> 8);
+    out[24] = (uint8_t)pb_off;       out[25] = (uint8_t)(pb_off >> 8);
+    out[pb + 2] = (uint8_t)tail_off; out[pb + 3] = (uint8_t)(tail_off >> 8);
+    /* env=0 (継承→build_child_env が argv[0] を <cmd> に正規化)、FCB ptr=null (tail から parse) */
+    memcpy(out + path, cand, plen);              /* ASCIZ (memset 済で終端 0) */
+    out[tail] = (uint8_t)alen;
+    memcpy(out + tail + 1, args, alen);
+    out[tail + 1 + alen] = 0x0D;
+    return (long)total;
+}
+
 static void int21_4b_exec(void) {
     if (CPU_AL == 0x03) { int21_4b_overlay(); return; }   /* Load Overlay */
-    if (CPU_AL != 0x00) {                 /* AL=01 (load & no exec) 等は未対応 */
+    int load_only = (CPU_AL == 0x01);     /* AL=01h: load & no-exec (debugger 契約) */
+    if (CPU_AL != 0x00 && !load_only) {   /* AL=02/04/05h 等は未対応 (04h は実 DOS も AX=1) */
         fprintf(stderr, "[int21h/4B] unsupported AL=%02X\n", (unsigned)CPU_AL);
         CPU_AX = 1; CPU_FLAG |= C_FLAG;
         return;
     }
 
-    /* 子パス (DS:DX の ASCIZ) を /run 配下に解決 */
-    char host[256];
-    int st = dos_path_to_host(CPU_DS, CPU_DX, host, sizeof(host));
-    if (st != 0) {
-        fprintf(stderr, "[int21h/4B] child not found (path-status %d): %s\n", st, host);
-        CPU_AX = 2; CPU_FLAG |= C_FLAG;   /* file not found */
-        return;
-    }
-
     /* パラメータブロック ES:BX:
      *   +0 = env segment (0 なら親 env 継承)
-     *   +2 = コマンドテイル far ptr (PSP[0x80] 形式: 長さ 1B + 文字列 + 0x0D) */
+     *   +2 = コマンドテイル far ptr (PSP[0x80] 形式: 長さ 1B + 文字列 + 0x0D)
+     * パス解決より先に読む (COMSPEC スタブ合成が cmdtail を必要とするため)。
+     * pb_lin は AL=01h の SS:SP/CS:IP 書き戻しでも使う。 */
+    uint32_t pb_lin = lin(CPU_ES, CPU_BX);
     uint16_t env_seg;
     uint32_t fcb1_lin = 0, fcb2_lin = 0;
     char cmdtail[128];
     cmdtail[0] = '\0';
     {
-        uint32_t pb = lin(CPU_ES, CPU_BX);
+        uint32_t pb = pb_lin;
         env_seg = peek16(pb + 0);
         uint16_t ct_off = peek16(pb + 2);
         uint16_t ct_seg = peek16(pb + 4);
@@ -2381,11 +2497,32 @@ static void int21_4b_exec(void) {
         if (f2_seg || f2_off) fcb2_lin = lin(f2_seg, f2_off);
     }
 
-    /* 子イメージを host から読む (MZ はヘッダ記載のロードイメージ分だけ。末尾付加データは
-     * 実 DOS 同様に読まない — read_child_image のコメント参照)。 */
+    /* 子パス (DS:DX の ASCIZ) を /run 配下に解決し、イメージを読む (MZ はヘッダ記載の
+     * ロードイメージ分だけ。末尾付加データは実 DOS 同様に読まない — read_child_image 参照)。
+     * 不在でも EXEC 先が COMMAND.COM で tail が /C なら合成スタブに差し替える (上記コメント)。 */
+    char host[256];
+    int st = dos_path_to_host(CPU_DS, CPU_DX, host, sizeof(host));
     static uint8_t childbuf[256 * 1024];
     uint32_t file_bytes = 0;
-    long rd = read_child_image(host, childbuf, sizeof(childbuf), &file_bytes);
+    long rd;
+    if (st != 0) {
+        const char *hleaf = host;
+        for (const char *q = host; *q; q++) if (*q == '/') hleaf = q + 1;
+        long sl = -1;
+        if (!load_only && ci_ascii_equal(hleaf, "COMMAND.COM"))
+            sl = build_comspec_stub(cmdtail, childbuf, sizeof(childbuf));
+        if (sl <= 0) {
+            fprintf(stderr, "[int21h/4B] child not found (path-status %d): %s\n", st, host);
+            CPU_AX = 2; CPU_FLAG |= C_FLAG;   /* file not found */
+            return;
+        }
+        fprintf(stderr, "[int21h/4B] COMSPEC /C → 合成 COMMAND.COM スタブ %ld bytes (tail=\"%s\")\n",
+                sl, cmdtail);
+        rd = sl;
+        file_bytes = (uint32_t)sl;
+    } else {
+        rd = read_child_image(host, childbuf, sizeof(childbuf), &file_bytes);
+    }
     if (rd == -1) { CPU_AX = 2; CPU_FLAG |= C_FLAG; return; }
     if (rd == -2) {
         fprintf(stderr, "[int21h/4B] child load image too large (>%zu) — 正直に失敗: %s\n",
@@ -2413,14 +2550,27 @@ static void int21_4b_exec(void) {
         fprintf(stderr, "[int21h/4B] fcb1 drv=%d name=\"%.8s\" ext=\"%.3s\"\n",
                 (int)peek8(fcb1_lin), (char *)&mem[fcb1_lin + 1], (char *)&mem[fcb1_lin + 9]);
 
-    /* 親常駐のまま子を上にロードして CPU を子へ切替える (base=basename は SFT note 用、
-     * rel=/run 相対フルパスは argv[0] 用)。 */
+    /* 親常駐のまま子を上にロード (base=basename は SFT note 用、rel=/run 相対フルパスは
+     * argv[0] 用)。AL=00h は CPU を子へ切替、AL=01h は init_regs に初期値を受けるだけ。 */
+    uint16_t init_regs[4];
     int r = qb_dos_exec_load(childbuf, sz, file_bytes, cmdtail, env_seg, base, rel,
-                             fcb1_lin, fcb2_lin);
+                             fcb1_lin, fcb2_lin, load_only ? init_regs : NULL);
     if (r != 0) {
         fprintf(stderr, "[int21h/4B] exec_load failed r=%d\n", r);
         CPU_AX = (r == -10 || r == -11) ? 8 : 0x0B;   /* -10=メモリ不足/-11=ネスト過多(8), 他=書式不正(11) */
         CPU_FLAG |= C_FLAG;
+        return;
+    }
+
+    if (load_only) {
+        /* AL=01h: パラメータブロックへ子の初期レジスタを書き戻して呼び出し元へ返る
+         * (RBIL: +0Eh=SP,+10h=SS,+12h=IP,+14h=CS)。current PSP は exec_load 内で子へ
+         * 切替済 (呼び出し元が AH=62h で読み、AH=50h で親へ戻す debugger 契約)。 */
+        poke16(pb_lin + 0x0E, init_regs[1]);   /* SP */
+        poke16(pb_lin + 0x10, init_regs[0]);   /* SS */
+        poke16(pb_lin + 0x12, init_regs[3]);   /* IP */
+        poke16(pb_lin + 0x14, init_regs[2]);   /* CS */
+        CPU_FLAG &= ~C_FLAG;
         return;
     }
 
@@ -2447,6 +2597,14 @@ static void int21_4d_retcode(void) {
     CPU_AX = qb_dos_exec_last_code();
     CPU_FLAG &= ~C_FLAG;
 }
+
+/* AH=50h Set PSP / AH=51h・62h Get PSP (BX)。62h は 51h の documented 版で同一機能。
+ * SimK 氏 EXECTEST で顕在化: 62h 未実装だと BX=0 のまま返り、子が ES=0 (IVT) を自分の
+ * PSP と誤読 → 0000:0080 の割り込みベクタ列を command tail として表示し、高ビットの
+ * バイト対が SJIS 解釈されて画面が漢字化けする。50h は 4B01h load-only とペアで
+ * debugger/TSR が「実行中プロセス」を差し替える契約。 */
+static void int21_50_set_psp(void) { qb_dos_set_cur_psp(CPU_BX); CPU_FLAG &= ~C_FLAG; }
+static void int21_51_get_psp(void) { CPU_BX = qb_dos_cur_psp(); CPU_FLAG &= ~C_FLAG; }
 
 static void int21_4e_findfirst(void) {
     char rel[192];
@@ -2902,8 +3060,11 @@ void qb_dos_int21_dispatch(void) {
     case 0x4D: int21_4d_retcode();      break;
     case 0x4E: int21_4e_findfirst(); break;
     case 0x4F: int21_4f_findnext();  break;
+    case 0x50: int21_50_set_psp();   break;
+    case 0x51: int21_51_get_psp();   break;
     case 0x52: int21_52_list_of_lists(); break;
     case 0x58: int21_58_alloc_strategy(); break;
+    case 0x62: int21_51_get_psp();   break;   /* 62h = 51h の documented 版 */
     case 0x63: int21_63_dbcs(); break;
     default:
         fprintf(stderr, "[int21h] UNIMPL AH=%02X (AX=%04X CS:IP=%04X:%04X)\n",

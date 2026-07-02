@@ -121,6 +121,7 @@ static int g_prog_shrunk = 0;
  * EXEC した子プロセス = アリーナ内のブロック。48h の所有者印字に使う。 */
 static uint16_t g_cur_psp = QB_DOS_LOAD_SEG;
 uint16_t qb_dos_cur_psp(void) { return g_cur_psp; }
+void qb_dos_set_cur_psp(uint16_t psp) { g_cur_psp = psp; }
 
 /* ---- MCB フィールドアクセス ---- */
 static uint8_t  mcb_sig(uint16_t s)   { return mem[(uint32_t)s << 4]; }
@@ -1751,7 +1752,7 @@ static const char *build_one_fcb(uint32_t fcb_base, const char *p) {
 int qb_dos_exec_load(const uint8_t *image, size_t size, uint32_t file_bytes,
                      const char *cmdtail, uint16_t env_seg,
                      const char *child_name, const char *child_path,
-                     uint32_t fcb1_lin, uint32_t fcb2_lin) {
+                     uint32_t fcb1_lin, uint32_t fcb2_lin, uint16_t *out_init) {
     if (!image || size < 2) return -1;
     /* EXEC ネスト過多はここ (確保・状態変更の前) で正直に弾く。これより後で気付くと
      * 割り当て済みの子ブロック/env がリークし、「親復帰なしのまま子を走らせる」と子の終了時に
@@ -1890,6 +1891,39 @@ int qb_dos_exec_load(const uint8_t *image, size_t size, uint32_t file_bytes,
         const char *p = cmdtail ? cmdtail : "";
         p = build_one_fcb(pbase + 0x5C, p);   /* 第1トークン → FCB1 */
         build_one_fcb(pbase + 0x6C, p);       /* 第2トークン → FCB2 */
+    }
+
+    /* ---- AL=01h load-only: CPU は切り替えず初期レジスタ値だけ返す ----
+     * 実 DOS の EXEC AL=01h (debugger 用): 子 PSP+イメージを構築し、パラメータブロックへ
+     * 初期 SS:SP / CS:IP を書き戻して呼び出し元へ戻る。current PSP は子に切り替わる
+     * (EXECTEST の AH=62h 読みと np21w 実行結果で確認)。子はこの経路では「終了」しない
+     * (呼び出し元が自前で走らせるか AH=49h で解放する) ので親復帰フレームは積まない。
+     * 実 DOS 同様、子スタックの頭に「子へ渡すはずだった AX 値」を 1 word 積む
+     * (COM は通常の 0000 リターン word の上に載り SP=FFFC — np21w と一致)。 */
+    if (out_init) {
+        uint16_t i_ss, i_sp, i_cs, i_ip;
+        if (is_exe) {
+            i_cs = (uint16_t)(child_img + e_cs); i_ip = e_ip;
+            i_ss = (uint16_t)(child_img + e_ss); i_sp = e_sp;
+        } else {
+            uint16_t com_sp = (free_sz >= 0x1000)
+                                ? 0xFFFE
+                                : (uint16_t)(((uint32_t)free_sz << 4) - 2);
+            uint32_t splin = ((uint32_t)child_psp << 4) + com_sp;
+            mem[splin] = 0; mem[splin + 1] = 0;         /* near RET → PSP:0000 = INT 20h */
+            i_cs = child_psp; i_ip = 0x0100;
+            i_ss = child_psp; i_sp = com_sp;
+        }
+        i_sp -= 2;
+        poke16(((uint32_t)i_ss << 4) + i_sp, 0);        /* AX 初期値 (FCB drive 有効 = 0000) */
+        out_init[0] = i_ss; out_init[1] = i_sp;
+        out_init[2] = i_cs; out_init[3] = i_ip;
+        g_cur_psp = child_psp;                          /* 親 DTA は据え置き (呼び元が 50h で戻す) */
+        qb_dos_sft_note_load(child_name, file_bytes ? file_bytes : (uint32_t)size);
+        fprintf(stderr,
+                "[dos_exec] load-only (AL=01) @ PSP=%04X entry=%04X:%04X SS:SP=%04X:%04X\n",
+                child_psp, i_cs, i_ip, i_ss, i_sp);
+        return 0;
     }
 
     /* ---- 段階2: 親コンテキストを退避 (子終了でここへ戻る) ----

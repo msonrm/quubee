@@ -177,11 +177,15 @@ void qb_dos_sft_note_load(const char *name, uint32_t file_bytes);
  *   (Super Depth の depth.exe) のため。
  * fcb1_lin/fcb2_lin=EXEC パラメータブロックの FCB1/FCB2 linear addr (0=複写しない)。
  *   子 PSP の 0x5C/0x6C へ 16B 複写する (親が AH=29h で組んだ FCB を子へ渡す経路)。
+ * out_init=NULL なら通常 EXEC (AL=00: CPU を子へ切替)。非 NULL なら AL=01h load-only:
+ *   CPU は切り替えず out_init[0..3] = SS,SP,CS,IP (子の初期値) を返す。実 DOS 同様
+ *   current PSP は子に切り替わる (呼び出し元が AH=50h で親へ戻す契約) が、親復帰フレームは
+ *   積まない (子はこの経路では終了しない — 呼び出し元 debugger が自前で走らせ/解放する)。
  * 戻り値 0=成功、<0=失敗。 */
 int qb_dos_exec_load(const uint8_t *image, size_t size, uint32_t file_bytes,
                      const char *cmdtail, uint16_t env_seg,
                      const char *child_name, const char *child_path,
-                     uint32_t fcb1_lin, uint32_t fcb2_lin);
+                     uint32_t fcb1_lin, uint32_t fcb2_lin, uint16_t *out_init);
 
 /* AH=4Bh AL=03h Load Overlay。子イメージを呼び出し元が指定した load_seg:0000 にロードし、
  * EXE の relocation は reloc_factor を各セグメントワードに加算して適用する。AL=00 と違い PSP は
@@ -198,6 +202,11 @@ int qb_dos_signal_tsr(uint16_t keep_paras, int code);
 
 /* 現在実行中プロセスの PSP segment (AH=4Ah の self-shrink 判定に使う)。 */
 uint16_t qb_dos_cur_psp(void);
+
+/* 現プロセス PSP の差し替え (INT 21h AH=50h Set PSP)。TSR や AH=4Bh AL=01h load-only の
+ * 呼び出し元が「実行中プロセス」を切り替える実 DOS の契約。以後の AH=48h 確保の所有者・
+ * free-on-terminate がこの PSP 基準になる。 */
+void qb_dos_set_cur_psp(uint16_t psp);
 
 /* INT 21h ディスパッチャ (0xFEE10 で biosfunc から呼ばれる)。常に 1 を返す。 */
 int qb_dos_int21_hook(void);

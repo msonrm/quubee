@@ -1,5 +1,46 @@
 # CHANGELOG
 
+## [EXEC の穴 3 点を根治 — AH=62h/51h/50h (PSP) + 4B01h load-only + COMSPEC /C 合成スタブ] — 2026-07-02
+
+### 背景
+SimK 氏 (Neko Project 21/W 開発者) 提供の EXECTEST.COM (DOS 子プロセステスト第3弾、
+np21w 実行結果スクリーンショット 8 枚付き)。X 上のスクショで「テスト1 (EXEC 継承 env) の
+command tail / env strings が漢字化けする」様子が示された。headless ランナー
+(`tools/exectest_run.js`) で完全再現。
+
+### 真因 (文字化け)
+**INT 21h AH=62h (Get Current PSP) が未実装** で BX=0 のまま返る → 子が `mov es, bx` で
+ES=0 (IVT) を自分の PSP と誤読 → command tail として 0000:0080h (INT 20h〜27h の割り込み
+ベクタ列) を表示 → 高ビット付きバイト対が SJIS 解釈されて漢字化け。env セグメントも
+0:2Ch のベクタ値をセグメントに機械語をダンプしていた。親側の「Parent PSP: 0000」も同根。
+
+### 修正 (native/dos_int21.c + dos_loader.c)
+1. **AH=62h / 51h (Get PSP) + AH=50h (Set PSP)** — 既存の `g_cur_psp` を BX で往復する
+   だけ (`qb_dos_set_cur_psp` 新設)。これだけで化けは根治。
+2. **AX=4B01h (load but do not execute、debugger 契約)** — `qb_dos_exec_load` に
+   load-only モードを追加 (`out_init` 引数)。子 PSP+イメージ+env を通常どおり構築するが
+   CPU は切り替えず、パラメータブロック +0Eh..+15h に初期 SP/SS/IP/CS を書き戻す。
+   current PSP は実 DOS 同様子へ切替 (呼び出し元が AH=50h で戻す)。COM は「AX 初期値
+   word」を通常の 0000 リターン word の上に積むので **SP=FFFC (np21w と一致)**。
+   親復帰フレームは積まない (この経路の子は 4Ch を通らない)。
+3. **COMSPEC /C (合成 COMMAND.COM スタブ)** — 実ファイル A:\COMMAND.COM を置かない方針は
+   維持したまま、EXEC 先 basename=COMMAND.COM かつ tail=`/C <cmd>` の時だけ約 40byte の
+   COM スタブ (自己縮小 AH=4Ah → AX=4B00h で `<cmd>` EXEC → AH=4Ch code=0) を合成して
+   通常の exec_load に流す (`build_comspec_stub`)。実 DOS と同じく中間プロセスが立つので
+   PSP 連鎖も「/C は子の終了コードを破棄して 0」(AH=4Dh=0000) も忠実。`<cmd>` の拡張子
+   無しは .COM → .EXE 補完。TurboC 系 `system()` がこの経路なので実ソフト互換にも効く。
+   `/C` 無し・.bat・内部コマンドは従来どおり正直に失敗 (AX=2)。
+   付随: `dos_path_to_host` を `dos_rel_to_host` (C 文字列起点) と分割、`cstr_dos_rel` 新設。
+
+### 検証
+- EXECTEST 全 7 テストが np21w 実行結果と同型に (文字化け解消・PSP 連鎖・カスタム env 伝播・
+  4B01h の SS:SP=FFFC / CS:IP=PSP:0100・overlay バイト列完全一致・4B04h=AX=1・COMSPEC /C
+  終了コード 0)。残る差異は DOS version (05.00 vs 6.20) と PSP 実値のみ (環境差で正当)。
+- 新規回帰 `tools/exec_psp_test.js` (12 項目: 62h/51h/50h・4B01h 書き戻し・PSP 切替/復元・
+  COMSPEC /C で孫が実走 (MARK.TXT)・終了コード破棄)。EXECTEST 突合は `tools/exectest_run.js`。
+- 既存回帰 20 本 (exec_env / exe_maxalloc / batch 21 / batscript 55 / touhou 4/4 / stdin 系 /
+  intdc 系 / xms / int27 ほか) 全 PASS。
+
 ## [QuickBASIC 製アプリの ERR=5 を根治 — GDC ハードウェアカーソルを tty に追従 + AH=38h 国別情報] — 2026-07-02
 
 ### 背景
