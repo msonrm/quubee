@@ -197,6 +197,7 @@ set(EXPORTED_FUNCTIONS
     _np2kai_debug_get_textdisp
     _np2kai_debug_get_grphdisp
     _np2kai_debug_get_gdc_para
+    _np2kai_debug_get_palette
     _np2kai_debug_rtc_bcd
     _np2kai_debug_int21_count
     _np2kai_debug_int21_reset

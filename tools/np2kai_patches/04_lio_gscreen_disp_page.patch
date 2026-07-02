@@ -1,0 +1,18 @@
+diff --git a/lio/gscreen.c b/lio/gscreen.c
+index c65d4df..5a20ea3 100755
+--- a/lio/gscreen.c
++++ b/lio/gscreen.c
+@@ -200,7 +200,12 @@ REG8 lio_gscreen(GLIO lio) {
+ 			mode = 0xc0;
+ 			break;
+ 	}
+-	mode |= disp << 4;
++	/* 表示ページは lio->work.disp を使う。ローカル disp は省略指定 (0xFF) のとき
++	 * 0xFF のままここへ到達し、mode の bit4 が 1 になって表示ページが勝手に 1 へ
++	 * 切り替わってしまう (GSCREEN(mode,sw,act) と disp 省略で呼ぶ MIMPI 等で、
++	 * page0 に描いた絵が表示されず真っ黒になる)。disp 指定時は上の else 分岐で
++	 * lio->work.disp に正規化済みなので、常に work.disp が正しい現在値。 */
++	mode |= (UINT8)((lio->work.disp & 1) << 4);
+ 	bios0x18_42(mode);
+ 	iocore_out8(0x00a6, lio->work.access);
+ 	MEMR_WRITES(CPU_DS, 0x0620, &lio->work, sizeof(lio->work));

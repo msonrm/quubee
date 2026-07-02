@@ -1779,10 +1779,21 @@ async function makeWorkerEmu() {
         runButton.blur();            // Enter で Run が再 click されないよう focus を外す
         const userArgs = runCmdline.value;
         try {
-            // MIDI ドライバ (MIDDRV 等) を使うレシピなら、staging 前に soundfont を遅延ロードして
-            // VERMOUTH を構築する。直後の runStaged 内 reset でシリアル→VERMOUTH が結線される。
-            // 失敗しても続行 (= FM/BEEP 経路でそのまま起動、無音にはならない)。
-            if (selectedRecipe && qbBatScript.usesMidi(selectedRecipe.recipe)) {
+            // MIDI ドライバ (MIDDRV 等) を使うレシピ、または MIDI 曲データが投入されていれば、
+            // staging 前に soundfont を遅延ロードして合成器を構築する。直後の runStaged 内
+            // reset でシリアル/MPU98II が結線される。失敗しても続行 (= FM/BEEP 経路でそのまま
+            // 起動、無音にはならない)。
+            // 拡張子ヒューリスティック: MPU-PC98 を直接叩くプレイヤー (MIMPI 等) は起動時の
+            // 音源自動判別で 0xE0D0 を探すため、その時点で MPU が attach 済みでないと BEEP へ
+            // フォールバックしてしまう。「MIDI でしか鳴らない曲データ形式」(SMF とレコンポーザ系)
+            // が /run に居ればほぼ確実に MIDI 用途なので先に有効化する。.sng (ミュージ郎) /
+            // .std/.mff (SMF 別名) / .seq 等は他ドライバ・他用途と衝突しうるので保留 —
+            // 誤検知は「そのセッションだけ MPU 常時 attach」と同じ副作用 (自動判別ソフトの
+            // 音源選択が変わりうる) を持つため、確実な形式に絞る。ソフト単体で起動して後から
+            // MIDI ファイルを読む型 (曲データ非同梱) はこの判定では救えない (既知の限界)。
+            const midiSongRe = /\.(mid|rcp|r36|mcp)$/i;
+            if ((selectedRecipe && qbBatScript.usesMidi(selectedRecipe.recipe))
+                || loadedEntries.some((e) => midiSongRe.test(e.name))) {
                 const ok = await ensureMidiLoaded();
                 if (!ok) runStatusEl.textContent = 'MIDI setup failed — launching without MIDI';
             }

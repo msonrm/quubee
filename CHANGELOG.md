@@ -1,5 +1,46 @@
 # CHANGELOG
 
+## [MIMPI (MIDI プレイヤー) 調査 — LIO 表示ページバグ根治 + ディレクトリ open 拒否] — 2026-07-03
+
+### 背景
+ユーザー報告: MIMPI v3.8 (`mimpiv38.lzh`、1995・斎藤氏の定番 MIDI プレイヤー) が
+①引数なし起動でエラー ②MIDI ファイル指定で BEEP 演奏 ③背景 (10Ch ミキサー画面) が
+ほぼ真っ黒。ad-hoc ランナー (`run_mimpi.js`、scratchpad) で 3 症状とも headless 再現。
+
+### 真因と根治 (2 件)
+1. **背景真っ黒 = NP2kai 本体 `lio/gscreen.c` のバグ** (patch 04 で根治)。
+   MIMPI は N88-BASIC の LIO (INT A0h〜) でグラフィック初期化・描画する。`lio_gscreen` は
+   disp パラメータ省略 (0xFF) 時にローカル変数 0xFF をそのまま `mode |= disp << 4` に流し、
+   bit4=1 で `bios0x18_42` が**表示ページを勝手に 1 へ切替える** (MIMPI は page0 に描くので
+   空の page1 = 真っ黒が表示される)。最後の「グラフ表示 ON」呼び出し (`GSCREEN(mode=ff,
+   sw=00, disp=ff)`) で発火。`lio->work.disp` (正規化済み保持値) を使うよう修正
+   → VU メーター + フェーダーのミキサー画面がフル表示。
+2. **引数なし "Out of memory !" = ディレクトリ open の偽成功** (dos_int21.c で根治)。
+   引数なし時 MIMPI は空ファイル名を open する。実 DOS はエラーだが、MEMFS の fopen は
+   ディレクトリ ("" → /run/) でも成功し handle を返していた → MIMPI が seek end の異常
+   サイズで曲バッファ確保 → "Out of memory !"。`dos_open_common` に fs_stat + S_ISDIR
+   検査を追加し実 DOS どおり error 5 (access denied) → MIMPI 本来の
+   **"Song file does not exist."** 表示に (嘘の成功より正直な失敗の実例)。
+
+### ③BEEP 演奏 → MIDI 拡張子ヒューリスティックで解決 (ユーザー判断)
+真因は「MIMPI の音源自動判別 (MPU-PC98→Sound Blaster→FM→BEEP) の時点で MPU-PC98
+(0xE0D0) が未 attach」(MIDI は soundfont 遅延ロード方式のため)。`enable_midi_now` を
+先に呼ぶ headless 実験では **I/F = MPU と検出され MPU 経由で演奏**を確認済み。
+方針は「常時 attach + アクセス検知遅延ロード」と比較の上、**拡張子ヒューリスティック**を
+採用 (ユーザー判断 2026-07-03): Run 時に「MIDI でしか鳴らない曲データ形式」
+(.mid/.rcp/.r36/.mcp = SMF + レコンポーザ系) が /run に居れば ensureMidiLoaded を先に呼ぶ
+(bridge.js)。.sng/.std/.mff 等は他用途と衝突しうるので保留。誤検知 = そのセッションだけ
+MPU 常時 attach と同じ副作用を持つため確実な形式に絞った。常時 attach は「拡張子で見えない
+MIDI ソフト」に実際に遭遇してから再検討 (EMS 据え置きと同じ需要実在主義)。
+既知の限界: ソフト単体起動 → 後から MIDI ファイルを読む型 (曲データ非同梱) は救えない。
+
+### 検証
+- `run_mimpi.js` 3 モード (noargs / mid / mid-midi) で before/after 突合。
+- 既存回帰 30 本 PASS (touhou 4/4・exec_psp・conwork・stdin 系・batch 21・fmp 3/3・
+  lines30・mpu_midi・xms ほか) = 回帰ゼロ。
+- デバッグ手段として `np2kai_debug_get_palette` (analog/degpal/anapal/表示・アクセスページ)
+  を bridge.c に追加 (恒久デバッグ API)。
+
 ## [CON ワークエリアの残りスロット live 化 + AH=02h/06h/09h の AL 戻り値] — 2026-07-03
 
 ### 背景

@@ -95,6 +95,13 @@
     埋めて PSP ブロックの拡大を阻害し破綻した＝GOGGLE-II の真因）。**UMB リンク状態（AL=02/03）は持たないので「無し・成功」**
     を返す（2026-06-07、GBOX United モードの AX=5803h 対策）。UMB（上位メモリブロック）の実体は無い。
 
+11-a. **ディレクトリの open は実 DOS どおり失敗する（✅ 2026-07-03）** — MEMFS の `fopen` は
+    ディレクトリでも成功して FILE* を返すため、AH=3Dh/3Ch がディレクトリ（空ファイル名が
+    カレントに解決されるケース含む）に偽ハンドルを返していた。呼び手は seek end の異常サイズで
+    確保を試みる等の遠隔誤動作になる（MIMPI 引数なし起動の "Out of memory !" が実例。根治後は
+    本来の "Song file does not exist." 表示）。`dos_open_common` で `fs_stat` + `S_ISDIR` を
+    検査し error 5 (access denied) を返す。
+
 11. **パス解決が `.`/`..` を畳まない（CHDIR とは非対称）** — `read_dos_rel`/`resolve_dir`（open/create/
     delete/exec/findfirst が通る）は `\`→`/`・大小無視・カレント前置はするが `.`/`..` を正規化しない。一方
     `AH=3Bh CHDIR` は `..` を畳む。実害は限定的: `..` は MEMFS のホスト解決で自然に親へ落ちるので**展開ツリー内の

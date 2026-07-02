@@ -368,6 +368,26 @@ uint32_t np2kai_debug_get_gdc_para(np2kai_handle h, int which, int index) {
 	return (uint32_t)(which ? gdc.s.para[index] : gdc.m.para[index]);
 }
 
+/* GDC パレット状態を読む (真っ黒画面の切り分け用)。
+ * kind 0: gdc.analog (bit0=16色アナログモード) / 1: degpal[idx] (デジタル 8 色, idx 0-3)
+ * 2: anapal[idx] を 00RRGGBB で (idx 0-15) / 3: palnum */
+uint32_t np2kai_debug_get_palette(np2kai_handle h, int kind, int idx) {
+	if (!h) return 0;
+	switch (kind) {
+	case 0: return (uint32_t)gdc.analog;
+	case 1: return (idx >= 0 && idx < 4) ? (uint32_t)gdc.degpal[idx] : 0;
+	case 2: if (idx < 0 || idx > 15) return 0;
+	        return ((uint32_t)gdc.anapal[idx].p.r << 16) |
+	               ((uint32_t)gdc.anapal[idx].p.g << 8) |
+	               (uint32_t)gdc.anapal[idx].p.b;
+	case 3: return (uint32_t)gdc.palnum;
+	case 4: return (uint32_t)gdcs.disp;      /* 表示ページ (0/1) */
+	case 5: return (uint32_t)gdc.mode2;      /* port 0x6A モードFF2 */
+	case 6: return (uint32_t)gdcs.access;    /* 描画 (CPU アクセス) ページ */
+	}
+	return 0;
+}
+
 /* PC-98 RTC (μPD4990A) が「いま返す」日付 BCD を読む (Y2K クランプ検証用)。
  * idx 0=年(BCD 下2桁) 1=(月<<4|曜) 2=日 3=時 4=分 5=秒。年が 0x99 等 (<0xA0) なら 2 桁で健全。 */
 extern void calendar_getvir(UINT8 *bcd);

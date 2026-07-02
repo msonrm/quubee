@@ -1885,6 +1885,18 @@ static void int21_35_get_vec(void) {
 static int dos_open_common(const char *mode_str) {
     char host[256];
     int st = dos_path_to_host(CPU_DS, CPU_DX, host, sizeof(host));
+    /* ディレクトリは実 DOS 同様 open できない (error 5 = access denied)。
+     * MEMFS の fopen はディレクトリでも成功してしまうので先に弾く。空のファイル名も
+     * ここに落ちる (host がディレクトリ自身に解決される)。偽の成功を返すと、呼び手が
+     * seek end のサイズで確保を試みる等の遠隔誤動作になる (MIMPI 引数なしの
+     * "Out of memory !" が実例)。 */
+    {
+        struct stat sb;
+        if (fs_stat(host, &sb) == 0 && S_ISDIR(sb.st_mode)) {
+            fprintf(stderr, "[int21h/open] %s is a directory → error 5 (access denied)\n", host);
+            return -5;
+        }
+    }
     FILE *fp = fs_fopen(host, mode_str);
     if (!fp) {
         fprintf(stderr, "[int21h/open] fopen(%s, \"%s\") failed (path-status %d)\n",
