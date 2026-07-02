@@ -29,7 +29,7 @@
 
 1. **ファイルハンドル = ホスト `FILE*`（DOS の SFT ではない）**
    - 45h DUP / 46h DUP2 が**ファイルポインタを共有しない**（同 path/mode で開き直して seek する独立ハンドル）。read 用途では実用上等価だが、dup 後の interleaved seek/read は乖離。
-   - **stdin(ハンドル0)からの 3Fh Read が "invalid handle"**（`fh_get(0)`=NULL）。実 DOS はキーボードを読む。AH=0Ah 経由なら可。
+   - ~~**stdin(ハンドル0)からの 3Fh Read が "invalid handle"**（`fh_get(0)`=NULL）。実 DOS はキーボードを読む。AH=0Ah 経由なら可。~~ → ✅ 2026-06-30 実装（handle 0 を CON の cooked 行入力に分岐 — Enter まで待って「行 + CR LF」を返す・BS 行編集・エコー付き。TurboC の getchar/scanf/gets が動く）。✅ 2026-07-02 さらに実 DOS の行持ち越しへ是正（takapyu 氏実機指摘）: **CX の大小はブロックに関係せず CX=1 でも Enter まで戻らない**。行はホスト側行バッファ（255+CR LF）に組み立て、CX で読み切れない分は次回 read が待たずに受け取る（getchar 型の 1 バイト読みは行を 1 バイトずつ配る形）。BS の SJIS 全角は行頭からのパリティ走査で文字境界を確定して 2 バイト消す（AH=0Ah の BS も同ヘルパ）。回帰 `tools/stdin_read_test.js` / `stdin_partial_line_test.js` / `stdin_cx1_test.js`。✅ 2026-07-02 **raw(binary) モードも実装**: IOCTL AX=4401h の bit5 (0x20) を実際に保持（AX=4400h が反映して返す・実 DOS 同様 DH≠0 はエラー）。raw の read はエコー無し・行編集無し・CR LF 変換無しで **CX バイトそろい次第返る**（CX=1 なら 1 キーごとに即返し）。takapyu 氏提供の NORMAL.COM / RAWMODE.COM（実バイナリ）で両モードとも実機挙動一致を確認。残る差異: Ctrl-C/Ctrl-Z 特別扱いなし・raw フラグは CON 全体で 1 本（handle 0/1/2 共有 = 実 DOS の SFT 単位と同じ実効）。
    - ~~**EXEC 子の終了時にハンドルを閉じない**＋ハンドル表 `g_fh` がプロセス間共有 → ランチャ往復でハンドル枯渇~~ → ✅ 2026-06-02 修正（子が開いたハンドルだけ子終了で close。TSR は常駐なので閉じない）。
 
 2. **カレントドライブ/ディレクトリ** — 19h は常に A:(=0)。ドライブレターは剥がして `/run` に集約するので、**A:/B: を別ボリュームとして使う2枚組ゲームは両者が混ざる**。CHDIR は ✅ 実装したが「ドライブ」は依然 1 つ（`g_cwd` で論理カレントを保持）。

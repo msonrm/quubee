@@ -1,5 +1,56 @@
 # CHANGELOG
 
+## [AH=3Fh cooked stdin を実 DOS の行持ち越しへ是正 — CX=1 即返し退行の根治 + SJIS BS パリティ走査] — 2026-07-02
+
+### 背景
+takapyu 氏より実機指摘: 「int 21h ah=3fh bx=0 で文字入力がない場合でも戻ってきてしまっている。
+通常は Enter が押されないと戻らない。RAW モードでは CX の文字数分入力されると戻る」。
+b201609 (2026-06-30 の 3 点修正) の ③ `want<2 → AX=0 即返し` がこの退行の正体 — CX=1 の
+getchar 型読みが入力ゼロで即座に戻っていた。併せて同コミット ② の SJIS BS 判定にも
+コードレビューで誤爆バグを検出していた (同日発見・本コミットで同時根治)。
+
+### 実 DOS の cooked read 契約 (今回の是正点)
+- **CX の大小はブロックに関係しない**: CX=1 でも Enter が押されるまで戻らない。
+- **行持ち越し**: 行 + CR LF のうち CX バイトだけ返し、残りは次回 read が**待たずに**受け取る
+  (getchar のような CX=1 連続読みは「確定した行を 1 バイトずつ配る」形になる)。
+- raw モードは CX 文字たまり次第返る仕様だが、raw へ切り替える IOCTL AL=01h ごと未対応 = cooked 固定
+  (従来どおり。docs/dos_hle_gaps.md に明記)。
+
+### 修正 (native/dos_int21.c)
+- `int21_3f_read_stdin` を再設計: 行を**ホスト側バッファ** `g_con_line[258]` (255 文字 + CR LF) に
+  組み立て (旧実装はゲストの dst へ直接 poke していたため CX が行長を制約 = want<2 問題の根)、
+  Enter で確定後 `g_con_pend_pos/len` の持ち越しから `con3f_deliver` が min(CX, 残り) を配布。
+  持ち越しが残っていれば次回 read は待たずに配布のみ。CX=0 は AX=0 即返し (実 DOS 同様)。
+- **BS の SJIS 判定を行頭からのパリティ走査へ** (`line_last_char_len`): 旧 ② の「`dst[len-2]` が
+  リード範囲なら del=2」は SJIS **トレイル (0x40-0xFC) がリード範囲 0x81-0x9F/0xE0-0xFC と重なる**ため
+  誤爆する (「画」89 E6 + 'a' の BS が 'a'+トレイルの 2 バイト消しになり孤立リード残留)。走査で
+  最終文字の開始位置を確定し 1 文字 (1 or 2 バイト) だけ消す。
+- **AH=0Ah の BS も同ヘルパに統一** (従来 del=1 固定 = 漢字 BS で孤立リードが残る逆問題)。
+  0Ah に拡張キー NUL skip も追加 (b201609 の「0Ah は別処理」は事実誤認で、NUL を行に書いていた)。
+- `qb_dos_tty_reset` の入力系クリアを新状態 (`g_con_*`) へ更新 (前 image の途中行/読み残しを持ち越さない)。
+
+### 追補 (同日): raw (binary) モードも実装 — takapyu 氏提供テストバイナリで両モード検証
+氏より検証素材 `games/stdin.zip` (NORMAL.COM / RAWMODE.COM + ソース) を受領。RAWMODE.COM は
+IOCTL AX=4400h→DL|=20h→AX=4401h で CON を raw 化して 1 バイト読みループする。従来の AL=01h は
+「no-op で成功」を返す偽装 ([[feedback_hle_honest_failure]] の懸念パターン) で、raw が効かないまま
+cooked (Enter 待ち) で動いていた。実装:
+- `g_con_raw` フラグ: AX=4401h (h=0-2、bit5) で切替、AX=4400h が `0x80D3|0x20` で反映、
+  実 DOS 同様 DH≠0 はエラー (AX=1)。image 起動ごとに cooked へリセット。
+- raw の read: **エコー無し・行編集無し・CR LF 変換無しで CX バイトそろい次第返る**
+  (氏の記述どおり。CX=1 なら 1 キーごとに即返し)。cooked の行バッファ/持ち越しとは独立。
+- 検証: **実バイナリ NORMAL.COM = 'a'+Enter → 61/0D/0A、'q' で終了 (cooked の行持ち越しが
+  実機一致)** / **実バイナリ RAWMODE.COM = 'a' キーのみで即 61 (エコー無し)、'q' で終了**。
+
+### 検証
+- 新規 `tools/stdin_cx1_test.js` 12/12: ①CX=1 は Enter まで戻らない (sentinel + 非終了をアサート =
+  「戻らないこと」自体をテスト) ②行 "AB"+CR LF を 1 バイトずつ AX=1 で配布 ③3Fh の BS が
+  「画」+'a' で 'a' だけ消す ④0Ah の BS×2 が 'a'→「画」(2 バイト) の順に消す ⑤raw: 4401h bit5 が
+  4400h に反映 (0x80F3)・Enter 無しで 1 キーごとに即受領 (RAWMODE.COM と同シーケンスの合成 COM)。
+- 既存回帰 17 本 PASS: stdin_read / stdin_partial_line / dev_info / worktest_cursor / intdc_screen /
+  intdc_cursor / esc_seq / graph_mode / sgr / csi_priv / batch(21) / batscript(55) / exe_maxalloc /
+  ime_inject / vz / vz_cursor / jed_cursor。touhou 4/4。bio100 triage --fresh ベースライン一致
+  (ALIVE21/RENDER4/BOOT3/WAIT2/EXIT0/CRASH0/BUSY1)。
+
 ## [PMD memo 文字化け2件を修正 — 区9 2バイト半角文字 / ANSI エスケープ直書き] — 2026-07-02
 
 ### 背景
