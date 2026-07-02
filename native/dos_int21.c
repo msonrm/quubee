@@ -92,9 +92,8 @@ static int g_text_rows = 25;
 static int g_cur_row = 0;
 static int g_cur_col = 0;
 
-/* ESC[s / ESC[u (カーソル・属性の保存/復元) 用スロット。PC-98 CON は属性も一緒に保存する。 */
-static int     g_saved_row = 0, g_saved_col = 0;
-static uint8_t g_saved_attr = DEF_ATTR;
+/* ESC[s / ESC[u (カーソル・属性の保存/復元) の保存先は CON ワークエリア 0:0726h/0727h/072Bh
+ * (内部変数でなくゲストから見える実 DOS の番地。csi_dispatch の 's'/'u' 参照)。 */
 
 /* ---------------- ESC/ANSI シーケンス state ---------------- */
 /* PC-98 DOS は ANSI X3.64 風のシーケンスを console driver が解釈する。
@@ -209,6 +208,23 @@ static void vram_put_kanji(int row, int col, uint8_t jis_hi, uint8_t jis_lo) {
     gdcs.textdisp |= GDCSCRN_ALLDRAW2;
 }
 
+/* 消去・スクロール空行の 1 セルを「クリア文字 (0:0719h)・クリア属性 (0:0714h)」で埋める。
+ * 実 PC-98 DOS の CON は消去 (ESC[J/K・cls) とスクロール新規行を現在属性でなく専用の
+ * クリアスロットで埋める (SimK PC98WORK PAGE5: 現在属性=白のまま 0114h=赤反転を直書き
+ * → ESC[2K が赤反転 '*' 埋めになる。DOS 3.x 実機結果で確認)。DOS 6.x は word 版 013Eh を
+ * 見る世代差があるが、我々の live 面は古典 (DOS 3.x) の byte 側で統一する。既定値
+ * (20h/E1h) のままなら従来の「空白+白」と同一 = ゼロ回帰。副次効果として、SGR で色を
+ * 変えたままスクロールしても新規行は白のまま — これも実機の観測面と一致する。 */
+static void vram_put_clear(int row, int col) {
+    uint32_t code_off = VRAM_CODE + ((row * TEXT_COLS + col) * 2);
+    uint32_t attr_off = VRAM_ATTR + ((row * TEXT_COLS + col) * 2);
+    mem[code_off]     = mem[0x719];
+    mem[code_off + 1] = 0;
+    mem[attr_off]     = mem[0x714];
+    mem[attr_off + 1] = 0;
+    gdcs.textdisp |= GDCSCRN_ALLDRAW2;
+}
+
 static void vram_scroll_one(void) {
     for (int r = 0; r < TEXT_ROWS - 1; r++) {
         memcpy(&mem[VRAM_CODE + (r * TEXT_COLS) * 2],
@@ -219,20 +235,20 @@ static void vram_scroll_one(void) {
                TEXT_COLS * 2);
     }
     for (int c = 0; c < TEXT_COLS; c++) {
-        vram_put_char(TEXT_ROWS - 1, c, 0x20);
+        vram_put_clear(TEXT_ROWS - 1, c);
     }
 }
 
 static void vram_clear_all(void) {
-    /* 全 cell を space + 現在属性で埋める (CON の ESC[2J 相当。SGR 未使用なら 0xE1 =
+    /* 全 cell をクリア文字+クリア属性で埋める (CON の ESC[2J 相当。既定は space+0xE1 =
      * NP2kai bios_memclear の実機相当初期値と同じ)。 */
     for (int r = 0; r < TEXT_ROWS; r++) {
         for (int c = 0; c < TEXT_COLS; c++) {
             uint32_t code_off = VRAM_CODE + ((r * TEXT_COLS + c) * 2);
             uint32_t attr_off = VRAM_ATTR + ((r * TEXT_COLS + c) * 2);
-            mem[code_off]     = 0x20;
+            mem[code_off]     = mem[0x719];
             mem[code_off + 1] = 0;
-            mem[attr_off]     = g_tty_attr;
+            mem[attr_off]     = mem[0x714];
             mem[attr_off + 1] = 0;
         }
     }
@@ -265,8 +281,8 @@ static void vram_insert_lines(int at_row, int n) {
         memmove(&mem[VRAM_ATTR + ((at_row + n) * TEXT_COLS) * 2],
                 &mem[VRAM_ATTR + (at_row * TEXT_COLS) * 2], bytes);
     }
-    for (int r = at_row; r < at_row + n; r++)        /* 空いた n 行を現在属性の空白で埋める */
-        for (int c = 0; c < TEXT_COLS; c++) vram_put_char(r, c, 0x20);
+    for (int r = at_row; r < at_row + n; r++)        /* 空いた n 行をクリア文字/属性で埋める */
+        for (int c = 0; c < TEXT_COLS; c++) vram_put_clear(r, c);
     gdcs.textdisp |= GDCSCRN_ALLDRAW2;
 }
 
@@ -285,8 +301,8 @@ static void vram_delete_lines(int at_row, int n) {
         memmove(&mem[VRAM_ATTR + (at_row * TEXT_COLS) * 2],
                 &mem[VRAM_ATTR + ((at_row + n) * TEXT_COLS) * 2], bytes);
     }
-    for (int r = TEXT_ROWS - n; r < TEXT_ROWS; r++)  /* 下端に空行 n 行 */
-        for (int c = 0; c < TEXT_COLS; c++) vram_put_char(r, c, 0x20);
+    for (int r = TEXT_ROWS - n; r < TEXT_ROWS; r++)  /* 下端に空行 n 行 (クリア文字/属性) */
+        for (int c = 0; c < TEXT_COLS; c++) vram_put_clear(r, c);
     gdcs.textdisp |= GDCSCRN_ALLDRAW2;
 }
 
@@ -319,20 +335,20 @@ static void csi_dispatch(uint8_t final) {
         if (p == 2) { vram_clear_all(); g_cur_row = 0; g_cur_col = 0; }
         else if (p == 0) {
             /* cursor から末尾まで */
-            for (int c = g_cur_col; c < TEXT_COLS; c++) vram_put_char(g_cur_row, c, 0x20);
+            for (int c = g_cur_col; c < TEXT_COLS; c++) vram_put_clear(g_cur_row, c);
             for (int r = g_cur_row + 1; r < TEXT_ROWS; r++)
-                for (int c = 0; c < TEXT_COLS; c++) vram_put_char(r, c, 0x20);
+                for (int c = 0; c < TEXT_COLS; c++) vram_put_clear(r, c);
         }
         break;
     }
     case 'K': {
         int p = csi_param(0, 0);
         if (p == 0) {
-            for (int c = g_cur_col; c < TEXT_COLS; c++) vram_put_char(g_cur_row, c, 0x20);
+            for (int c = g_cur_col; c < TEXT_COLS; c++) vram_put_clear(g_cur_row, c);
         } else if (p == 1) {
-            for (int c = 0; c <= g_cur_col; c++) vram_put_char(g_cur_row, c, 0x20);
+            for (int c = 0; c <= g_cur_col; c++) vram_put_clear(g_cur_row, c);
         } else if (p == 2) {
-            for (int c = 0; c < TEXT_COLS; c++) vram_put_char(g_cur_row, c, 0x20);
+            for (int c = 0; c < TEXT_COLS; c++) vram_put_clear(g_cur_row, c);
         }
         break;
     }
@@ -407,12 +423,17 @@ static void csi_dispatch(uint8_t final) {
         }
         break;
     }
-    case 's':   /* カーソル位置 (+ PC-98 では属性) を保存 */
-        g_saved_row = g_cur_row; g_saved_col = g_cur_col; g_saved_attr = g_tty_attr;
+    case 's':   /* カーソル位置 (+ PC-98 では属性) を保存。保存先は CON ワークエリア
+                 * 0:0726h/0727h (Y/X)・0:072Bh (属性) — 実 DOS 3.x は ESC[u がここを毎回
+                 * そのまま読むので、直書きで飛び先を差し替えられる (SimK PC98WORK PAGE3 の
+                 * DOS3 実機結果で確認)。DOS 6.x には one-shot 化+属性無視の世代差があるが、
+                 * 我々は live 同期のワークエリア=真実という古典意味論で統一する。 */
+        mem[0x726] = (uint8_t)g_cur_row; mem[0x727] = (uint8_t)g_cur_col;
+        mem[0x72B] = g_tty_attr;
         break;
-    case 'u':   /* 保存したカーソル位置・属性を復元 */
-        g_cur_row = g_saved_row; g_cur_col = g_saved_col;
-        g_tty_attr = g_saved_attr; mem[0x71D] = g_saved_attr;
+    case 'u':   /* 保存したカーソル位置・属性をワークエリアから live 読みで復元 */
+        g_cur_row = mem[0x726]; g_cur_col = mem[0x727];
+        g_tty_attr = mem[0x72B]; mem[0x71D] = g_tty_attr;
         csi_clamp_cursor();
         break;
     case 'r':
@@ -555,9 +576,11 @@ static void tty_putc_raw(uint8_t ch) {
             return;
         }
         if (ch == 'c' || ch == '*') {
-            /* ESC c (reset) / ESC * (PC-98 clear) — 属性も既定 (白) へ戻してから消去 */
+            /* ESC c (reset) / ESC * (PC-98 clear) — 属性もクリアスロットも既定へ戻してから消去 */
             g_tty_attr = DEF_ATTR;
             mem[0x71D] = DEF_ATTR;
+            mem[0x714] = DEF_ATTR;   /* クリア属性/文字もリセット (reset の意味論) */
+            mem[0x719] = 0x20;
             vram_clear_all();
             g_cur_row = 0; g_cur_col = 0;
             g_tty_state = TTY_NORMAL;
@@ -650,6 +673,11 @@ static void tty_putc_raw(uint8_t ch) {
 static void tty_load_cursor(void) {
     g_cur_row = (uint8_t)mem[0x710];
     g_cur_col = (uint8_t)mem[0x71C];
+    /* 現在属性 0:071Dh も読み戻す — ゲストの直書きが次の出力から効く (実 DOS 3.x、
+     * SimK PC98WORK PAGE4 で確認。DOS 6.x は word 版 013Ch を見る世代差があるが byte 側を
+     * 採る)。自前パス (SGR / INT DCh AH=02h / ESC[u) は書き込み時に 071Dh も更新して
+     * いるので、直書きが無ければ恒等往復 = ゼロ回帰。 */
+    g_tty_attr = mem[0x71D];
     csi_clamp_cursor();
 }
 static void tty_store_cursor(void) {
@@ -1539,17 +1567,24 @@ static int find_next_match(void) {
 
 /* ---------------- INT 21h 個別 fn ---------------- */
 
-static void int21_02_putchar(void) { tty_putc(CPU_DL); }
+/* AH=02h: AL = 最後に出力した文字を返すのが実 DOS の契約 (SimK PC98RET PAGE1 で確認)。
+ * TAB (09h) はスペース展開されるので AL=20h、他は DL がそのまま返る。 */
+static void int21_02_putchar(void) {
+    tty_putc(CPU_DL);
+    CPU_AL = (CPU_DL == 0x09) ? 0x20 : CPU_DL;
+}
 
 static void int21_06_direct_io(void) {
     /* DL = 0xFF: STDIN を非ブロッキングで読む (あれば ZF=0 AL=char、なければ ZF=1 AL=0)
-     * その他  : DL を出力。06h は仕様上ブロックしない (kbhit 相当)。 */
+     * その他  : DL を出力し AL=DL を返す (実 DOS 契約、PC98RET PAGE2 — ESC の生バイトでも
+     *           DL がそのまま返る)。06h は仕様上ブロックしない (kbhit 相当)。 */
     if (CPU_DL == 0xFF) {
         int b = dos_next_input_byte();
         if (b < 0) { CPU_AL = 0; CPU_FLAG |= Z_FLAG; }
         else       { CPU_AL = (uint8_t)b; CPU_FLAG &= ~Z_FLAG; }
     } else {
         tty_putc(CPU_DL);
+        CPU_AL = CPU_DL;
         CPU_FLAG &= ~Z_FLAG;
     }
 }
@@ -1702,6 +1737,7 @@ static void int21_33_ctrlbreak(void) {
 
 static void int21_09_putstr(void) {
     uint32_t base = lin(CPU_DS, CPU_DX);
+    CPU_AL = 0x24;   /* 実 DOS は AL='$' を返す (PC98RET PAGE3 で確認) */
     for (int i = 0; i < 4096; i++) {
         uint8_t ch = peek8(base + i);
         if (ch == '$') return;
@@ -3125,6 +3161,18 @@ void qb_dos_tty_reset(void) {
     gdc.mode1 &= (uint8_t)~0x01;
     gdcs.textdisp |= GDCSCRN_ALLDRAW2;   /* 解釈変更を次フレーム全セル再描画へ反映 */
     tty_sync_conarea();
+    /* CON ワークエリアの残り既定値 (SimK PC98WORK PAGE1 の実機初期値と一致させる):
+     * 0714h=クリア属性 E1 / 0719h=クリア文字 20h / 071Bh=カーソル表示 1 /
+     * 0726h/0727h=ESC[s 保存カーソル Y/X / 072Bh=保存属性 E1 /
+     * 073Ch・073Eh=DOS 6 世代の word 版 put/clear 属性 (00E1)。live に読むのは古典 byte 側
+     * (071Dh/0714h、DOS 3.x 意味論) で、word 側は初期値のみ (実機 dump 互換のため)。 */
+    mem[0x714] = DEF_ATTR;
+    mem[0x719] = 0x20;
+    mem[0x71B] = 0x01;
+    mem[0x726] = 0; mem[0x727] = 0;
+    mem[0x72B] = DEF_ATTR;
+    mem[0x73C] = DEF_ATTR; mem[0x73D] = 0;
+    mem[0x73E] = DEF_ATTR; mem[0x73F] = 0;
     /* image 再起動ごとに開きっぱなしのハンドルを掃除 + DTA を既定に戻す。
      * 同様に findfirst イテレータも閉じる。 */
     fh_reset_all();
