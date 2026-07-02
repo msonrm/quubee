@@ -1,5 +1,44 @@
 # CHANGELOG
 
+## [QuickBASIC 製アプリの ERR=5 を根治 — GDC ハードウェアカーソルを tty に追従 + AH=38h 国別情報] — 2026-07-02
+
+### 背景
+QuickBASIC 製アプリが起動直後〜タイトル画面で「引数が許される範囲ではありません (ERR=5)
+module=XXX at address ...」で一律停止する報告が複数 (MAZE_999 スクショ + プロトタイプ
+maze-776.lzh で headless 再現)。ERR=5 = QB ランタイムの Illegal function call。
+
+### 調査 (実バイナリの逆アセンブルで真因まで)
+- 失敗文は `LOCATE 1,25` (全引数コンパイル時定数) — 実機で通る定数が失敗 ⇒ ランタイムの
+  範囲チェック相手 (コンソール行数上限) が環境から誤って設定されている。
+- QB ランタイム (maze-776 に静的リンク) を追跡: 行数上限 [DGROUP:0xAE4E] はコンソール
+  初期化が決める。判定ロジック = **「ESC[21;1H (INT 29h) でカーソルを 21 行目へ置き、
+  GDC (master) の CSRR でハードウェアカーソルを読み戻して 21 行目に届いたか」** という
+  実機プローブ (届けば 25 行・クランプされれば 20 行と判定し、AH=0Ah で CRT モードも変更)。
+- 我々の HLE tty は論理カーソル (g_cur_row/col) と DOS CON ワークエリア (0:0710h/071Ch)
+  だけ動かし **GDC ハードウェアカーソル (CSRW) を一切更新していなかった** ため、読み戻しが
+  常に古い位置 → QB が全機で 20 行と誤認 → `LOCATE x,25` が一律 ERR=5。QB 製アプリ全般が
+  同じ初期化を通る systemic な穴だった。
+
+### 修正 (native/dos_int21.c)
+- `tty_store_cursor()` (全コンソール出力・カーソル移動が通る単一チョークポイント) で
+  **GDC master の CSRW パラメータ (EAD = row*80+col) を論理カーソルに追従** させる
+  (bios18.c AH=13h と同じ書き方: 値が変わるときだけ + GDCSCRN_EXT 通知)。実 PC-98 DOS の
+  CON がカーソル移動のたび GDC に CSRW を発行するのと同じ観測面になる。
+- 副次効果: フルスクリーンエディタの点滅ハードウェアカーソル位置もこれで決まるため、
+  既知課題「JED の点滅カーソルが左上に居座る」も同根で解消見込み (要ブラウザ確認)。
+- **INT 21h AH=38h (Get Country Info) も実装** (調査過程で発見した既知ギャップ。QB が起動時に
+  呼び CF=1 だった)。日本 (country 81) の実 DOS 値: 日付書式 YMD・通貨 "\"・区切り ,/./-/:・
+  24 時間制・case-map far ptr は新設の far RET スタブ (QB_TRAMP_FARRET=F000:EED0) を指す。
+  ※これ自体は ERR=5 の真因ではなかった (実装後も再発で切り分け済み) が、正しい前進なので採用。
+
+### 検証
+- maze-776: ERR=5 消滅・タイトル完全描画。**旧来失敗していた LOCATE x,25 の行 (row24) に
+  クレジット文字列が表示される** = 25 行判定への回復を実画面で確認。QB のモード適用も
+  AH=0Ah AL=05 (20行) → AL=04 (25行) に変化。
+- 新規回帰 `tools/gdc_cursor_test.js` (ESC[13;6H → CSRR 読み戻し EAD=0x3C5、QB プローブの
+  縮小再現) / `tools/country_info_test.js` (BX=81・YMD・通貨・24h・case-map far CALL 完走)。
+- 既存回帰 19 本 + touhou 4/4 + bio100 triage --fresh ベースライン一致。
+
 ## [AH=3Fh cooked stdin を実 DOS の行持ち越しへ是正 — CX=1 即返し退行の根治 + SJIS BS パリティ走査] — 2026-07-02
 
 ### 背景

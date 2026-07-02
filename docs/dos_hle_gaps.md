@@ -22,7 +22,8 @@
 | 62 / 50 / 51 | Get/Set PSP | 中 | 未対応 |
 | 00 | Terminate（旧式） | 低（終了は INT 20h / 4Ch 想定） | 未対応 |
 | 2B / 2D | Set Date / Set Time | 低（Get のみ実装） | 未対応 |
-| 38 / 5B / 5A / 67 / 68 … | 国別 / 排他作成 / temp / handle 数 / commit | 低〜中 | 未対応 |
+| 38 | Get/Set Country Info | 中（QB 日本語ランタイム等が起動時に呼ぶ） | ✅ 2026-07-02 実装（日本 country 81 固定・YMD・通貨 "\"・24h・case-map は far RET スタブ。Set は日本以外を正直に拒否。回帰 `tools/country_info_test.js`） |
+| 5B / 5A / 67 / 68 … | 排他作成 / temp / handle 数 / commit | 低〜中 | 未対応 |
 | 4B AL=01,03 | Load-only / オーバーレイ | 中（大きめゲームの overlay） | AL=03 ✅ 2026-06-09 実装（東方 op→main 遷移）。AL=01 未対応 |
 
 ## 2. 実装済みだが実 DOS と挙動が異なる点

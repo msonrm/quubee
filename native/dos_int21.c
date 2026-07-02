@@ -62,7 +62,8 @@
 #include <i386c/cpumem.h>
 #include <i386c/ia32/cpu.h>
 #include <io/iocore.h>      /* gdcs (GDC state) — テキスト面表示制御に使う */
-#include <io/gdc.h>         /* GDCSCRN_ENABLE / GDCSCRN_ALLDRAW2 */
+#include <io/gdc.h>         /* GDCSCRN_ENABLE / GDCSCRN_ALLDRAW2。GDC_CSRW (HW カーソル追従) は
+                             * iocore.h → gdc_cmd.h 経由 (gdc_cmd.h はガード無しで直 include 不可) */
 
 #include "dos_int21.h"
 #include "dos_loader.h"
@@ -654,6 +655,20 @@ static void tty_load_cursor(void) {
 static void tty_store_cursor(void) {
     mem[0x710] = (uint8_t)g_cur_row;
     mem[0x71C] = (uint8_t)g_cur_col;
+    /* GDC ハードウェアカーソル (master, CSRW) も論理カーソルに追従させる。実 PC-98 DOS の
+     * CON はカーソル移動のたび GDC に CSRW を発行する (BIOS INT 18h AH=13h と同経路)。
+     * これが無いと GDC CSRR で「実カーソル位置」を読むソフトに常に古い位置が見える:
+     * QuickBASIC ランタイムは起動時に「カーソルを 21 行目へ置き CSRR で読み戻せるか」で
+     * 20/25 行を判定するため、読み戻し不一致 → 20 行と誤認 → LOCATE x,25 が一律
+     * 「引数が許される範囲ではありません (ERR=5)」になっていた (maze-776/MAZE_999 で実証、
+     * QB 製アプリ全般の systemic 修正)。EAD はワードアドレス = row*80 + col。
+     * bios18.c AH=13h と同じく値が変わるときだけ書いて EXT 通知する。 */
+    uint16_t ead = (uint16_t)((uint16_t)g_cur_row * 80u + (uint16_t)g_cur_col);
+    gdc_forceready(GDCWORK_MASTER);
+    if (LOADINTELWORD(gdc.m.para + GDC_CSRW) != ead) {
+        STOREINTELWORD(gdc.m.para + GDC_CSRW, ead);
+        gdcs.textdisp |= GDCSCRN_EXT;
+    }
 }
 
 /* tty_putc の単一チョークポイント版: 1 文字出力の前後でカーソル座標ワークエリアと同期する。
@@ -1747,6 +1762,40 @@ static void int21_30_version(void) {
     CPU_CX = 0;
 }
 
+/* AH=38h Get Country Info (AL=0 現在国 / DX=FFFF は Set)。日本 (country 81) の実 DOS 値を返す。
+ * QuickBASIC (日本語版) ランタイムは起動時にこれを呼び、失敗 (CF=1) するとコンソール初期化の
+ * 後続 (画面サイズ変数の設定) が中断され、以後の LOCATE が全て「引数が許される範囲では
+ * ありません (ERR=5)」になる (maze-776 で実証、QB 製アプリ全般に効く systemic)。
+ * バッファは DOS 3.x+ の 34 バイト形式。case-map ルーチンは far RET スタブ (QB_TRAMP_FARRET)
+ * を指す = 呼ばれても無変換で戻る (SJIS 環境の実用上 no-op で十分)。 */
+static void int21_38_country(void) {
+    if ((uint16_t)CPU_DX == 0xFFFF) {           /* Set country */
+        uint16_t code = (CPU_AL == 0xFF) ? (uint16_t)CPU_BX : (uint16_t)CPU_AL;
+        if (code == 0 || code == 81) { CPU_FLAG &= ~C_FLAG; return; }  /* 日本のまま = no-op 成功 */
+        CPU_AX = 2;                             /* それ以外は正直に失敗 (invalid country) */
+        CPU_FLAG |= C_FLAG;
+        return;
+    }
+    uint32_t p = lin(CPU_DS, CPU_DX);
+    poke16(p + 0x00, 2);                        /* 日付書式 2 = YMD (日本) */
+    poke8(p + 0x02, 0x5C);                      /* 通貨記号 "\" (PC-98 では ¥) ASCIIZ 5 bytes */
+    poke8(p + 0x03, 0); poke8(p + 0x04, 0); poke8(p + 0x05, 0); poke8(p + 0x06, 0);
+    poke8(p + 0x07, ','); poke8(p + 0x08, 0);   /* 千区切り */
+    poke8(p + 0x09, '.'); poke8(p + 0x0A, 0);   /* 小数点 */
+    poke8(p + 0x0B, '-'); poke8(p + 0x0C, 0);   /* 日付区切り */
+    poke8(p + 0x0D, ':'); poke8(p + 0x0E, 0);   /* 時刻区切り */
+    poke8(p + 0x0F, 0);                         /* 通貨書式 = 記号が前・空白なし */
+    poke8(p + 0x10, 0);                         /* 通貨小数桁 = 0 (円) */
+    poke8(p + 0x11, 1);                         /* 時刻書式 bit0=1 = 24 時間制 */
+    poke16(p + 0x12, (uint16_t)(QB_TRAMP_FARRET & 0xFFFF));   /* case-map far ptr (F000:EED0) */
+    poke16(p + 0x14, 0xF000);
+    poke8(p + 0x16, ','); poke8(p + 0x17, 0);   /* データリスト区切り */
+    for (int i = 0x18; i < 0x22; i++) poke8(p + i, 0);        /* 予約 */
+    CPU_BX = 81;                                /* country code 81 = 日本 */
+    CPU_AX = 81;
+    CPU_FLAG &= ~C_FLAG;
+}
+
 static void int21_35_get_vec(void) {
     uint8_t vec = CPU_AL;
     uint32_t a = (uint32_t)vec * 4u;
@@ -2829,6 +2878,7 @@ void qb_dos_int21_dispatch(void) {
     case 0x34: int21_34_indos();        break;
     case 0x35: int21_35_get_vec();   break;
     case 0x36: int21_36_freespace();    break;
+    case 0x38: int21_38_country();      break;
     case 0x39: int21_39_mkdir();        break;
     case 0x3A: int21_3a_rmdir();        break;
     case 0x3B: int21_3b_chdir();        break;

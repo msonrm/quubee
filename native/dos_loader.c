@@ -1259,6 +1259,9 @@ void qb_dos_install_trampolines(void) {
     for (uint32_t i = 0; i < 16; i++) {
         poke8(QB_TRAMP_IRET_STUB + i, 0xCF);
     }
+
+    /* far RET スタブ (AH=38h 国別情報の case-map ルーチン向き先)。 */
+    poke8(QB_TRAMP_FARRET, 0xCB);
 }
 
 /* 環境セグメントを seg:0000 に構築する。実機 DOS 互換レイアウト:

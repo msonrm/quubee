@@ -73,6 +73,10 @@
  * それ以外はオリジナル bios0x18 へパススルーする。OFF 時は IVT を触らない (= NP2kai 既定・ゼロ回帰)。
  * NOP + IRET。詳細: docs/30line_spec.md。 */
 #define QB_TRAMP_INT18          0xFEEC0u  /* F000:EEC0 */
+/* 素の far RET (0xCB) 1 バイト。INT 21h AH=38h (国別情報) が返す case-map ルーチンの
+ * far ポインタの向き先 (呼ばれても何もせず戻る)。IRET パッドは流用不可 (IRET は 6 byte pop
+ * でスタックが壊れる)。 */
+#define QB_TRAMP_FARRET         0xFEED0u  /* F000:EED0 — 0xCB (far RET) */
 
 /* PSP/COM のロードセグメント (PSP 自体もここに置く)。
  * EXE は PSP の直後 (256 byte = 16 paragraphs 先) に image を配置する慣例。 */
