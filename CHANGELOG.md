@@ -1,5 +1,36 @@
 # CHANGELOG
 
+## [INT 33h マウスドライバ HLE — MS/NEC 二流派を実測で決着し両ペルソナ実装 (既定 MS)] — 2026-07-03
+
+### 需要調査 (プローブ → 静的 → 実行時)
+INT 33h を XMS/EMS と同型の需要プローブ化 → corpus 46 書庫を CD 33 静的スキャン →
+候補 23 書庫を headless 実行。実際に INT 33h を呼ぶのは **3 本** (bepn=ぶエぽん・
+brpn=ぶろぽん・ADV98) で、全て起動時 AX=0 検出のみ (不在応答で諦めていた)。bio_100 はゼロ。
+
+### 二流派問題の決着 = 実ドライバの実測 (tools/mousetest/)
+NEC 仕様と MS 仕様はファンクション番号の意味が食い違う (fn3 の戻り・fn7/8・範囲設定)。
+MOUSETEST.COM (nasm 自作、レジスタダンプ + 範囲設定ペアのクランプ判別) を我々のエミュ内で
+実ドライバに当てて測定した:
+- **MS 仕様 = 実物 MS Mouse 7.06**: fn3 AX 温存・BX ビットフィールド、fn7/8=範囲設定、fnFF=no-op
+- **NEC 仕様 = HImouse v0.2 -n** (games/himus02.lzh、緋色樹氏 1994 の NEC/MS 切替型フリードライバ。
+  ユーザー提供の決定打): fn3 AX=左/BX=右 (0/FFFF)、fn5-8=左右 press/release 情報、**範囲設定=fn10h/11h**
+  (bepn の NEC 枝が使う fn0A/0B は実測で空振り = 渡す値が既定値なので実害なしという綺麗な謎解き)
+- HImouse の MS モードが 7.06 と全項目一致 → 測定台として信頼。DOSBox-X (nanshiki 氏) の NEC 説とも
+  fn10h/11h で三重一致。bepn/brpn は「fn3 が AX を温存するか」で流派を自動判別する両対応コードを持つ
+  (brpn は判定結果のメッセージまで持つ)。ADV98 は BX bit0 読み = MS 前提 → **既定ペルソナ = MS に決定**
+
+### 実装 (native/dos_mouse33.c、既定 ON)
+共有コア (位置・範囲・ボタン履歴・カウンタ) + 薄いペルソナ層。コンベンショナルメモリ消費ゼロ
+(実体は C + トランポリン 0xFEEE0)。カーソルは get_framebuffer 時に dispsurf へ合成する表示専用
+オーバーレイ (ゲスト VRAM 不変・残像なし)。fn0C/14h イベントハンドラは保存のみ (呼び出しは Tier 2、
+登録時に UNIMPL 警告)。切替 = qbDebug.mouse33('nec'|'ms'|0)、需要計測 = qbDebug.memprobe().mouse33。
+
+### 検証
+- tools/mouse33_test.js: **4 構成 (MS/NEC × 範囲ペア) を実測正典と全項目突合 = PASS**
+- 再サーベイ: bepn が fn0→3→7→8→FF の MS 枝を通過・brpn 2586 回・ADV98 40 万回ポーリング
+  (全てマウス対応が有効化)。カーソル描画/追従/残像なしも headless で画素検証
+- 回帰: memprobe/mouse_chain_probe (実ドライバ上書き共存)/int27_tsr/vz/exec_psp 全 PASS
+
 ## [np2.h 二重定義 (ODR 違反) を根治 — MIDI 有効 + EXE 直接起動のブラウザ全面ハング] — 2026-07-03
 
 ### 症状

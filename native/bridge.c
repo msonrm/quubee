@@ -28,6 +28,7 @@
 #include <qb_mousemng.h>
 #include <qb_soundmng.h>
 #include "dos_loader.h"
+#include "dos_mouse33.h"   /* INT 33h マウスドライバ HLE (並走供給 + カーソル合成) */
 
 #ifdef __ANDROID__
 #include <android/log.h>
@@ -443,11 +444,23 @@ int np2kai_inject_text(np2kai_handle h, const uint8_t *bytes, int len) {
 void np2kai_mouse_move(np2kai_handle h, int dx, int dy) {
 	if (!h) return;
 	qb_mouse_post_move(dx, dy);
+	qb_mouse33_post_move(dx, dy);   /* INT 33h HLE へも並走供給 (HW バスマウスと独立) */
 }
 
 void np2kai_mouse_button(np2kai_handle h, int button, int down) {
 	if (!h) return;
 	qb_mouse_post_button(button, down ? 1 : 0);
+	qb_mouse33_post_button(button, down ? 1 : 0);
+}
+
+/* INT 33h HLE の制御 (qbDebug.mouse33): mode 0=off / 1=MS 仕様 / 2=NEC 仕様 */
+void np2kai_mouse33_ctl(np2kai_handle h, int mode) {
+	if (!h) return;
+	qb_mouse33_set_mode(mode);
+}
+uint32_t np2kai_mouse33_stat(np2kai_handle h, int which) {
+	if (!h) return 0;
+	return qb_mouse33_stat(which);
 }
 
 int np2kai_set_audio_rate(uint32_t rate) {
@@ -727,5 +740,13 @@ const uint8_t *np2kai_get_framebuffer(
 	if (out_width)          *out_width          = scrnmng.width;
 	if (out_height)         *out_height         = scrnmng.height;
 	if (out_bytes_per_pixel)*out_bytes_per_pixel = scrnmng.bpp / 8;
+	/* INT 33h HLE のドライバカーソル: 表示中だけ pc98surf (完全な現画面) から dispsurf を
+	 * 引き直してオーバーレイ合成する。dispsurf にしか描かないのでゲスト VRAM は不変、
+	 * 前フレームのカーソル残像も毎回消える (save-under 不要)。 */
+	if (qb_mouse33_cursor_visible() && scrnmng.pc98surf && scrnmng.bpp == 16) {
+		size_t sz = (size_t)scrnmng.width * scrnmng.height * (scrnmng.bpp / 8);
+		memcpy(scrnmng.dispsurf, scrnmng.pc98surf, sz);
+		qb_mouse33_overlay((uint16_t *)scrnmng.dispsurf, scrnmng.width, scrnmng.height);
+	}
 	return (const uint8_t *)scrnmng.dispsurf;
 }

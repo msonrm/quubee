@@ -2222,6 +2222,8 @@ async function makeWorkerEmu() {
     const memprobeFn  = M.cwrap('np2kai_debug_memprobe',           'number', ['number', 'number']);
     const xmsEnableFn = M.cwrap('np2kai_xms_enable',               'number', ['number', 'number']);
     const xmsStatFn   = M.cwrap('np2kai_xms_stat',                 'number', ['number', 'number']);
+    const mouse33CtlFn  = M.cwrap('np2kai_mouse33_ctl',            null,     ['number', 'number']);
+    const mouse33StatFn = M.cwrap('np2kai_mouse33_stat',           'number', ['number', 'number']);
 
     // ---- async 自動クロック (快適化, 既定 ON) ----
     // 達成フレーム時間から CPU クロック倍率を「逆算」する適応コントローラ。run_frame の
@@ -2423,13 +2425,23 @@ async function makeWorkerEmu() {
         // XMS/EMS 需要プローブ: 現タイトルが拡張メモリを要求した回数 (Run 毎リセット)。
         // xms=INT 2Fh AX=43xx / ems=INT 67h / emmOpen=EMMXXXX0 デバイス open。いずれも未実装で
         // 「無し」と応答済みなので、>0 なら XMS/EMS HLE の実装価値あり (= 640KB の壁に当たっている)。
-        memprobe: () => ({ xms: memprobeFn(handle, 0), ems: memprobeFn(handle, 1), emmOpen: memprobeFn(handle, 2) }),
+        memprobe: () => ({ xms: memprobeFn(handle, 0), ems: memprobeFn(handle, 1), emmOpen: memprobeFn(handle, 2), mouse33: memprobeFn(handle, 3) }),
         // XMS (HIMEM 相当) HLE。引数なしで状態表示、xms(0|1) で有効/無効を切替 (次の Run/現状で反映)。
         // 既定 ON (= HIMEM ロード済の DOS を再現)。enabled/確保中ハンドル数/使用・空き KB を返す。
         xms: (on) => {
             if (on !== undefined) xmsEnableFn(handle, on ? 1 : 0);
             return { enabled: !!xmsStatFn(handle, 0), handles: xmsStatFn(handle, 1),
                      usedKB: (xmsStatFn(handle, 2) / 1024) | 0, freeKB: (xmsStatFn(handle, 3) / 1024) | 0 };
+        },
+        // INT 33h マウスドライバ HLE。引数なしで状態表示、mouse33('ms'|'nec'|0) でペルソナ切替/無効化。
+        // 既定 MS 仕様 (corpus 実測より。NEC 前提タイトルは 'nec' へ)。実測正典は tools/mousetest/ 参照。
+        mouse33: (mode) => {
+            if (mode !== undefined)
+                mouse33CtlFn(handle, mode === 'nec' ? 2 : mode === 'ms' ? 1 : mode ? 1 : 0);
+            const m = mouse33StatFn(handle, 0);
+            return { mode: ['off', 'ms', 'nec'][m] || m, calls: mouse33StatFn(handle, 1),
+                     x: mouse33StatFn(handle, 2), y: mouse33StatFn(handle, 3),
+                     buttons: mouse33StatFn(handle, 4), hidden: mouse33StatFn(handle, 5) };
         },
         sample: (n=5, intervalMs=200) => {
             const out = [];
@@ -2567,12 +2579,19 @@ async function makeWorkerEmu() {
                 q('np2kai_debug_serial_midi_active', 'number', ['number'], [], true),
                 q('np2kai_debug_serial_midi_bytes',  'number', ['number'], [], true),
             ]).then(([a, b]) => ({ active: !!a, bytes: b })),
-            memprobe: () => Promise.all([0, 1, 2].map(i => q('np2kai_debug_memprobe', 'number', ['number', 'number'], [i], true)))
-                .then(([xms, ems, emmOpen]) => ({ xms, ems, emmOpen })),
+            memprobe: () => Promise.all([0, 1, 2, 3].map(i => q('np2kai_debug_memprobe', 'number', ['number', 'number'], [i], true)))
+                .then(([xms, ems, emmOpen, mouse33]) => ({ xms, ems, emmOpen, mouse33 })),
             xms: (on) => {
                 if (on !== undefined) ctl('np2kai_xms_enable', ['number'], [on ? 1 : 0], true);
                 return Promise.all([0, 1, 2, 3].map(i => q('np2kai_xms_stat', 'number', ['number', 'number'], [i], true)))
                     .then(([en, handles, used, free]) => ({ enabled: !!en, handles, usedKB: (used / 1024) | 0, freeKB: (free / 1024) | 0 }));
+            },
+            mouse33: (mode) => {
+                if (mode !== undefined)
+                    ctl('np2kai_mouse33_ctl', ['number'], [mode === 'nec' ? 2 : mode === 'ms' ? 1 : mode ? 1 : 0], true);
+                return Promise.all([0, 1, 2, 3, 4, 5].map(i => q('np2kai_mouse33_stat', 'number', ['number', 'number'], [i], true)))
+                    .then(([m, calls, x, y, buttons, hidden]) =>
+                        ({ mode: ['off', 'ms', 'nec'][m] || m, calls, x, y, buttons, hidden }));
             },
             // --- 同期取得インスペクタ (worker 外から引けない → 正直に案内) ---
             cs: NA, linear: NA, pc: NA, regs: NA, dump: NA, dumpHere: NA,

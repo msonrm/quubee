@@ -30,6 +30,7 @@
 #include "dos_loader.h"
 #include "dos_int21.h"
 #include "dos_xms.h"          /* XMS (HIMEM 相当) HLE */
+#include "dos_mouse33.h"      /* INT 33h マウスドライバ HLE */
 #include "qb_guestmem.h"      /* poke8/poke16 等の共有メモリヘルパ (dos_int21.c と一本化) */
 #include "dos_shell_blob.h"   /* tools/dos_loader/shell.asm の assemble 済 blob (build.sh 生成) */
 
@@ -1147,6 +1148,7 @@ static void put_trampoline(uint32_t linear) {
 static uint32_t g_probe_xms = 0;       /* INT 2Fh AX=43xx */
 static uint32_t g_probe_ems = 0;       /* INT 67h */
 static uint32_t g_probe_emm_open = 0;  /* open("EMMXXXX0") */
+static uint32_t g_probe_int33 = 0;     /* INT 33h (マウスドライバ API) の呼び出し数 (需要計測) */
 
 void qb_dos_memprobe_note_emm_open(void) {
     g_probe_emm_open++;
@@ -1159,6 +1161,7 @@ uint32_t qb_dos_memprobe_count(int which) {
         case 0:  return g_probe_xms;
         case 1:  return g_probe_ems;
         case 2:  return g_probe_emm_open;
+        case 3:  return g_probe_int33;
         default: return 0;
     }
 }
@@ -1202,6 +1205,15 @@ int qb_dos_int67_hook(void) {
     return 1;
 }
 
+/* INT 33h フック (0xFEEE0)。マウスドライバ HLE (dos_mouse33.c) へ委譲する。
+ * 既定 = MS 仕様で応答 (qbDebug.mouse33 で NEC/off に切替可)。off 時はレジスタ不変 =
+ * ドライバ不在の正直応答 (旧・需要プローブと同値)。呼び出し回数は需要計測として
+ * 常に数える (qbDebug.memprobe の mouse33)。 */
+int qb_dos_int33_hook(void) {
+    g_probe_int33++;
+    return qb_mouse33_int33();
+}
+
 /* bios_initialize() から毎リセット呼ばれる。トランポリン本体を BIOS area に置く。
  * loader-start は JMP FAR で踏まれる (戻り不要) ので NOP + HLT、
  * INT 21h/INT 20h/INT 2Fh/INT 67h/INT 29h は INT で踏まれる (IRET で戻る) ので NOP + IRET、
@@ -1234,6 +1246,9 @@ void qb_dos_install_trampolines(void) {
     /* INT 18h フロントエンド (30 行モード時のみ IVT[0x18] が指す): NOP + IRET。
      * C フックが 30BIOS-API を処理し、それ以外は bios0x18 へパススルー。 */
     put_trampoline(QB_TRAMP_INT18);
+
+    /* INT 33h (マウスドライバ需要プローブ): NOP + IRET。C フックでログだけ (レジスタ不変)。 */
+    put_trampoline(QB_TRAMP_INT33);
 
     /* XMS ドライバ entry: far CALL で踏まれるので NOP + RETF (0xCB)。NOP が biosfunc を踏む。 */
     poke8(QB_TRAMP_XMS_ENTRY + 0, 0x90);  /* NOP */
@@ -1588,7 +1603,13 @@ int qb_dos_loader_start_hook(void) {
      * IRET スタブのままだと MS Mouse 等が int 27h で常駐できず直後の AH=4Ch に落ちて
      * 自身を解放 → INT 33h ベクタがダングリングして後続ゲームが暴走する。 */
     set_ivt(0x27, 0xF000, (uint16_t)(QB_TRAMP_INT27 & 0xFFFF));
+
+    /* INT 33h (マウスドライバ API) を HLE ドライバへ (dos_mouse33.c、既定 MS 仕様)。
+     * ゲームが実ドライバ (MOUSE.COM 同梱等) を常駐させれば IVT が上書きされ影に隠れる。 */
+    set_ivt(0x33, 0xF000, (uint16_t)(QB_TRAMP_INT33 & 0xFFFF));
     g_probe_xms = g_probe_ems = g_probe_emm_open = 0;  /* この Run の計測をリセット */
+    g_probe_int33 = 0;
+    qb_mouse33_reset_run();   /* マウス HLE の動的状態も Run 毎に初期化 (ペルソナは維持) */
     qb_xms_reset();   /* XMS ハンドル表を Run 毎にクリア + プールを CPU_EXTMEM から再計算 */
 
     /* 環境セグメント (PSP[0x2C] で指される) を先に作っておく。env は Run ごとに既定へ戻し

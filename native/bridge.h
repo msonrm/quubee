@@ -96,6 +96,13 @@ void np2kai_mouse_move(np2kai_handle h, int dx, int dy);
 __attribute__((visibility("default")))
 void np2kai_mouse_button(np2kai_handle h, int button, int down);
 
+/* INT 33h マウスドライバ HLE (dos_mouse33.c)。mode: 0=off / 1=MS 仕様 (既定) / 2=NEC 仕様。
+ * stat which: 0=mode 1=呼び出し数 2=x 3=y 4=buttons 5=hidden カウンタ */
+__attribute__((visibility("default")))
+void np2kai_mouse33_ctl(np2kai_handle h, int mode);
+__attribute__((visibility("default")))
+uint32_t np2kai_mouse33_stat(np2kai_handle h, int which);
+
 /* Audio: np2kai_create より前に呼ぶ。AudioContext.sampleRate に合わせる想定。
  * 受け付ける値: 11025/22050/44100/48000/88200/96000/176400/192000 */
 __attribute__((visibility("default")))

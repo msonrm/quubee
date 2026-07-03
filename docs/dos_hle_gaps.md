@@ -172,6 +172,28 @@
     公算が高く、EMS HLE の現 corpus への効果は薄い。**結論: EMS は据え置き**。再評価のトリガ = ①`qbDebug.memprobe()`
     で `ems`/`emmOpen` が実プレイ中に >0（XMS で足りず EMS を試したタイトル出現）、または ②EMS 専用（XMS 非対応）
     タイトルの発見。それまでは需要プローブを常設したまま様子を見る。
+- **INT 33h（マウスドライバ API）= 実装済み（Tier 1、2026-07-03、既定 ON・MS 仕様）**。「MOUSE.COM
+  ロード済の DOS」を再現する。`native/dos_mouse33.c` + トランポリン `0xFEEE0`。実ドライバと違い
+  **コンベンショナルメモリは消費しない**（IVT[0x33] の 4 バイトのみ）。
+  - **二流派問題**: PC-98 のマウスドライバは NEC 仕様と MS 仕様でファンクション番号の意味が食い違う
+    （fn3 の戻り = NEC は AX/BX に左右ボタンの 0/FFFF・**AX を壊す** / MS は AX 温存・BX ビットフィールド。
+    fn7/8 = NEC は右ボタン press/release 情報 / MS は X/Y 範囲設定。範囲設定 = NEC は fn10h/11h）。
+    **両ペルソナ実装済み・既定 MS**（corpus 実測: bepn/brpn は「fn3 が AX を温存するか」で流派を自動判別する
+    両対応、ADV98 は BX bit0 読み = MS 前提。HImouse の既定も MS = 当時の現場感覚）。切替 =
+    `qbDebug.mouse33('nec'|'ms'|0)`。
+  - **正典 = 実ドライバの実測**（`tools/mousetest/` の MOUSETEST.COM、2026-07-03）: MS 仕様 = 実物
+    MS Mouse Driver 7.06、NEC 仕様 = HImouse v0.2 `-n`（緋色樹氏 1994 のデュアルモードフリードライバ。
+    MS モードが 7.06 と全項目一致することを確認済み = 測定台として信頼可）。真理値表は
+    `native/dos_mouse33.c` 冒頭。回帰 = `tools/mouse33_test.js`（4 構成を実測正典と全項目突合）。
+  - **カーソルは表示オーバーレイ**: ゲスト VRAM に書かず `np2kai_get_framebuffer` が dispsurf へ合成する
+    （fn9 のマスクも反映）。ゲスト状態を一切壊さない代わり、**VRAM を読み戻すソフトにはカーソルが写らない**
+    （実 NEC 仕様は XOR プレーン描画）。実害が出たら guest VRAM XOR 描画へ昇格を検討。
+  - **未対応（正直に空振り + 初回ログ）**: fn0C/14h イベントハンドラは登録保存のみで**呼び出さない**
+    （要 IRQ13 → vector 0x15 トランポリン = Tier 2。登録されたら stderr に UNIMPL 警告）/ NEC fn0 の
+    「グラフィック表示 ON」副作用（Orange House 系が依存との DOSBox-X 知見）/ NEC fn9 カーソルパターンの
+    プレーン描画・fn12h プレーン選択は保存のみ / fn24h バージョン照会等は UNIMPL ログ。
+  - ゲームが実ドライバ（MOUSE.COM 同梱等）を常駐させた場合は IVT[0x33] が上書きされ HLE は影に隠れる
+    （衝突しない。`tools/mouse_chain_probe.js` で確認）。需要計測 = `qbDebug.memprobe().mouse33`（呼び出し数）。
 - **INT 29h（DOS 高速文字出力 / "fast putchar"）= 実装済み（2026-06-07）**。AL の 1 文字を CON（= テキスト
   VRAM tty、ANSI/ESC パーサ込み）へ流す。**master.lib `text_clear()` は実体が「`INT 29h` で `ESC[2J` を送るだけ」**
   なので、未実装（IRET スタブ）だと master.lib 系の画面消去が無音で効かず、書いた文字が残留していた（SSP の

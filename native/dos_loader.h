@@ -77,6 +77,11 @@
  * far ポインタの向き先 (呼ばれても何もせず戻る)。IRET パッドは流用不可 (IRET は 6 byte pop
  * でスタックが壊れる)。 */
 #define QB_TRAMP_FARRET         0xFEED0u  /* F000:EED0 — 0xCB (far RET) */
+/* INT 33h (マウスドライバ API)。HLE ドライバ (dos_mouse33.c、既定 MS 仕様・NEC 切替可) へ
+ * ディスパッチする。off 時はレジスタ不変 IRET = 「ドライバ不在」の正直応答。
+ * ゲームが実ドライバ (MS MOUSE.COM 等) を自前で常駐させた場合は IVT[0x33] が上書きされ
+ * このトランポリンは影に隠れる (衝突しない)。NOP + IRET。 */
+#define QB_TRAMP_INT33          0xFEEE0u  /* F000:EEE0 */
 
 /* PSP/COM のロードセグメント (PSP 自体もここに置く)。
  * EXE は PSP の直後 (256 byte = 16 paragraphs 先) に image を配置する慣例。 */
@@ -227,11 +232,15 @@ int qb_dos_int27_hook(void);
 int qb_dos_int2f_hook(void);   /* INT 2Fh: AX=43xx (XMS インストールチェック) を記録/応答 */
 int qb_dos_int67_hook(void);   /* INT 67h: EMS 呼び出しを記録 */
 
+/* INT 33h マウスドライバのフック (0xFEEE0 で biosfunc から呼ばれる)。呼び出し数を
+ * 需要計測として数えつつ qb_mouse33_int33 (dos_mouse33.c) へ委譲する。常に 1 を返す。 */
+int qb_dos_int33_hook(void);
+
 /* XMS ドライバ entry フック (0xFEE70 で biosfunc から呼ばれる)。qb_xms_dispatch へ委譲。 */
 int qb_dos_xms_entry_hook(void);
 
-/* 需要プローブのカウンタ取得 (bridge → qbDebug.memprobe)。which: 0=XMS / 1=EMS / 2=EMMXXXX0 open。
- * カウンタは Run 毎 (loader-start) にリセットされ、現タイトルの要求回数を表す。 */
+/* 需要プローブのカウンタ取得 (bridge → qbDebug.memprobe)。which: 0=XMS / 1=EMS / 2=EMMXXXX0 open /
+ * 3=INT 33h (マウスドライバ)。カウンタは Run 毎 (loader-start) にリセットされ、現タイトルの要求回数を表す。 */
 uint32_t qb_dos_memprobe_count(int which);
 /* dos_int21 の AH=3Dh open が "EMMXXXX0" デバイスを開こうとした時に呼ぶ (EMS 検出の別経路)。 */
 void qb_dos_memprobe_note_emm_open(void);
