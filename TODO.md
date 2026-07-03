@@ -1,5 +1,31 @@
 # QB 作業状況
 
+## 📝 NP2kai へ PR 素案: LIO GCIRCLE 円弧+楕円 (2026-07-04 実装・デプロイ済) — 次セッションで整える
+
+QuuBee 側は実装・回帰・デプロイ済 (patch `tools/np2kai_patches/05_lio_gcircle_arc.patch` /
+回帰 `tools/lio_gcircle_test.js` / CHANGELOG 2026-07-04)。**上流 NP2kai への PR はまだ出していない**。
+下は素案 (眠くて未整理のまま置いた)。次セッションで文面・手順を詰める。
+
+### 前提の再確認 (PR を出す前に)
+- **報告者に一声**: テスト素材 T1/T2 (`games/liotest.zip`) は報告者提供。repro として issue/PR に添えるなら許可/連名を確認。作者 (恋塚氏? SimK 氏?) の確定も。
+- ライセンス: NP2kai = MIT (Copyright 2017 AZO)。我々の追加コードも MIT で摩擦なし。**np21w/DOSBox-X のソースは非参照** (DOSBox-X は GPL)。実装は実測パラメータ+リファレンス画像からのクリーンルーム。
+- 上流状況: gcircle.c の `not support ellipse` / `not support flags` は作者自身の未実装マーカ。np21w には既に円弧あり=本家が遅れている構図。
+
+### PR 素案 (英語で出す想定・下は骨子)
+- **Title**: `lio: implement GCIRCLE arc (fan) and ellipse drawing`
+- **Repo/branch**: fork `msonrm/NP2kai` → branch `lio-gcircle-arc` → PR to `AZO234/NP2kai` (要 fork・push・GitHub 認証)
+- **Summary**: `lio_gcircle` drew full circles only — it ignored the arc start/end points (`sx/sy/ex/ey`) and `flag`, and bailed out on ellipses (`rx != ry`). Implement:
+  - arc drawing (parametric, CCW from end-point to start-point; matches N88-BASIC CIRCLE arc semantics as observed on real programs),
+  - pie radial lines (`flag` bit2 → center→start, bit3 → center→end),
+  - ellipse outline (`rx != ry`).
+  - Full circles keep the existing integer midpoint path unchanged (no behavior change for existing software).
+- **How derived**: traced the exact GCIRCLE parameter blocks emitted by two independent LIO test programs and matched output against Neko Project 21/W. 16 arcs across two fans all consistent with "CCW from e to s". (No code copied from other emulators.)
+- **Not included**: tile-fill (`flag & 0x60`) still draws outline only; full GPAINT fill is left for a follow-up.
+- **Notes for maintainer**: uses `math.h` (atan2/cos/sin) — already used elsewhere in the tree (sound gen). Diff is local to `lio/gcircle.c`.
+- **添付**: before/after スクショ (T1 扇 = np21w 一致 / T2 楕円出現)、repro の T1/T2 (報告者許可後)。
+
+### 関連メモリ: [[reference_lio_gcircle_arc_gap]] / scope B = GPAINT 本塗り (別途)
+
 ## ✅ ia16-elf-gcc 製 EXE 起動 (MZ 負 reloc セグメント) — 根治・デプロイ済 (2026-06-21)
 
 モダンツールチェーン (`ia16-elf-gcc` / 近年の GNU ia16 binutils) でビルドされた PC-98 homebrew が

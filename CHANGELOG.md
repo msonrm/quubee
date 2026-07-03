@@ -1,5 +1,33 @@
 # CHANGELOG
 
+## [LIO GCIRCLE 円弧 + 楕円を実装 — テスター提供 liotest の扇/楕円が出るように] — 2026-07-04
+
+### 発端
+テスター提供の LIO 描画テスト `games/liotest.zip` (T1=GCIRCLE 円弧の扇 / T2=真円+楕円+塗り)。
+np21w では「同心円弧+放射線の扇」(マゼンタ/緑) が出るが、QuuBee は真円しか描けず扇が崩壊、
+T2 の楕円 (黄色い細楕円・赤い大楕円弧) は消滅していた。
+
+### 真因 = NP2kai コアの LIO GCIRCLE が真円専用
+`core/np2kai/lio/gcircle.c` の `lio_gcircle` が、GCIRCLE パラメータの開始/終了角 `sx/sy/ex/ey` と
+`flag` を無視して常に真円を描き、楕円 (rx≠ry) は早期 return で何も描かない実装だった
+(`not support ellipse` TRACEOUT は上流作者自身の未実装マーカ)。我々の HLE でなく上流コアのギャップ。
+
+### 実装 (patch 05_lio_gcircle_arc)
+仕様を推測せず、**T1/T2 が GCIRCLE へ渡す実パラメータを printf トレースで実測**し、np21w/DOSBox-X の
+描画と突き合わせて確定 (クリーンルーム=他実装のソースは非参照):
+- s/e は円周上の絶対座標 `(cx+rx·cosθ, cy−ry·sinθ)`。flag 下位ニブル=円弧・0x60=タイル塗り・0x00=真円。
+- **円弧は終点 e から始点 s へ CCW** (T1 の 16 弧すべてで一致)。パイ放射線は flag bit2=中心→s / bit3=→e。
+- 楕円 (rx≠ry) も同じパラメトリック経路で輪郭描画。
+- **回帰ゼロ設計**: 真円 (円弧でない かつ rx==ry) は既存の整数ミッドポイント経路を byte 同一で温存。
+- FP (math.h atan2/cos/sin) は np2kai コアに前例あり (sound の sin/cos/M_PI)。
+- 残: タイル塗り (flag&0x60) は輪郭のみ。本塗り=GPAINT 未実装は別スコープ (将来)。
+
+### 検証
+- 新規回帰 `tools/lio_gcircle_test.js` (10 assert PASS。扇の円弧が北を通る/開ウェッジが空/楕円の存在)。
+- 既存グラフィック/tty 回帰 (graph_mode/esc_seq/sgr/intdc_screen/conwork/csi_priv) 全 PASS。
+- パッチは pristine な gcircle.c へ clean 適用 → ビルド成功 (再現性 OK)。
+- **PR 候補**: NP2kai (AZO234・MIT) の上流未実装 TODO を埋める形。素案は TODO.md。
+
 ## [INT 33h マウスドライバ HLE — MS/NEC 二流派を実測で決着し両ペルソナ実装 (既定 MS)] — 2026-07-03
 
 ### 需要調査 (プローブ → 静的 → 実行時)

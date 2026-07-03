@@ -1,0 +1,184 @@
+diff --git a/lio/gcircle.c b/lio/gcircle.c
+index c73322b..1d84465 100755
+--- a/lio/gcircle.c
++++ b/lio/gcircle.c
+@@ -1,7 +1,12 @@
+ #include	<compiler.h>
+ #include	<cpucore.h>
++#include	<math.h>
+ #include	"lio.h"
+ 
++#ifndef M_PI
++#define	M_PI	3.14159265358979323846
++#endif
++
+ typedef struct {
+ 	UINT8	cx[2];
+ 	UINT8	cy[2];
+@@ -39,6 +44,51 @@ static void draw4(const _GLIO *lio, SINT16 x, SINT16 y,
+ 	lio_pset(lio, x2, y2, pal);
+ }
+ 
++#define	GCIRC_RND(v)	(((v) >= 0.0) ? (SINT16)((v) + 0.5) : (SINT16)((v) - 0.5))
++
++// 中心から円弧端点への放射線 (扇/パイ)。lio_pset がびゅーぽいんとクリップを行う。
++static void gcircle_line(const _GLIO *lio, SINT16 x0, SINT16 y0,
++											SINT16 x1, SINT16 y1, REG8 pal) {
++
++	int		dx;
++	int		dy;
++	int		sx;
++	int		sy;
++	int		err;
++	int		e2;
++	int		x;
++	int		y;
++
++	x = x0;
++	y = y0;
++	dx = x1 - x0;
++	if (dx < 0) {
++		dx = 0 - dx;
++	}
++	dy = y1 - y0;
++	if (dy < 0) {
++		dy = 0 - dy;
++	}
++	sx = (x0 < x1) ? 1 : -1;
++	sy = (y0 < y1) ? 1 : -1;
++	err = dx - dy;
++	for (;;) {
++		lio_pset(lio, (SINT16)x, (SINT16)y, pal);
++		if ((x == x1) && (y == y1)) {
++			break;
++		}
++		e2 = err * 2;
++		if (e2 > (0 - dy)) {
++			err -= dy;
++			x += sx;
++		}
++		if (e2 < dx) {
++			err += dx;
++			y += sy;
++		}
++	}
++}
++
+ REG8 lio_gcircle(GLIO lio) {
+ 
+ 	GCIRCLE	dat;
+@@ -50,14 +100,23 @@ REG8 lio_gcircle(GLIO lio) {
+ 	SINT16	d1;
+ 	SINT16	d2;
+ 	SINT16	d3;
++	int		arcmode;
++	int		maxr;
++	int		n;
++	int		i;
++	double	a0;
++	double	a1;
++	double	a;
++	SINT16	sx;
++	SINT16	sy;
++	SINT16	ex;
++	SINT16	ey;
++	SINT16	px;
++	SINT16	py;
+ 
+ 	lio_updatedraw(lio);
+ 	MEMR_READS(CPU_DS, CPU_BX, &dat, sizeof(dat));
+ 
+-	// チェック
+-	if (dat.flag & 0x7f) {
+-		TRACEOUT(("LIO GCIRCLE not support flags: %.2x", dat.flag));
+-	}
+ 	cx = (SINT16)LOADINTELWORD(dat.cx);
+ 	cy = (SINT16)LOADINTELWORD(dat.cy);
+ 	rx = (SINT16)LOADINTELWORD(dat.rx);
+@@ -66,25 +125,71 @@ REG8 lio_gcircle(GLIO lio) {
+ 	if (pal == 0xff) {
+ 		pal = lio->work.fgcolor;
+ 	}
++	if (rx < 0) {
++		rx = (SINT16)(0 - rx);
++	}
++	if (ry < 0) {
++		ry = (SINT16)(0 - ry);
++	}
+ 
+-	if (rx != ry) {
+-		TRACEOUT(("LIO GCIRCLE not support ellipse"));
++	// flag: 下位ニブル=円弧 (s/e 使用) / bit5-6 (0x60)=タイル塗り (未対応=輪郭のみ)
++	arcmode = (dat.flag & 0x0f) ? 1 : 0;
++
++	// 真円 (円弧でない かつ rx==ry): 既存の整数ミッドポイント経路を温存 (回帰ゼロ)
++	if ((!arcmode) && (rx == ry)) {
++		d1 = 0;
++		d2 = ry;
++		d3 = 0 - ry;
++		while(d1 <= d2) {
++			draw4(lio, cx, cy, d1, d2, pal);
++			draw4(lio, cx, cy, d2, d1, pal);
++			lio->wait += 8 * (10 + 10 + 10);
++			d1++;
++			d3 += (d1 * 2) - 1;
++			if (d3 >= 0) {
++				d2--;
++				d3 -= d2 * 2;
++			}
++		}
+ 		return(LIO_SUCCESS);
+ 	}
+ 
+-	// 単純な円の描画
+-	d1 = 0;
+-	d2 = ry;
+-	d3 = 0 - ry;
+-	while(d1 <= d2) {
+-		draw4(lio, cx, cy, d1, d2, pal);
+-		draw4(lio, cx, cy, d2, d1, pal);
+-		lio->wait += 8 * (10 + 10 + 10);
+-		d1++;
+-		d3 += (d1 * 2) - 1;
+-		if (d3 >= 0) {
+-			d2--;
+-			d3 -= d2 * 2;
++	// 円弧 / 楕円: パラメトリック描画
++	// s/e は円周上の絶対座標 (cx+rx*cos, cy-ry*sin)。円弧は終点 e から始点 s へ CCW。
++	sx = (SINT16)LOADINTELWORD(dat.sx);
++	sy = (SINT16)LOADINTELWORD(dat.sy);
++	ex = (SINT16)LOADINTELWORD(dat.ex);
++	ey = (SINT16)LOADINTELWORD(dat.ey);
++	a0 = 0.0;
++	a1 = 2.0 * M_PI;
++	if (arcmode) {
++		a0 = atan2((double)(0 - (ey - cy)) * rx, (double)(ex - cx) * ry);
++		a1 = atan2((double)(0 - (sy - cy)) * rx, (double)(sx - cx) * ry);
++		while (a1 < a0 + 1e-9) {
++			a1 += 2.0 * M_PI;
++		}
++	}
++
++	maxr = (rx > ry) ? rx : ry;
++	n = (int)((a1 - a0) * (double)maxr) + 1;
++	if (n < 1) {
++		n = 1;
++	}
++	for (i = 0; i <= n; i++) {
++		a = a0 + (a1 - a0) * (double)i / (double)n;
++		px = (SINT16)(cx + GCIRC_RND((double)rx * cos(a)));
++		py = (SINT16)(cy - GCIRC_RND((double)ry * sin(a)));
++		lio_pset(lio, px, py, pal);
++		lio->wait += 24;
++	}
++
++	// パイ (扇) の放射線: bit2=始点 s へ, bit3=終点 e へ
++	if (arcmode) {
++		if (dat.flag & 0x04) {
++			gcircle_line(lio, cx, cy, sx, sy, pal);
++		}
++		if (dat.flag & 0x08) {
++			gcircle_line(lio, cx, cy, ex, ey, pal);
+ 		}
+ 	}
+ 	return(LIO_SUCCESS);
