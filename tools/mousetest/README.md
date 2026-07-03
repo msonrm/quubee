@@ -13,7 +13,7 @@ INT 33h の各ファンクションを呼び、戻りレジスタ (AX/BX/CX/DX) 
 
 ## 測定済みの正典 (真理値表は native/dos_mouse33.c 冒頭の表を参照)
 - MS 仕様: 実物 MS Mouse Driver 7.06 (`games/fixture/mouse.com`、再配布不可・未コミット)
-- NEC 仕様: HImouse v0.2 `-n` (`games/himus02.lzh`、緋色樹氏 1994。NEC/MS 切替型フリー
+- NEC 仕様: HImouse v0.2 `-n` (`games/fixture/himus02.lzh`、緋色樹氏 1994。NEC/MS 切替型フリー
   ドライバで、MS モードが実物 7.06 と全項目一致することを確認済み = 測定台として信頼可)
 
 pair A/B/C はコマンドライン引数で「どのファンクション対を範囲設定として試すか」

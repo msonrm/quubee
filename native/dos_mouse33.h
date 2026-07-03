@@ -10,7 +10,7 @@
  *
  * 正典 = 実ドライバの実測 (2026-07-03、tools/mousetest/ の MOUSETEST.COM で測定):
  *   MS 仕様: 実物 MS Mouse Driver 7.06 (games/fixture/mouse.com、再配布不可・未コミット)
- *   NEC 仕様: HImouse v0.2 -n (games/himus02.lzh、緋色樹氏 1994、NEC/MS 切替型フリードライバ)
+ *   NEC 仕様: HImouse v0.2 -n (games/fixture/himus02.lzh、緋色樹氏 1994、NEC/MS 切替型フリードライバ)
  *   三重裏付け: DOSBox-X (nanshiki 氏) + brpn/bepn 実バイナリの二流派判定コード
  * 差異・未対応は docs/dos_hle_gaps.md を参照。
  */

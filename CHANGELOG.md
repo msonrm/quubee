@@ -12,7 +12,7 @@ NEC 仕様と MS 仕様はファンクション番号の意味が食い違う (f
 MOUSETEST.COM (nasm 自作、レジスタダンプ + 範囲設定ペアのクランプ判別) を我々のエミュ内で
 実ドライバに当てて測定した:
 - **MS 仕様 = 実物 MS Mouse 7.06**: fn3 AX 温存・BX ビットフィールド、fn7/8=範囲設定、fnFF=no-op
-- **NEC 仕様 = HImouse v0.2 -n** (games/himus02.lzh、緋色樹氏 1994 の NEC/MS 切替型フリードライバ。
+- **NEC 仕様 = HImouse v0.2 -n** (games/fixture/himus02.lzh、緋色樹氏 1994 の NEC/MS 切替型フリードライバ。
   ユーザー提供の決定打): fn3 AX=左/BX=右 (0/FFFF)、fn5-8=左右 press/release 情報、**範囲設定=fn10h/11h**
   (bepn の NEC 枝が使う fn0A/0B は実測で空振り = 渡す値が既定値なので実害なしという綺麗な謎解き)
 - HImouse の MS モードが 7.06 と全項目一致 → 測定台として信頼。DOSBox-X (nanshiki 氏) の NEC 説とも
