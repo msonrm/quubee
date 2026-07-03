@@ -1801,7 +1801,9 @@ static void int21_25_set_vec(void) {
  * ※蟹味噌は DOS の日付でなく PC-98 RTC を読む → 本丸の対策は calendar.c の date2bcd 側
  *   (同じ 1999 クランプ)。こちらは DOS AH=2Ah を使う他タイトル用の同等対策。 */
 static uint16_t qb_era_year(uint16_t year) {
-    if (year >= 2000) year = 1999;
+    /* g_qb_y2k_clamp (bridge.c・既定 ON) で実行時オフ可 (qbDebug.y2k(0))。off なら本当の年を返す。 */
+    extern int g_qb_y2k_clamp;
+    if (g_qb_y2k_clamp && year >= 2000) year = 1999;
     return year;
 }
 

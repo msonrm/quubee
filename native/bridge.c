@@ -399,6 +399,17 @@ uint32_t np2kai_debug_rtc_bcd(np2kai_handle h, int idx) {
 	return (uint32_t)bcd[idx];
 }
 
+/* Y2K クランプの実行時フラグ (既定 ON)。3 系統 (qb_timemng の RTC 種・calendar.c date2bcd の RTC
+ * 直読み・dos_int21 の DOS AH=2Ah) が各々局所 extern でこれを参照する。詳細は bridge.h 参照。 */
+int g_qb_y2k_clamp = 1;
+int np2kai_set_y2k_clamp(int on) {
+	g_qb_y2k_clamp = on ? 1 : 0;
+	return g_qb_y2k_clamp;
+}
+int np2kai_get_y2k_clamp(void) {
+	return g_qb_y2k_clamp;
+}
+
 /* デバッグ: 16-bit CPU レジスタを idx で読む (ハング時のレジスタ確認用)。
  * 0:AX 1:BX 2:CX 3:DX 4:SI 5:DI 6:BP 7:SP 8:DS 9:ES 10:SS 11:CS 12:IP */
 uint32_t np2kai_debug_get_reg16(np2kai_handle h, int idx) {

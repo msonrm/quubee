@@ -228,6 +228,8 @@ set(EXPORTED_FUNCTIONS
     _np2kai_set_itf_post
     _np2kai_set_lines30
     _np2kai_set_clock_multiple
+    _np2kai_set_y2k_clamp
+    _np2kai_get_y2k_clamp
     _np2kai_dos_get_exit
     _malloc
     _free

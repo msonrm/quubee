@@ -1,5 +1,30 @@
 # CHANGELOG
 
+## [Y2K クランプに実行時オン/オフを追加 — qbDebug.y2k(0|1)] — 2026-07-04
+
+### 発端
+「1999 年以降の日付を 1999 と偽る Y2K 対策 (蟹味噌のスコアファイル破壊対策) のオン/オフはできるか」
+とユーザー質問。実装を確認すると 3 系統に**無条件でハードコード**されており実行時トグルが無かった。
+
+### 既定 ON の妥当性を再評価 (ユーザーと確認)
+QuuBee のターゲットは〜1998 年の pre-Y2K 同人/フリーソフトで、コーパスの大半が RTC/DOS の年を
+「年-1900」の 2 桁前提で扱う。現在年 2026 を素直に渡すと固定幅セーブが壊れる (蟹味噌 KANI.SCR 等)
+ため、**既定 ON は妥当**と判断 (据え置き)。ただし「本当の日付を見せたいカレンダー/時計系ツール」や
+Y2K 対応済みソフト・曜日整合の観点で OFF にしたいケースは実在するため、逃げ道 (トグル) を追加する。
+
+### 実装 (native フラグ一括 + JS トグル)
+- `native/bridge.c` に共有フラグ `int g_qb_y2k_clamp = 1` (既定 ON) と API `np2kai_set_y2k_clamp(on)` /
+  `np2kai_get_y2k_clamp()`。3 系統 (RTC 種=`qb_timemng.c`・RTC 直読み=`calendar.c date2bcd` [patch 03]・
+  DOS AH=2Ah=`dos_int21.c qb_era_year`) が各々局所 extern でこのフラグを見る形に変更 (一括制御)。
+- `qbDebug.y2k(0|1)` を追加 (worker/ローカル両対応。worker は ctl/query で転送)。引数なしで現在値。
+  反映は「次に日付を読む時」から (ゲームは起動時に一度読むので次の Run 推奨)。
+- patch 03 は `git checkout` で pristine 復元 → 直接編集 → `git diff` で再生成 (手書きの hunk 崩れ回避)。
+
+### 検証
+- 新規回帰 `tools/y2k_test.js` (8 PASS): RTC 年 BCD (種+読出) が ON=99/OFF=26 (host 2026)、
+  DOS INT 21h AH=2Ah の CX(年) が ON=1999/OFF=2026、get の既定=1。3 系統すべてトグルが効くことを end-to-end 確認。
+- `bash emscripten/build.sh` 成功 (patch 03 冪等 skip)。wasm 再ビルドを伴う。
+
 ## [コンソールの診断ログ大量表示を解消 — worker が chatter フィルタを取りこぼしていた] — 2026-07-04
 
 ### 発端

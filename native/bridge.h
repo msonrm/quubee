@@ -165,6 +165,19 @@ int np2kai_set_lines30(int on);
 __attribute__((visibility("default")))
 int np2kai_set_clock_multiple(int multiple);
 
+/* Y2K クランプ (RTC/DOS の年 20xx→1999 写像) の実行時オン/オフ。既定 ON=1。90 年代の pre-Y2K
+ * タイトル (蟹味噌 1992 の KANI.SCR 等) が RTC/DOS 日付を「年-1900」の 2 桁前提で扱い、現在年
+ * 2026 → 3 桁で固定幅セーブを壊す Y2K バグを防ぐシム。本当の日付を見せたいカレンダー/時計系
+ * ツールでは off にできる。3 系統 (RTC 種=qb_timemng・RTC 直読み=calendar.c date2bcd・DOS AH=2Ah=
+ * dos_int21) が一括で参照。反映は次に日付を読む時から (ゲームは起動時に一度読むので次の Run 推奨)。
+ * 戻り値: 設定後の値。qbDebug.y2k(0|1) の実体。 */
+__attribute__((visibility("default")))
+int np2kai_set_y2k_clamp(int on);
+
+/* Y2K クランプの現在値 (1=ON / 0=OFF) を返す。qbDebug.y2k() 引数なしの読み取り用。 */
+__attribute__((visibility("default")))
+int np2kai_get_y2k_clamp(void);
+
 /* 音声 pull 型 (C1)。JS の ScriptProcessorNode.onaudioprocess から呼ばれ、
  * dst に frames ぶんのステレオ int16 (L,R 交互) を書き出す。 */
 __attribute__((visibility("default")))

@@ -2212,6 +2212,8 @@ async function makeWorkerEmu() {
     const setItfPost  = M.cwrap('np2kai_set_itf_post',       'number', ['number']);
     const setLines30  = M.cwrap('np2kai_set_lines30',        'number', ['number']);
     const setMul      = M.cwrap('np2kai_set_clock_multiple', 'number', ['number']);
+    const setY2k      = M.cwrap('np2kai_set_y2k_clamp',      'number', ['number']);
+    const getY2k      = M.cwrap('np2kai_get_y2k_clamp',      'number', []);
     // 既定クロック倍率。multiple=20 × baseclock 2.4576MHz ≈ 49MHz (≈486DX2-50)。
     // 2026-06-26 に 27 (≈66MHz、ZUN 推奨環境相当) へ上げたが、ちびおと(ADPCM)既定 ON 後の
     // FMDSP 等で run_frame が重くなり音が詰まる実害をユーザーが実機で確認したため 20 に戻した
@@ -2355,6 +2357,12 @@ async function makeWorkerEmu() {
         // 実機 30行BIOS/30行計画 は ROM パッチ式で常駐できないので、その「常駐済み最終状態」を HLE が用意する。
         // 設定後に対象を Run (reset) して反映。詳細: docs/30line_spec.md。
         lines30: (on = 1) => `lines30=${setLines30(on ? 1 : 0)} (1=30行/0=25行) — 次の Run から反映`,
+        // Y2K クランプ (RTC/DOS の年 20xx→1999 写像) のオン/オフ。既定 ON。90 年代の pre-Y2K タイトル
+        // (蟹味噌等) が RTC/DOS 日付を 2 桁前提で扱い現在年 2026 で固定幅セーブを壊すのを防ぐシム。
+        // y2k(0)=OFF で本当の日付を渡す (カレンダー/時計系ツール向け上級者オプション。OFF だと蟹味噌型は
+        // 再びセーブが壊れる)。引数なし=現在値。ゲームは起動時に一度日付を読むので次の Run から反映が確実。
+        y2k: (on) => { if (on !== undefined) setY2k(on ? 1 : 0);
+            return `y2k_clamp=${getY2k()} (1=ON クランプ有効/0=OFF 本当の日付) — 次の Run 推奨`; },
         // async 自動クロック (快適化, **既定 OFF**)。autoclock(1)=ON で host の余裕に応じ multiple を
         // floor..ceil 内で自動調整 (達成フレーム時間から逆算)。autoclock(0)=OFF で既定 20≈49MHz 固定。
         // 既定 OFF の理由: 倍率を上げる利得は小さく音楽テンポがもたつく実害がある (上の autoClock 定義参照)。
@@ -2570,6 +2578,12 @@ async function makeWorkerEmu() {
                 return `ITF_WORK=${on ? 1 : 0} (1=POST表示/0=スキップ) — 次の Run から反映`; },
             lines30: (on = 1) => { ctl('np2kai_set_lines30', ['number'], [on ? 1 : 0]);
                 return `lines30=${on ? 1 : 0} (1=30行/0=25行) — 次の Run から反映。詳細 docs/30line_spec.md`; },
+            // Y2K クランプのオン/オフ。設定は fire-and-forget、現在値取得は worker 往復 (await してください)。
+            y2k: (on) => {
+                if (on !== undefined) ctl('np2kai_set_y2k_clamp', ['number'], [on ? 1 : 0]);
+                return q('np2kai_get_y2k_clamp', 'number', [], [])
+                    .then((v) => `y2k_clamp=${v} (1=ON クランプ有効/0=OFF 本当の日付) — 次の Run 推奨`);
+            },
             vol: (o) => {
                 if (o !== undefined) {
                     const g = (k) => (o[k] === undefined ? -1 : (o[k] | 0));
