@@ -21,6 +21,19 @@ let pW = 0, pH = 0, pBpp = 0;
 // cwrap holders (init で確定)
 let c = {};
 
+// stdout/stderr ルーティング (bridge.js のローカル経路と同じ設計を worker にも)。
+// 自前 C 側の逐次ログは全て [小文字タグ] 形式 ([dos_loader]/[int21h…]/[batch]/[dos_exec]/[tty] 等)。
+// Chrome は console.warn/error に赤黄+スタックトレースを自動付与するので、無害な診断ログが「エラーの山」に
+// 見えてしまう (worker 既定は素の console.warn だった)。これら chatter は既定で console.debug へ回し、
+// DevTools の Verbose レベルに送る (既定は非表示・captured なので消えてはいない = レベルを All にすれば読める)。
+// 本物の emscripten エラー (Aborted/RuntimeError 等 = 先頭が [小文字 でない) は console.error で残す。
+// verbose (init 時 ?debug/QB_VERBOSE か qbDebug.verbose(1)) 時は chatter も console.log で前面表示。
+const QB_CHATTER = /^\[[a-z]/;
+let logVerbose = false;
+const logOut = (t) => { if (logVerbose || !QB_CHATTER.test(t)) console.log(t); };
+const logErr = (t) => { if (QB_CHATTER.test(t)) { if (logVerbose) console.log(t); else console.debug(t); }
+                        else console.error(t); };
+
 // run ループ
 let running = false;
 let paused = false;             // 一時停止 (music pause)。tick がフレームを進めない = 位置保持・無音
@@ -221,12 +234,13 @@ function startLoop() {
 
 // ---- init ----
 async function init(msg) {
+    logVerbose = !!msg.verbose;                          // ?debug/QB_VERBOSE を main から引き継ぐ (chatter を前面表示)
     importScripts(msg.coreUrl);                          // self.NP2KaiModule (MODULARIZE)
     const coreUrl = msg.coreUrl;
     M = await self.NP2KaiModule({
         locateFile: (p) => new URL(p, coreUrl).href,     // wasm を coreUrl と同じディレクトリから
-        print:    (t) => console.log(t),
-        printErr: (t) => console.warn(t),
+        print:    (t) => logOut(t),
+        printErr: (t) => logErr(t),
     });
 
     c.runFrame   = M.cwrap('np2kai_run_frame', null, ['number']);
@@ -282,6 +296,7 @@ onmessage = (ev) => {
     switch (m.type) {
         case 'init': init(m); break;
         case 'run': if (m.on) startLoop(); else running = false; break;
+        case 'setVerbose': logVerbose = !!m.on; break;   // qbDebug.verbose(1) で chatter を前面表示へ切替
 
         // 入力 (handle はここで前置)
         case 'key':   (m.down ? c.keyDown : c.keyUp)(handle, m.code); break;

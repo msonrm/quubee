@@ -1,5 +1,40 @@
 # CHANGELOG
 
+## [コンソールの診断ログ大量表示を解消 — worker が chatter フィルタを取りこぼしていた] — 2026-07-04
+
+### 発端
+ゲーム起動直後にブラウザの DevTools コンソールを開くと「エラーっぽい」表示が大量に出て見づらい、
+とユーザー指摘 (`games/touhou/huma_ts2.lzh` 例)。実体は `[dos_loader] staged COM` /
+`[int21h/open] … → handle 5` / `[dos_exec] child …` 等の**正常動作の記録**で、エラーではない。
+
+### 真因 = worker (既定) だけ chatter フィルタが未配線
+自前 C 側の逐次ログ (`fprintf(stderr,…)`、全て `[小文字タグ]` 形式 = chatter) は Emscripten の
+`printErr` に流れる。`web/player/emu-worker.js` の `printErr` が**素の `console.warn`** だったため、
+**Chrome が `console.warn`/`console.error` にだけ自動付与するスタックトレース**で 1 行のログが
+`printErr → put_char → … → tick` の 15 行に膨らみ「エラーの山」に見えていた。ローカル経路 (`?local`)
+には既に chatter フィルタ (`qbChatter=/^\[[a-z]/` + `qbVerbose()`) があったのに、**worker 経路にだけ
+配線されていなかった取りこぼし**が真因。
+
+### 実装 (JS のみ・wasm 再ビルド不要)
+- worker も chatter を既定で **`console.debug`** (DevTools の Verbose レベル送り = 既定非表示・captured。
+  レベルを All にすれば読める) へ。本物の emscripten エラー (`Aborted`/`RuntimeError` = 先頭が `[小文字`
+  でない) は `console.error` に残す。`print` (stdout) 側も同じフィルタに揃えた。
+- **前面表示トグル** `qbDebug.verbose(1)` を追加 (worker/ローカル両対応・`?debug` / `window.QB_VERBOSE`
+  でも可)。worker は printErr ルーティングが worker スレッド内なので `emu.setVerbose` で postMessage 転送。
+- ローカル経路も「chatter を drop → `console.debug` (captured)」に統一 (両モードで同挙動)。
+
+### ローカル↔worker ギャップの横断調査
+今回の verbose と同型の「ローカルにあるが worker で静かに no-op」を4面で突き合わせ:
+共有 `emu.*` メソッド / `qbDebug` ベース vs worker override / メッセージ配線 (emuObj type ↔ worker case)
+/ init 分岐。**同型の穴は verbose のみ**と確認 (他の setter は「共有 `emu.*` 経由」か「フラグ + 次 Run 適用」
+で両モード対応、同期 getter は override で `NA` 明示)。verbose だけが worker スレッド内グローバル状態を
+触る唯一のライブ制御だった。副産物で `setVerbose` をローカル emu 実装にも配置して対称化。
+
+### 検証
+- ルーティング分岐を実ログ行で確認: chatter 13 行 → `console.debug` (verbose 時 `console.log`)、
+  `Aborted`/`RuntimeError`/`worker error` → `console.error`、全 PASS。
+- `node --check` で両ファイル構文 OK。C 側は無変更。
+
 ## [LIO GCIRCLE 円弧 + 楕円を実装 — テスター提供 liotest の扇/楕円が出るように] — 2026-07-04
 
 ### 発端

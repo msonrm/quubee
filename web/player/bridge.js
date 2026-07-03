@@ -128,10 +128,12 @@ async function loadDisk(M, url, fsPath) {
 }
 
 // emscripten の stdout/stderr ルーティング。自前 C 側の逐次ログは全て [tag] 形式
-// ([dos_loader] / [int21h…] / [tty] / [mcb] 等) なので「先頭が [小文字 の行」をまとめて既定抑制する
-// (Chrome が stderr を console.error=赤で表示し、無害なのに「エラー」に見えるため)。本物の emscripten
-// エラーは Aborted/RuntimeError 等で先頭が [小文字 にならないので残る。
-// 再表示: URL に ?debug を付けるか、コンソールで window.QB_VERBOSE = true。
+// ([dos_loader] / [int21h…] / [tty] / [mcb] 等) なので「先頭が [小文字 の行」をまとめて既定で
+// console.debug へ回す。Chrome の DevTools はこれを Verbose レベルに分類し既定では非表示にするが、
+// captured なので消えてはいない (レベルフィルタを All/Verbose にすれば読める)。console.warn/error だと
+// 赤黄+スタックトレースが自動付与され「無害なのにエラーの山」に見えるのを避ける狙い。本物の emscripten
+// エラーは Aborted/RuntimeError 等で先頭が [小文字 にならないので console.error に残す。
+// 前面表示 (console.log): URL に ?debug を付ける / window.QB_VERBOSE = true / qbDebug.verbose(1)。
 const qbVerbose = () => typeof window !== 'undefined' &&
     (window.QB_VERBOSE || /[?&]debug\b/.test(location.search));
 const qbChatter = /^\[[a-z]/;
@@ -221,7 +223,7 @@ async function makeWorkerEmu() {
         dataFiles.push({ path: '/tmp/2608_' + nm.toUpperCase() + '.WAV', bytes: rb });
         dataFiles.push({ path: '/tmp/2608_' + nm + '.wav', bytes: rb });
     }
-    const initReply = await call({ type: 'init', coreUrl, audioRate, dataFiles, audioSab: ringSab, ringFrames: RING_FRAMES });
+    const initReply = await call({ type: 'init', coreUrl, audioRate, dataFiles, audioSab: ringSab, ringFrames: RING_FRAMES, verbose: qbVerbose() });
     if (initReply && initReply.error) {          // np2kai_create 失敗等を握りつぶさず表示 (local の showFatal に揃える)
         showFatal('worker: ' + initReply.error);
         throw new Error(initReply.error);        // 以降の boot disk 挿入 (handle=0) へ進ませない
@@ -260,6 +262,7 @@ async function makeWorkerEmu() {
         mouseMove(dx, dy)    { worker.postMessage({ type: 'mouseMove', dx, dy }); },
         mouseButton(btn, st) { worker.postMessage({ type: 'mouseButton', btn, state: st }); },
         setPaused(p)         { worker.postMessage({ type: 'setPaused', on: p }); },
+        setVerbose(on)       { worker.postMessage({ type: 'setVerbose', on: !!on }); },   // 診断ログの前面表示切替
         // 汎用 C 呼び出し (qbDebug のライブ制御/取得用)。ctl=副作用のみ fire-and-forget、query=戻り値を Promise で。
         ctl(fn, argTypes, args, prependHandle) { worker.postMessage({ type: 'call', fn, argTypes: argTypes || [], args: args || [], prependHandle: !!prependHandle }); },
         query(fn, ret, argTypes, args, prependHandle) { return call({ type: 'call', fn, ret, argTypes: argTypes || [], args: args || [], prependHandle: !!prependHandle }).then(m => m.r); },
@@ -279,7 +282,7 @@ async function makeWorkerEmu() {
     // ローカル初期化 (下) は worker 時スタブ M で無害に空回りする。共有 UI は emu.* で両対応。
     const M = QB_USE_WORKER ? makeStubM() : await NP2KaiModule({
         print:    (t) => { if (qbVerbose() || !qbChatter.test(t)) console.log(t); },
-        printErr: (t) => { if (qbChatter.test(t)) { if (qbVerbose()) console.log(t); }
+        printErr: (t) => { if (qbChatter.test(t)) { if (qbVerbose()) console.log(t); else console.debug(t); }
                            else console.error(t); },
     });
     let emu;   // QB_USE_WORKER → makeWorkerEmu / それ以外 → 下のローカル実装
@@ -1322,6 +1325,7 @@ async function makeWorkerEmu() {
         mouseMove(dx, dy)     { mouseMove(handle, dx, dy); },
         mouseButton(btn, st)  { mouseButton(handle, btn, st); },
         setPaused(p)          { emuFrozen = p; },   // local: loop/audio が emuFrozen を読む
+        setVerbose(on)        { window.QB_VERBOSE = !!on; },   // local: printErr が qbVerbose() をライブ参照 (worker との対称性のため)
         // 駆動ループ (local): rAF で catch-up runFrame → getFb → onFrame(描画コールバック)。
         // pause(emuFrozen)/入力ポーリング/クロック/計測は closure 側の状態を参照。worker 版の start() は別実装。
         start(onFrame) {
@@ -2280,6 +2284,11 @@ async function makeWorkerEmu() {
         cs:     () => '0x' + (getCs(handle)       >>> 0).toString(16),
         linear: () => '0x' + (getLinearPc(handle) >>> 0).toString(16),
         pc:     () => `${window.qbDebug.cs()}:${window.qbDebug.linear()}`,
+        // 診断ログ (自前 C 側の [tag] 逐次ログ) の表示切替。既定 OFF = console.debug (DevTools の Verbose
+        // レベル送り = 既定非表示・captured)。verbose(1) で console.log 前面表示、verbose(0) で既定へ戻す。
+        // ?debug / window.QB_VERBOSE = true でも同じ。ローカル経路は次のログから即反映。
+        verbose: (on = 1) => { window.QB_VERBOSE = !!on;
+            return `診断ログ ${on ? '前面表示 (console.log)' : '既定 (console.debug = Verbose 送り・captured)'} に切替`; },
         // FM 音源エンジンの A/B 切替。fmgen(1)=fmgen(既定) / fmgen(0)=opngen。
         // 次の Run (reset) から反映 → 同じ FM ゲームを再実行して聴き比べる。
         fmgen:  (on=1) => `usefmgen=${setFmgen(on ? 1 : 0)} (1=fmgen/0=opngen) — 次の Run から反映。同じゲームを再実行して聴き比べてください`,
@@ -2552,6 +2561,9 @@ async function makeWorkerEmu() {
         const q   = (fn, ret, at, a, ph) => emu.query(fn, ret, at, a, ph);
         Object.assign(window.qbDebug, {
             // --- ライブ制御 (worker へ転送して実効) ---
+            // 診断ログの表示切替 (worker 版)。printErr ルーティングは worker 内なので postMessage で転送。
+            verbose: (on = 1) => { window.QB_VERBOSE = !!on; emu.setVerbose(on);
+                return `診断ログ ${on ? '前面表示 (console.log)' : '既定 (console.debug = Verbose 送り・captured)'} に切替 (worker)`; },
             fmgen: (on = 1) => { ctl('np2kai_set_fmgen', ['number'], [on ? 1 : 0]);
                 return `usefmgen=${on ? 1 : 0} (1=fmgen/0=opngen) — 次の Run から反映。同じゲームを再実行して聴き比べてください`; },
             itfpost: (on = 1) => { ctl('np2kai_set_itf_post', ['number'], [on ? 1 : 0]);
