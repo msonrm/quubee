@@ -974,7 +974,7 @@ async function makeWorkerEmu() {
             // 閲覧専用形式は !append でも束を閉じない (誤って画像を落としても前のゲームが消えない)。
             if (!append && !previewOnly) await closeBundle();
             runStatusEl.textContent = `Loading ${file.name}…`;
-            if (/\.(lzh|zip)$/i.test(file.name)) {
+            if (/\.(lzh|lha|lzs|zip)$/i.test(file.name)) {
                 mergeEntries(await extractArchiveToFs(file, true, destDir));  // currentDir 配下へ (/run クリアは closeBundle 済)
             } else if (qbDiskImage.isDiskImageName(file.name)) {
                 // ディスクイメージは「ブートせず中身を /run/ へ取り出す」(FAT12/16 リーダ)。
@@ -1027,7 +1027,7 @@ async function makeWorkerEmu() {
                 mergeEntries([{ name: rel, data, mtime: file.lastModified ? new Date(file.lastModified) : null }]);
             } else {
                 runStatusEl.textContent =
-                    `Unsupported file: ${file.name} (.lzh / .zip / disk image / .com / .exe)`;
+                    `Unsupported file: ${file.name} (.lzh / .lha / .lzs / .zip / disk image / .com / .exe)`;
                 return;
             }
             loadedArchives.push(file.name);
@@ -1198,7 +1198,7 @@ async function makeWorkerEmu() {
 
     async function extractArchiveToFs(file, append, destDir = '') {
         const bytes = new Uint8Array(await file.arrayBuffer());
-        // .zip は deflate 展開、それ以外 (.lzh) は LZH デコーダ。どちらもブートせず /run/ へ展開する。
+        // .zip は deflate 展開、それ以外 (.lzh / .lha / .lzs=LArc) は LZH デコーダ。どちらもブートせず /run/ へ展開する。
         const entries = /\.zip$/i.test(file.name)
             ? await qbArchive.parseZip(bytes)
             : qbArchive.parseLzh(bytes);

@@ -2,7 +2,8 @@
 // LZH アーカイブパーサ + LH1/4/5/6/7 / -lh0- デコーダ
 // 対応ヘッダ: Level 0 / Level 1 / Level 2 (Level 3 は throw)
 // 対応メソッド: "-lh1-" (適応Huffman+4KB), "-lh4/5/6/7-" (静的Huffman 4/8/32/64KB),
-//             "-lh0-" (stored), "-lhd-" (dir)。未対応メソッドは data=null で返し呼び出し側が skip
+//             "-lh0-"/"-lz4-" (stored), "-lhd-" (dir), "-lz5-"/"-lzs-" (LArc LZSS)。
+//             未対応メソッドは data=null で返し呼び出し側が skip
 //
 // API:
 //   qbArchive.parseLzh(bytes: Uint8Array) -> [{ name: string, data: Uint8Array }, ...]
@@ -40,7 +41,8 @@
         let compBytes = compSize;   // 実圧縮データ長 (Level1 は ext header 長を後で減算)
         if (level === 0 || level === 1) {
             const nameLen = buf[base + 21];
-            name = decodeName(buf, base + 22, nameLen);
+            let fname = lzhFilename(buf, base + 22, nameLen);
+            let dir = '';
             // +15..18 = DOS 形式の更新日時 (low word=time, high word=date)
             const dosT = readU32(buf, base + 15);
             mtime = dosDateTime(dosT & 0xffff, (dosT >>> 16) & 0xffff);
@@ -51,14 +53,31 @@
                 // Level 1 ext header chain: basic header の末尾 2 byte が
                 // 「最初の ext header のサイズ」、各 ext header の末尾 2 byte が
                 // 「次の ext header のサイズ」(チェーン構造)。size=0 で終了。
+                // 各 ext header は [type:1][data...][next size:2]。type は L2 と共通で
+                // 0x01=ファイル名 / 0x02=ディレクトリ名 (0xFF 区切り)。L1 でもディレクトリ名は
+                // 拡張ヘッダに入るので、ここで拾わないと構造がルートへ潰れる (issue kiss218)。
                 let nextSize = buf[basicEnd - 2] | (buf[basicEnd - 1] << 8);
                 while (nextSize > 0) {
                     if (p + nextSize > buf.length || nextSize < 2) break;
+                    if (nextSize >= 3) {          // type(1) + data + next size(2) が入る最小長
+                        const type = buf[p];
+                        const dlen = nextSize - 3;
+                        if (type === 0x01) {                    // ファイル名 (basic header を上書き)
+                            fname = lzhFilename(buf, p + 1, dlen);
+                        } else if (type === 0x02) {             // ディレクトリ名 (0xFF 区切り)
+                            dir = '';
+                            for (let i = 0; i < dlen; i++) {
+                                const c = buf[p + 1 + i];
+                                dir += (c === 0xff) ? '/' : String.fromCharCode(c);
+                            }
+                        }
+                    }
                     const nxt = p + nextSize;
                     nextSize = buf[nxt - 2] | (buf[nxt - 1] << 8);
                     p = nxt;
                 }
             }
+            name = dir + fname;
             dataStart = p;
             // LHA Level1 の compSize は「圧縮データ + 全 ext header」の合算値 (lha 本家が
             // 読み取り後に packed_size -= ext 長 する仕様)。ext header 分 (p-basicEnd) を
@@ -84,7 +103,7 @@
                 const type = buf[p + 2];
                 const dlen = extSize - 3;
                 if (type === 0x01) {                    // ファイル名
-                    fname = decodeName(buf, p + 3, dlen);
+                    fname = lzhFilename(buf, p + 3, dlen);
                 } else if (type === 0x02) {             // ディレクトリ名 (0xFF 区切り)
                     dir = '';
                     for (let i = 0; i < dlen; i++) {
@@ -100,13 +119,17 @@
         }
 
         let data = null;   // 未対応メソッドは null (throw せず、呼び出し側で skip)
-        if (method === '-lh0-' || method === '-lhd-') {
-            data = buf.slice(dataStart, dataStart + compBytes);
+        if (method === '-lh0-' || method === '-lhd-' || method === '-lz4-') {
+            data = buf.slice(dataStart, dataStart + compBytes);   // stored (-lz4- = LArc 無圧縮)
         } else if (LH_DICBIT[method] !== undefined) {
             data = lhDecode(buf.subarray(dataStart, dataStart + compBytes),
                             origSize, LH_DICBIT[method]);
         } else if (method === '-lh1-') {
             data = lh1Decode(buf.subarray(dataStart, dataStart + compBytes), origSize);
+        } else if (method === '-lz5-') {
+            data = larc5Decode(buf.subarray(dataStart, dataStart + compBytes), origSize);
+        } else if (method === '-lzs-') {
+            data = larcsDecode(buf.subarray(dataStart, dataStart + compBytes), origSize);
         }
 
         return { name, data, method, mtime, next: dataStart + compBytes };
@@ -118,6 +141,14 @@
         let s = '';
         for (let i = 0; i < len; i++) s += String.fromCharCode(buf[off + i]);
         return s;
+    }
+
+    // LHA のファイル名フィールド (level 0/1 の basic header・ext type 0x01) は、
+    // ディレクトリ区切りに 0xFF を使う (level 0 は ext header を持てないので、サブ
+    // ディレクトリを保つ唯一の手段がこれ)。ext type 0x02 の dir 名と同じ区切り。
+    // 0xFF は SJIS に現れないバイトなので '/' へ無条件正規化して安全。
+    function lzhFilename(buf, off, len) {
+        return decodeName(buf, off, len).replace(/\xff/g, '/');
     }
 
     function readU32(buf, off) {
@@ -744,6 +775,90 @@
             }
         }
 
+        return out;
+    }
+
+    // ---- LArc デコーダ (-lz5- / -lzs-) ----
+    // LArc (三木和彦, 1988-90) の LZSS。90 年代初頭以前の最初期 PC-98 フリーソフトで使われた
+    // 旧形式。-lz4- は無圧縮 (stored) なので上の method 分岐で -lh0- と同じ扱い。
+    //
+    // 参考: Simon Howard の Lhasa (lib/lz5_decoder.c / lzs_decoder.c, ISC ライセンス) の
+    //       アルゴリズムを理解して自前で書き起こしたもの。実 LArc 3.33 書庫を lhasa を
+    //       独立オラクルにして byte 一致検証済 (tools/larc_test.js)。
+    //
+    // 両者とも「絶対位置リングバッファ」型 LZSS。lh1/lh5 の「現在位置からの相対オフセット」型と
+    // 違い、コピー元はリング内の絶対インデックスで指定される。リングは特定パターンで初期化され、
+    // 書き込み位置は RING - START_OFFSET から始まる (未書き込み領域を過去マッチとして参照しうる)。
+
+    // -lz5- (LArc 5): 4KB リング・START_OFFSET=18・THRESHOLD=3。
+    //   8 コマンドを 1 ビットマップ (LSB first) で束ねる。bit=1→リテラル1byte / bit=0→コピー2byte。
+    //   コピー: seqstart = ((c1 & 0xF0) << 4) | c0 (12bit 絶対位置)、seqlen = (c1 & 0x0F) + 3。
+    function larc5Decode(src, outSize) {
+        const RING = 4096, START_OFFSET = 18, THRESHOLD = 3;
+        const ring = new Uint8Array(RING);
+        // fill_initial: 各バイト値の 13 連 → 昇順 256 → 降順 256 → 0×128 → ' '×110 → 0×18
+        let f = 0;
+        for (let i = 0; i < 256; i++) for (let j = 0; j < 13; j++) ring[f++] = i;
+        for (let i = 0; i < 256; i++) ring[f++] = i;
+        for (let i = 0; i < 256; i++) ring[f++] = 255 - i;
+        for (let i = 0; i < 128; i++) ring[f++] = 0;
+        for (let i = 0; i < 110; i++) ring[f++] = 0x20;
+        for (let i = 0; i < 18;  i++) ring[f++] = 0;
+
+        const out = new Uint8Array(outSize);
+        let o = 0, s = 0, rpos = RING - START_OFFSET;
+        function put(b) { out[o++] = b; ring[rpos] = b; rpos = (rpos + 1) % RING; }
+
+        while (o < outSize && s < src.length) {
+            const bitmap = src[s++];
+            for (let bit = 0; bit < 8 && o < outSize; bit++) {
+                if (bitmap & (1 << bit)) {                 // リテラル
+                    if (s >= src.length) break;
+                    put(src[s++]);
+                } else {                                   // コピー
+                    if (s + 2 > src.length) break;
+                    const c0 = src[s++], c1 = src[s++];
+                    const start = ((c1 & 0xf0) << 4) | c0;
+                    const len = (c1 & 0x0f) + THRESHOLD;
+                    for (let i = 0; i < len && o < outSize; i++) put(ring[(start + i) % RING]);
+                }
+            }
+        }
+        return out;
+    }
+
+    // -lzs- (LArc S, 旧版): 2KB リング・START_OFFSET=17・THRESHOLD=2・init は全 ' '(0x20)。
+    //   コマンド先頭 1 ビット (MSB first) が種別。bit=1→リテラル8bit / bit=0→コピー(11bit 絶対
+    //   位置 + 4bit 長)、seqlen = len + 2。
+    function larcsDecode(src, outSize) {
+        const RING = 2048, START_OFFSET = 17, THRESHOLD = 2;
+        const ring = new Uint8Array(RING).fill(0x20);
+        const out = new Uint8Array(outSize);
+        let o = 0, rpos = RING - START_OFFSET;
+        // MSB-first ビットリーダ (Lhasa bit_stream_reader と同順)。acc は消費後に残ビットだけ保持。
+        let acc = 0, nbits = 0, s = 0;
+        function getbits(n) {
+            while (nbits < n) {
+                acc = ((acc << 8) | (s < src.length ? src[s++] : 0)) >>> 0;
+                nbits += 8;
+            }
+            nbits -= n;
+            const v = (acc >>> nbits) & ((1 << n) - 1);
+            acc &= (nbits > 0) ? ((1 << nbits) - 1) : 0;
+            return v;
+        }
+        function put(b) { out[o++] = b; ring[rpos] = b; rpos = (rpos + 1) % RING; }
+
+        while (o < outSize) {
+            if (s >= src.length && nbits === 0) break;     // 入力枯渇
+            if (getbits(1)) {                              // リテラル
+                put(getbits(8));
+            } else {                                       // コピー
+                const pos = getbits(11);
+                const len = getbits(4) + THRESHOLD;
+                for (let i = 0; i < len && o < outSize; i++) put(ring[(pos + i) % RING]);
+            }
+        }
         return out;
     }
 

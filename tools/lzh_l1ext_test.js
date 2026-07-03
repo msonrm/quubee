@@ -19,21 +19,34 @@ const { parseLzh } = require('../web/player/archive.js');
 // Level1 の -lh0- (無圧縮) エントリを合成。ext header の総バイト数を
 // compSize に含める = LHA Level1 仕様。各 ext header は [type(1)][data][nextsize(2)] で
 // 末尾 2 byte が次サイズ (=0 で終端)。span はその全長。
-function buildEntry(name, data, extSpans) {
+//
+// ext 要素は 2 形式を許す:
+//   数値 span    … type/data 不問の不透明ヘッダ (compSize/next 経路の検証用)
+//   {type, data} … type byte と data を実際に書き込む (ファイル名 0x01 / ディレクトリ 0x02)。
+//                  span は 1(type) + data + 2(nextsize) で自動算出。
+function extSpan(e) {
+    return (typeof e === 'number') ? e : 1 + Buffer.from(e.data, 'latin1').length + 2;
+}
+function buildEntry(name, data, exts) {
     const nameBuf = Buffer.from(name, 'latin1');
     const nameLen = nameBuf.length;
     const headerSize = 25 + nameLen;            // byte2 以降の basic header 長
     const extParts = [];
     let extTotal = 0;
-    for (let i = 0; i < extSpans.length; i++) {
-        const span = extSpans[i];
-        const part = Buffer.alloc(span);        // 0 埋め (type/data は中身不問)
-        const next = (i + 1 < extSpans.length) ? extSpans[i + 1] : 0;
+    for (let i = 0; i < exts.length; i++) {
+        const e = exts[i];
+        const span = extSpan(e);
+        const part = Buffer.alloc(span);        // 0 埋め (数値 span は type/data 不問)
+        if (typeof e !== 'number') {
+            part[0] = e.type;
+            Buffer.from(e.data, 'latin1').copy(part, 1);
+        }
+        const next = (i + 1 < exts.length) ? extSpan(exts[i + 1]) : 0;
         part.writeUInt16LE(next, span - 2);     // 末尾 2 byte = 次 ext のサイズ
         extParts.push(part);
         extTotal += span;
     }
-    const firstNext = extSpans.length ? extSpans[0] : 0;
+    const firstNext = exts.length ? extSpan(exts[0]) : 0;
     const compSize  = data.length + extTotal;   // skip size = data + ext
     const hdr = Buffer.alloc(2 + headerSize);
     hdr[0] = headerSize; hdr[1] = 0;            // checksum は parseLzh が検証しない
@@ -52,6 +65,21 @@ const cases = [
     { name: 'A.TXT', data: 'HELLO',      ext: [5] },     // ext header 1 個
     { name: 'B.TXT', data: 'WORLD!',     ext: [] },      // ext なし (従来も通る境界)
     { name: 'C.DAT', data: '0123456789', ext: [4, 6] },  // ext header 2 個 (チェーン)
+    // ↓ ディレクトリ名 ext (type 0x02, 0xFF 区切り) — issue kiss218 の回帰。
+    //   Level1 でもディレクトリ名は basic header でなく拡張ヘッダに入る。
+    { name: 'SVCEL.EXE', data: 'MZ...',  expect: 'TOOL/SVCEL.EXE',
+      ext: [{ type: 0x02, data: 'TOOL\xff' }, { type: 0x00, data: '\x00\x00' }] },
+    // ネストしたディレクトリ (0xFF が複数 = パス区切り)。
+    { name: 'DEEP.DAT', data: 'xyz',     expect: 'A/B/DEEP.DAT',
+      ext: [{ type: 0x02, data: 'A\xffB\xff' }] },
+    // type 0x01 ファイル名 ext は basic header の名前を上書きする。
+    { name: 'SHORT.$$$', data: 'body',   expect: 'REALNAME.EXT',
+      ext: [{ type: 0x01, data: 'REALNAME.EXT' }] },
+    // basic header の filename フィールド自体に 0xFF 区切りパスが埋まるケース (level 0/1 共通経路)。
+    //   level 0 は ext header を持てないのでサブディレクトリはこの形でしか表せない。
+    //   0xFF は SJIS 不在バイトなので '/' へ正規化する (A-1)。
+    { name: 'DIR\xffFILE.TXT', data: 'zzz', expect: 'DIR/FILE.TXT', ext: [] },
+    { name: 'A\xffB\xffDEEP.BIN', data: 'q', expect: 'A/B/DEEP.BIN', ext: [] },
 ];
 
 const archive = Buffer.concat(cases.map((c) => buildEntry(c.name, c.data, c.ext)));
@@ -63,7 +91,8 @@ assert.strictEqual(got.length, cases.length,
 for (let i = 0; i < cases.length; i++) {
     const g = got[i], c = cases[i];
     const data = Buffer.from(g.data).toString('latin1');
-    assert.strictEqual(g.name, c.name, `[${i}] name`);
+    const wantName = c.expect || c.name;
+    assert.strictEqual(g.name, wantName, `[${i}] name (dir/filename ext を拾えているか)`);
     assert.strictEqual(data, c.data, `[${i}] data (ext 長を compSize から引けているか)`);
     console.log(`  ✓ [${i}] ${g.name} = "${data}"`);
 }
