@@ -1,5 +1,5 @@
 diff --git a/lio/gcircle.c b/lio/gcircle.c
-index c73322b..1d84465 100755
+index c73322b..b2bd5ff 100755
 --- a/lio/gcircle.c
 +++ b/lio/gcircle.c
 @@ -1,7 +1,12 @@
@@ -95,7 +95,7 @@ index c73322b..1d84465 100755
  	cx = (SINT16)LOADINTELWORD(dat.cx);
  	cy = (SINT16)LOADINTELWORD(dat.cy);
  	rx = (SINT16)LOADINTELWORD(dat.rx);
-@@ -66,25 +125,71 @@ REG8 lio_gcircle(GLIO lio) {
+@@ -66,25 +125,72 @@ REG8 lio_gcircle(GLIO lio) {
  	if (pal == 0xff) {
  		pal = lio->work.fgcolor;
  	}
@@ -144,7 +144,7 @@ index c73322b..1d84465 100755
 -			d2--;
 -			d3 -= d2 * 2;
 +	// 円弧 / 楕円: パラメトリック描画
-+	// s/e は円周上の絶対座標 (cx+rx*cos, cy-ry*sin)。円弧は終点 e から始点 s へ CCW。
++	// s/e は円周上の絶対座標 (cx+rx*cos, cy-ry*sin)。円弧は始点 s から終点 e へ CCW。
 +	sx = (SINT16)LOADINTELWORD(dat.sx);
 +	sy = (SINT16)LOADINTELWORD(dat.sy);
 +	ex = (SINT16)LOADINTELWORD(dat.ex);
@@ -152,8 +152,9 @@ index c73322b..1d84465 100755
 +	a0 = 0.0;
 +	a1 = 2.0 * M_PI;
 +	if (arcmode) {
-+		a0 = atan2((double)(0 - (ey - cy)) * rx, (double)(ex - cx) * ry);
-+		a1 = atan2((double)(0 - (sy - cy)) * rx, (double)(sx - cx) * ry);
++		// 始点 s から終点 e へ CCW (N88-BASIC CIRCLE の描画向き)。
++		a0 = atan2((double)(0 - (sy - cy)) * rx, (double)(sx - cx) * ry);
++		a1 = atan2((double)(0 - (ey - cy)) * rx, (double)(ex - cx) * ry);
 +		while (a1 < a0 + 1e-9) {
 +			a1 += 2.0 * M_PI;
 +		}

@@ -84,14 +84,16 @@ async function run(exe, frames, enter) {
     const expect = (cond, msg) => { console.log((cond ? 'ok   ' : 'FAIL ') + msg); if (!cond) ok = false; };
 
     // ---- T1: 円弧の扇 (マゼンタ左 中心160,200 / 緑右 中心440,200) ----
+    // 円弧は始点 s(=東) から終点 e へ CCW (N88-BASIC 向き)。最外弧 i=7 (r=140) は
+    // e が NE(45°) なので CCW 0→45° = 右上セクターに入る (時計回りだと逆側に大回りしてしまう)。
     const t1 = await run('T1.EXE', 4000, true);
     expect(t1.count('magenta') > 300, `T1 マゼンタ扇が描画 (px=${t1.count('magenta')})`);
     expect(t1.count('green')   > 300, `T1 緑扇が描画 (px=${t1.count('green')})`);
-    // 円弧 ON: 左 i=7 (r=140) 最外弧は北 (160,60) を通る / 東 spoke (300,200)
-    expect(t1.boxHas('magenta', 160, 60, 3),  'T1 左最外弧が北 (160,60) を通る');
     expect(t1.boxHas('magenta', 300, 200, 3), 'T1 左の東 spoke (300,200)');
-    // 開いたウェッジ OFF: 左中心の右上 0-45° (r=100, 22.5°) ≒ (252,162) は未描画
-    expect(!t1.boxHas('magenta', 252, 162, 2), 'T1 開ウェッジ (252,162) は未描画');
+    // 回転向きガード: 最外弧 i=7 は右上 22.5°/r=140 ≒ (289,146) を通る (CCW のとき ON)
+    expect(t1.boxHas('magenta', 289, 146, 3),  'T1 最外弧が右上 (289,146) を通る = CCW 向き');
+    // 逆向き (CW) だと最外弧が西へ大回りして (20,200) に乗る。CCW では未描画であること
+    expect(!t1.boxHas('magenta', 20, 200, 2),  'T1 最外弧は西 (20,200) を通らない = CW 誤りでない');
 
     // ---- T2: 真円 + 楕円 (塗りは scope 外=輪郭) ----
     const t2 = await run('T2.EXE', 1500, false);
