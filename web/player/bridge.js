@@ -2155,34 +2155,59 @@ async function makeWorkerEmu() {
     // Super Depth: Z/Space=左攻撃 (button 0/2), X/Enter=右攻撃 (button 1/3)。
     // Gamepad API はイベントでなくポーリング型なので rAF ループ先頭で毎フレーム読む。
     // Chrome はボタンを一度押すまでパッドを列挙しない (= 接続直後は無反応で正常)。
+    // 割当は設定パネル (Gamepad グループ) で変更可 (方向=カーソル/テンキー切替・各ボタン→キー)。
+    // 下記の既定値は上のコメントの現行マッピングと 1:1 (localStorage 未保存なら挙動不変=ゼロ回帰)。
     const PAD_DEADZONE = 0.5;
-    const NKEY_UP = 0x3a, NKEY_LEFT = 0x3b, NKEY_RIGHT = 0x3c, NKEY_DOWN = 0x3d;
-    const NKEY_Z = 0x29, NKEY_X = 0x2a, NKEY_SPACE = 0x34, NKEY_ENTER = 0x1c, NKEY_ESC = 0x00;
-    const NKEY_SHIFT = 0x70, NKEY_CTRL = 0x74;
-    const padPressed = new Set();        // パッド由来で押下中の NKEY (キーボードとは独立管理)
+    // ボタン割当の候補キー (id → PC-98 NKEY)。矢印・Tab は候補から外し (移動は方向モードが担う)、
+    // 動作キーに絞る。テンキーは方向モード側で 2468 を提供。
+    const PAD_KEYS = { z: 0x29, x: 0x2a, c: 0x2b, space: 0x34, enter: 0x1c, esc: 0x00, ctrl: 0x74, shift: 0x70 };
+    const PAD_KEY_LABEL = { z: 'Z', x: 'X', c: 'C', space: 'Space', enter: 'Enter', esc: 'Esc', ctrl: 'Ctrl', shift: 'Shift', none: 'None' };
+    // 方向モード 2 種 (左手 = 十字/左スティック)。arrow=カーソル / tenkey=テンキー 2468。斜めは同時押し。
+    const PAD_DIRS = { arrow:  { up: 0x3a, down: 0x3d, left: 0x3b, right: 0x3c },
+                       tenkey: { up: 0x43, down: 0x4b, left: 0x46, right: 0x48 } };   // 8/2/4/6
+    // 対象ボタンと既定割当 (現行 if と 1:1)。idx = 標準 Gamepad ボタン番号。
+    const PAD_BUTTONS = [
+        { idx: 0, label: 'A (0)',     def: 'z' },
+        { idx: 1, label: 'B (1)',     def: 'x' },
+        { idx: 2, label: 'X (2)',     def: 'space' },
+        { idx: 3, label: 'Y (3)',     def: 'enter' },
+        { idx: 4, label: 'L1 (4)',    def: 'ctrl' },
+        { idx: 5, label: 'R1 (5)',    def: 'shift' },
+        { idx: 9, label: 'Start (9)', def: 'esc' },
+    ];
+    let padDir = 'arrow';                 // 現在の方向モード (設定パネルで上書き)
+    const padBtnMap = {};                 // btnIdx → keyId (既定は PAD_BUTTONS.def)
+    PAD_BUTTONS.forEach((b) => { padBtnMap[b.idx] = b.def; });
+    let padLive = -1;                     // 今押している対象ボタン番号 (設定パネルの live 表示用・-1=なし)
+    const padPressed = new Set();         // パッド由来で押下中の NKEY (キーボードとは独立管理)
 
     function pollGamepads() {
         const want = new Set();
-        // モーダル (ビューア / 音楽ポップアップ) 表示中はキーボード同様ゲームへ送らない
-        // (want が空のままになり下のエッジ検出で padPressed が全解放される)
-        if (viewerModalEl.hidden && playerModalEl.hidden && settingsModalEl.hidden && navigator.getGamepads) {
+        let live = -1;
+        // ビューア/音楽ポップアップ中は完全停止。設定パネル中は「押下ボタンの検出 (live)」だけ行い、
+        // ゲームへは送らない (toGame=false → want 空 → 下のエッジ検出で padPressed が全解放される)。
+        if (viewerModalEl.hidden && playerModalEl.hidden && navigator.getGamepads) {
+            const toGame = settingsModalEl.hidden;
+            const dir = PAD_DIRS[padDir] || PAD_DIRS.arrow;
             for (const gp of navigator.getGamepads()) {
                 if (!gp || !gp.connected) continue;
                 const btn = (i) => !!(gp.buttons[i] && gp.buttons[i].pressed);
                 const ax  = (i) => gp.axes[i] || 0;
-                if (btn(12) || ax(1) < -PAD_DEADZONE) want.add(NKEY_UP);
-                if (btn(13) || ax(1) >  PAD_DEADZONE) want.add(NKEY_DOWN);
-                if (btn(14) || ax(0) < -PAD_DEADZONE) want.add(NKEY_LEFT);
-                if (btn(15) || ax(0) >  PAD_DEADZONE) want.add(NKEY_RIGHT);
-                if (btn(0)) want.add(NKEY_Z);
-                if (btn(1)) want.add(NKEY_X);
-                if (btn(2)) want.add(NKEY_SPACE);
-                if (btn(3)) want.add(NKEY_ENTER);
-                if (btn(4)) want.add(NKEY_CTRL);   // L1 → Ctrl (東方のメッセージスキップ)
-                if (btn(5)) want.add(NKEY_SHIFT);  // R1 → Shift (東方の低速移動)
-                if (btn(9)) want.add(NKEY_ESC);
+                for (const b of PAD_BUTTONS) if (btn(b.idx)) live = b.idx;   // UI 用 (パネル中の物理ボタン特定)
+                if (!toGame) continue;
+                if (btn(12) || ax(1) < -PAD_DEADZONE) want.add(dir.up);
+                if (btn(13) || ax(1) >  PAD_DEADZONE) want.add(dir.down);
+                if (btn(14) || ax(0) < -PAD_DEADZONE) want.add(dir.left);
+                if (btn(15) || ax(0) >  PAD_DEADZONE) want.add(dir.right);
+                for (const b of PAD_BUTTONS) {
+                    if (btn(b.idx)) {
+                        const kid = padBtnMap[b.idx];
+                        if (kid && kid !== 'none' && PAD_KEYS[kid] !== undefined) want.add(PAD_KEYS[kid]);
+                    }
+                }
             }
         }
+        padLive = live;
         // エッジ検出して keyDown/keyUp (同 NKEY をキーボードと同時押ししていた場合、
         // 片方の解放で keyUp が先行するが、実害は「押し直せば済む」程度なので許容)
         for (const k of want) {
@@ -2720,6 +2745,12 @@ async function makeWorkerEmu() {
         const get = (k) => (k in settings ? settings[k] : DEFAULTS[k]);
 
         const applyTheme = (t) => { document.documentElement.dataset.theme = (t === 'light') ? 'light' : ''; };
+        // Gamepad 割当の適用 (localStorage → padDir/padBtnMap)。pollGamepads がこれを live 参照する。
+        const applyPad = (p) => {
+            if (!p || typeof p !== 'object') return;
+            if (p.dir === 'arrow' || p.dir === 'tenkey') padDir = p.dir;
+            if (p.buttons) for (const b of PAD_BUTTONS) { const k = p.buttons[b.idx]; if (k != null && (k === 'none' || PAD_KEYS[k] !== undefined)) padBtnMap[b.idx] = k; }
+        };
 
         // 設定キー → 適用関数 (qbDebug 経由)。await Promise.resolve でローカル同期・worker Promise を吸収。
         const APPLY = {
@@ -2735,6 +2766,7 @@ async function makeWorkerEmu() {
             mouse33:  (v) => qd.mouse33(v),
             verbose:  (v) => qd.verbose(v ? 1 : 0),
             theme:    (v) => applyTheme(v),
+            pad:      (v) => applyPad(v),
         };
         const applyOne = (k, v) => { const f = APPLY[k]; return f ? Promise.resolve().then(() => f(v)).catch(() => {}) : Promise.resolve(); };
 
@@ -2766,6 +2798,7 @@ async function makeWorkerEmu() {
             el('set-mouse33').value = get('mouse33');
             el('set-verbose').checked = !!get('verbose');
             el('set-theme').checked = (get('theme') === 'light');
+            syncPadUI();
         }
 
         for (const p of VOL_PARTS) el('set-vol-' + p).addEventListener('input', volChange);
@@ -2781,6 +2814,40 @@ async function makeWorkerEmu() {
         el('set-verbose').addEventListener('change', (e) => change('verbose', e.target.checked ? 1 : 0));
         el('set-theme').addEventListener('change', (e) => change('theme', e.target.checked ? 'light' : 'dark'));
 
+        // ---- Gamepad グループ (方向モード切替 + ボタン→キー割当 + 押下 live 表示) ----
+        const rowsEl = el('pad-rows');
+        for (const b of PAD_BUTTONS) {                       // ボタン行を生成 (ラベル + 割当キー select)
+            const row = document.createElement('div'); row.className = 'pad-row'; row.dataset.btn = b.idx;
+            const lab = document.createElement('span'); lab.className = 'pad-btn-label'; lab.textContent = b.label;
+            const sel = document.createElement('select'); sel.dataset.btn = b.idx;
+            for (const kid of [...Object.keys(PAD_KEYS), 'none']) {
+                const opt = document.createElement('option'); opt.value = kid; opt.textContent = PAD_KEY_LABEL[kid]; sel.appendChild(opt);
+            }
+            sel.value = padBtnMap[b.idx];
+            sel.addEventListener('change', () => { padBtnMap[b.idx] = sel.value; savePad(); });
+            row.appendChild(lab); row.appendChild(sel); rowsEl.appendChild(row);
+        }
+        function savePad() { settings.pad = { dir: padDir, buttons: { ...padBtnMap } }; saveSettings(); }
+        function syncPadUI() {
+            const dsel = el('set-pad-dir'); if (dsel) dsel.value = padDir;
+            for (const b of PAD_BUTTONS) { const s = rowsEl.querySelector('select[data-btn="' + b.idx + '"]'); if (s) s.value = padBtnMap[b.idx]; }
+        }
+        function resetPadState() { padDir = 'arrow'; PAD_BUTTONS.forEach((b) => { padBtnMap[b.idx] = b.def; }); syncPadUI(); }
+        el('set-pad-dir').addEventListener('change', (e) => { padDir = (e.target.value === 'tenkey') ? 'tenkey' : 'arrow'; savePad(); });
+        el('pad-reset').addEventListener('click', () => { resetPadState(); delete settings.pad; saveSettings(); });
+
+        // 押下ボタンの live 表示 (パネル表示中だけ rAF)。物理ボタンを光らせてラベル無しパッドでも特定できる。
+        const padConnected = () => { if (!navigator.getGamepads) return false; for (const gp of navigator.getGamepads()) if (gp && gp.connected) return true; return false; };
+        function updatePadLive() {
+            const liveEl = el('pad-live');
+            rowsEl.querySelectorAll('.pad-row').forEach((r) => r.classList.toggle('hot', (r.dataset.btn | 0) === padLive));
+            if (!padConnected()) { liveEl.textContent = 'パッド未接続 / no gamepad'; liveEl.classList.remove('on'); return; }
+            if (padLive >= 0) { const b = PAD_BUTTONS.find((x) => x.idx === padLive); liveEl.textContent = '今押したボタン / pressed: ' + (b ? b.label : padLive); liveEl.classList.add('on'); }
+            else { liveEl.textContent = 'ボタンを押すと光ります / press a button'; liveEl.classList.remove('on'); }
+        }
+        let padUiRaf = 0;
+        function padUiLoop() { if (settingsModalEl.hidden) { padUiRaf = 0; return; } updatePadLive(); padUiRaf = requestAnimationFrame(padUiLoop); }
+
         // 開閉。開くとき releaseHeldKeys で押しっぱなし防止 + 現在値反映。ゲームは背後で continue (live 聴き比べ)。
         let initialVol = null;   // Reset 用に native 既定 vol を初回だけキャプチャ
         async function open() {
@@ -2788,6 +2855,7 @@ async function makeWorkerEmu() {
             releaseHeldKeys();
             await refresh();
             settingsModalEl.hidden = false;
+            if (!padUiRaf) padUiLoop();       // 押下ボタンの live 表示を開始 (閉じると自ら停止)
         }
         const close = () => { settingsModalEl.hidden = true; };
         gear.addEventListener('click', open);
@@ -2800,6 +2868,7 @@ async function makeWorkerEmu() {
             settings = {}; saveSettings();
             if (initialVol && Object.keys(initialVol).length) await applyOne('vol', initialVol);
             for (const k of Object.keys(DEFAULTS)) await applyOne(k, DEFAULTS[k]);
+            resetPadState();                  // パッド割当も既定へ (settings は既に {} = pad も消去済み)
             await refresh();
         });
     })();
