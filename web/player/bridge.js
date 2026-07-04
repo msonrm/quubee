@@ -1944,6 +1944,7 @@ async function makeWorkerEmu() {
 
     // ---- 別窓ビューア (readme/テキストを大きく読む。将来 .MAG 画像も同じモーダルに相乗り) ----
     const viewerModalEl  = document.getElementById('viewer-modal');
+    const settingsModalEl = document.getElementById('settings-modal');   // 設定パネル (キー/パッドガードで参照)
     const viewerTitleEl  = document.getElementById('viewer-title');
     const viewerBodyEl   = document.getElementById('viewer-body');
     const viewerCanvasEl = document.getElementById('viewer-canvas');
@@ -2111,6 +2112,8 @@ async function makeWorkerEmu() {
         if (!viewerModalEl.hidden) { if (e.key === 'Escape') { e.preventDefault(); closeViewer(); } return; }
         // 音楽プレイヤーポップアップを開いている間も同様 (Esc で閉じる。演奏は背後で続く)
         if (!playerModalEl.hidden) { if (e.key === 'Escape') { e.preventDefault(); closePlayer(); } return; }
+        // 設定パネルを開いている間も同様 (Esc で閉じる。ゲームは背後で続く = live 設定を聴き比べられる)
+        if (!settingsModalEl.hidden) { if (e.key === 'Escape') { e.preventDefault(); settingsModalEl.hidden = true; } return; }
         // Ctrl/Meta/Alt + 他キーのブラウザショートカット (Ctrl+R / Ctrl+W / Ctrl+Shift+I 等)
         // は横取りしない。ただし CTRL キー単体は PC-98 の CTRL(0x74) としてゲームに送る
         // (発射/ダッシュに CTRL を使うゲーム向け)。これを通さないと PC98_KEYMAP の
@@ -2133,6 +2136,7 @@ async function makeWorkerEmu() {
         if (inField(e) && !pressed.has(e.code)) return;
         if (!viewerModalEl.hidden) return;   // ビューア表示中はゲームへ送らない
         if (!playerModalEl.hidden) return;   // 音楽ポップアップ表示中も同様
+        if (!settingsModalEl.hidden) return; // 設定パネル表示中も同様
         const code = PC98_KEYMAP[e.code];
         if (code === undefined) return;
         if (KEY_PREVENT_DEFAULT.has(e.code)) e.preventDefault();
@@ -2161,7 +2165,7 @@ async function makeWorkerEmu() {
         const want = new Set();
         // モーダル (ビューア / 音楽ポップアップ) 表示中はキーボード同様ゲームへ送らない
         // (want が空のままになり下のエッジ検出で padPressed が全解放される)
-        if (viewerModalEl.hidden && playerModalEl.hidden && navigator.getGamepads) {
+        if (viewerModalEl.hidden && playerModalEl.hidden && settingsModalEl.hidden && navigator.getGamepads) {
             for (const gp of navigator.getGamepads()) {
                 if (!gp || !gp.connected) continue;
                 const btn = (i) => !!(gp.buttons[i] && gp.buttons[i].pressed);
@@ -2690,6 +2694,115 @@ async function makeWorkerEmu() {
     // 60 だと体感やや速め (一部ゲームで音楽が走る) という報告に合わせて 56 を採用。
     emu.onAudioActive = markAudioActive;   // 音が鳴り始めたら音楽プレイヤーの計時を開始 (worker は audioActive msg 経由)
     emu.start(drawFrame);   // 駆動ループ開始 (loop 本体は emu.start に移設・モード固有)
+
+    // ---- 設定コントロールパネル (2026-07-04) ----
+    // qbDebug の厳選をコンソール無しで触る GUI。適用は必ず window.qbDebug.* 経由 (worker/ローカル両対応の
+    // 既存制御面を再利用し、await Promise.resolve で sync/async 差を吸収)。既定値は「レイヤ方式」で再適用
+    // しない = localStorage(quubee_settings_v1) に保存された項目だけを起動時に適用し、未変更は native 既定の
+    // まま (新規ブラウザ = 適用ゼロ = 現状と完全一致)。ライトモードは applyTheme で <html> に data-theme。
+    (function setupSettings() {
+        const gear = document.getElementById('settings-toggle');
+        if (!settingsModalEl || !gear) return;
+        const el = (id) => document.getElementById(id);
+        const qd = window.qbDebug;
+        const VOL_PARTS = ['fm', 'ssg', 'rhythm', 'adpcm'];
+        // CPU クロック表示: multiple × baseclock 2.4576MHz (例: ×20≈49MHz=486DX2-50 相当)。目安なので四捨五入。
+        const mulLabel = (m) => '×' + (m | 0) + ' ≈' + Math.round((m | 0) * 2.4576) + 'MHz';
+
+        const SETTINGS_KEY = 'quubee_settings_v1';
+        const loadSettings = () => { try { const s = JSON.parse(localStorage.getItem(SETTINGS_KEY)); return (s && typeof s === 'object') ? s : {}; } catch (_) { return {}; } };
+        let settings = loadSettings();
+        const saveSettings = () => { try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch (_) {} };
+
+        // 表示用の既定値 (getter の無い設定の初期表示に使う。native の実既定と一致させること)。
+        const DEFAULTS = { fmgen: 1, beepgain: 3.83, chibioto: 1, midifx: 1, multiple: 20,
+                           lines30: 0, itfpost: 0, y2k: 1, mouse33: 'ms', verbose: 0, theme: 'dark' };
+        const get = (k) => (k in settings ? settings[k] : DEFAULTS[k]);
+
+        const applyTheme = (t) => { document.documentElement.dataset.theme = (t === 'light') ? 'light' : ''; };
+
+        // 設定キー → 適用関数 (qbDebug 経由)。await Promise.resolve でローカル同期・worker Promise を吸収。
+        const APPLY = {
+            vol:      (v) => qd.vol(v),
+            fmgen:    (v) => qd.fmgen(v ? 1 : 0),
+            beepgain: (v) => qd.beepgain(v),
+            chibioto: (v) => qd.chibioto(v ? 1 : 0),
+            midifx:   (v) => qd.midifx(v ? 1 : 0),
+            multiple: (v) => qd.multiple(v | 0),
+            lines30:  (v) => qd.lines30(v ? 1 : 0),
+            itfpost:  (v) => qd.itfpost(v ? 1 : 0),
+            y2k:      (v) => qd.y2k(v ? 1 : 0),
+            mouse33:  (v) => qd.mouse33(v),
+            verbose:  (v) => qd.verbose(v ? 1 : 0),
+            theme:    (v) => applyTheme(v),
+        };
+        const applyOne = (k, v) => { const f = APPLY[k]; return f ? Promise.resolve().then(() => f(v)).catch(() => {}) : Promise.resolve(); };
+
+        // 起動時復元: 保存済みキーだけ適用 (未保存 = native 既定のまま = 現状一致)。theme は head 先読み済みだが再適用は no-op。
+        (async () => { for (const k of Object.keys(settings)) await applyOne(k, settings[k]); })();
+
+        // ---- パネル配線 ----
+        // 変更 → settings 更新 → 適用 → 保存。
+        function change(k, v) { settings[k] = v; applyOne(k, v); saveSettings(); }
+        function volChange() {
+            const vol = {};
+            for (const p of VOL_PARTS) { const v = el('set-vol-' + p).value | 0; vol[p] = v; el('val-vol-' + p).textContent = v; }
+            change('vol', vol);
+        }
+
+        // 現在値をコントロールへ反映 (開くたび)。vol は getter があるので保存が無ければ native 読み戻し。
+        async function refresh() {
+            let vol = settings.vol;
+            if (!vol) { try { vol = await qd.vol(); } catch (_) { vol = null; } }
+            for (const p of VOL_PARTS) { const v = (vol && vol[p] != null) ? (vol[p] | 0) : 128; el('set-vol-' + p).value = v; el('val-vol-' + p).textContent = v; }
+            el('set-fmgen').value = String(get('fmgen') ? 1 : 0);
+            const bg = Number(get('beepgain')); el('set-beepgain').value = Math.round(bg * 100); el('val-beepgain').textContent = bg.toFixed(2) + 'x';
+            el('set-chibioto').checked = !!get('chibioto');
+            el('set-midifx').checked = !!get('midifx');
+            const mul = get('multiple') | 0; el('set-multiple').value = mul; el('val-multiple').textContent = mulLabel(mul);
+            el('set-lines30').checked = !!get('lines30');
+            el('set-itfpost').checked = !!get('itfpost');
+            el('set-y2k').checked = !!get('y2k');
+            el('set-mouse33').value = get('mouse33');
+            el('set-verbose').checked = !!get('verbose');
+            el('set-theme').checked = (get('theme') === 'light');
+        }
+
+        for (const p of VOL_PARTS) el('set-vol-' + p).addEventListener('input', volChange);
+        el('set-fmgen').addEventListener('change', (e) => change('fmgen', e.target.value === '1' ? 1 : 0));
+        el('set-beepgain').addEventListener('input', (e) => { const x = (e.target.value | 0) / 100; el('val-beepgain').textContent = x.toFixed(2) + 'x'; change('beepgain', x); });
+        el('set-chibioto').addEventListener('change', (e) => change('chibioto', e.target.checked ? 1 : 0));
+        el('set-midifx').addEventListener('change', (e) => change('midifx', e.target.checked ? 1 : 0));
+        el('set-multiple').addEventListener('input', (e) => { const m = e.target.value | 0; el('val-multiple').textContent = mulLabel(m); change('multiple', m); });
+        el('set-lines30').addEventListener('change', (e) => change('lines30', e.target.checked ? 1 : 0));
+        el('set-itfpost').addEventListener('change', (e) => change('itfpost', e.target.checked ? 1 : 0));
+        el('set-y2k').addEventListener('change', (e) => change('y2k', e.target.checked ? 1 : 0));
+        el('set-mouse33').addEventListener('change', (e) => change('mouse33', e.target.value));
+        el('set-verbose').addEventListener('change', (e) => change('verbose', e.target.checked ? 1 : 0));
+        el('set-theme').addEventListener('change', (e) => change('theme', e.target.checked ? 'light' : 'dark'));
+
+        // 開閉。開くとき releaseHeldKeys で押しっぱなし防止 + 現在値反映。ゲームは背後で continue (live 聴き比べ)。
+        let initialVol = null;   // Reset 用に native 既定 vol を初回だけキャプチャ
+        async function open() {
+            if (initialVol === null) { try { initialVol = await qd.vol(); } catch (_) { initialVol = {}; } }
+            releaseHeldKeys();
+            await refresh();
+            settingsModalEl.hidden = false;
+        }
+        const close = () => { settingsModalEl.hidden = true; };
+        gear.addEventListener('click', open);
+        el('settings-done').addEventListener('click', close);
+        el('settings-close').addEventListener('click', close);
+        settingsModalEl.addEventListener('mousedown', (e) => { if (e.target === settingsModalEl) close(); });
+
+        // Reset: 既定へ戻す (明示操作なので既定適用してよい)。vol は初回キャプチャした native 既定へ。
+        el('settings-reset').addEventListener('click', async () => {
+            settings = {}; saveSettings();
+            if (initialVol && Object.keys(initialVol).length) await applyOne('vol', initialVol);
+            for (const k of Object.keys(DEFAULTS)) await applyOne(k, DEFAULTS[k]);
+            await refresh();
+        });
+    })();
 
     // ---- 下部ツールバー: テキスト入力 (IME 可) を DOS 文字入力へ注入 (2026-06-21) ----
     // FEP を持ち込まず、ブラウザ/OS の IME (や直接タイプ) で打った文字列を Shift-JIS にしてゲストへ注入する。

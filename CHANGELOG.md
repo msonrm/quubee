@@ -1,5 +1,32 @@
 # CHANGELOG
 
+## [設定コントロールパネル UI (Phase 1) — qbDebug をコンソール無しで触る GUI + ライトモード] — 2026-07-04
+
+### 発端
+qbDebug のオプションが増え、設定変更が DevTools コンソール頼みだった。一般ユーザーがコンソールを
+開かず主要設定を触れる GUI が欲しい、というユーザー要望。あわせて見やすさ優先のライトモードも。
+
+### 実装 (JS/HTML/CSS のみ・wasm 再ビルド不要)
+- 入力バー右端の歯車 (⚙) から開く設定モーダル (#player-modal と同じ紙トーンのクリーンカード)。
+  グループ = Sound (音量/FM エンジン/BEEP ブースト/ちびおと/MIDI リバーブ) / Speed (CPU 倍率・目安
+  クロック MHz 併記) / Display (30 行/POST) / Compatibility (Y2K/マウス流派/診断ログ) / Appearance
+  (ライトモード)。各行は英語ラベル + 日本語ラベル併記、補足は歓迎文と同じ JP→EN。「次の Run から」バッジ。
+- **中核設計 = レイヤ方式で回帰ゼロ**: 適用は既存の window.qbDebug.* 経由 (worker/ローカル両対応・
+  await で sync/async 吸収)。**既定値は再適用せず**、localStorage(quubee_settings_v1) に保存された項目
+  だけを起動時に適用 (新規ブラウザ = 適用ゼロ = 現状一致)。未変更の現在値表示は vol のみ native 読み戻し。
+- **ライトモード**: CSS 変数化した app chrome (body/canvas 余白/#screen 枠/#input-bar/アイコンボタン) を
+  :root[data-theme="light"] で白系に。ゲーム canvas のピクセルは drawImage 由来で不変。head に FOUC 先読み。
+- モーダル表示中は keydown/keyup/pollGamepads の 3 ガードでゲームへキー/パッドを送らない (開閉で releaseHeldKeys)。
+
+### 検証
+- 全 native 回帰 PASS (vol/beep_gain/y2k/mouse33/lines30/midi_fx = 無退行・既定値ピン留め)。
+- JS 参照 id 27 個すべて HTML に存在・タグ均衡・node --check OK。**ブラウザ実機でユーザー確認済**
+  (即時/次Run 両系統・ライトモードのボタンテーマ追従・クロック MHz 併記)。
+
+### 次
+Phase 2 = ゲームパッドのボタン割当 (pollGamepads の if→テーブル化 → 割当 UI + pad.map 永続化)。localStorage
+スキーマは pad セクションを前方互換で見越し済み。
+
 ## [Y2K クランプに実行時オン/オフを追加 — qbDebug.y2k(0|1)] — 2026-07-04
 
 ### 発端
