@@ -2458,7 +2458,7 @@ async function makeWorkerEmu() {
         // 既定 MS 仕様 (corpus 実測より。NEC 前提タイトルは 'nec' へ)。実測正典は tools/mousetest/ 参照。
         mouse33: (mode) => {
             if (mode !== undefined)
-                mouse33CtlFn(handle, mode === 'nec' ? 2 : mode === 'ms' ? 1 : mode ? 1 : 0);
+                mouse33CtlFn(handle, mode === 'nec' ? 2 : mode === 'ms' ? 1 : (mode === 'off' || mode === 'none') ? 0 : mode ? 1 : 0);
             const m = mouse33StatFn(handle, 0);
             return { mode: ['off', 'ms', 'nec'][m] || m, calls: mouse33StatFn(handle, 1),
                      x: mouse33StatFn(handle, 2), y: mouse33StatFn(handle, 3),
@@ -2618,7 +2618,7 @@ async function makeWorkerEmu() {
             },
             mouse33: (mode) => {
                 if (mode !== undefined)
-                    ctl('np2kai_mouse33_ctl', ['number'], [mode === 'nec' ? 2 : mode === 'ms' ? 1 : mode ? 1 : 0], true);
+                    ctl('np2kai_mouse33_ctl', ['number'], [mode === 'nec' ? 2 : mode === 'ms' ? 1 : (mode === 'off' || mode === 'none') ? 0 : mode ? 1 : 0], true);
                 return Promise.all([0, 1, 2, 3, 4, 5].map(i => q('np2kai_mouse33_stat', 'number', ['number', 'number'], [i], true)))
                     .then(([m, calls, x, y, buttons, hidden]) =>
                         ({ mode: ['off', 'ms', 'nec'][m] || m, calls, x, y, buttons, hidden }));
