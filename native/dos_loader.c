@@ -1170,6 +1170,26 @@ static void put_trampoline(uint32_t linear) {
     poke8(linear + 1, 0xCF);  /* IRET */
 }
 
+/* INT 21h 用: NOP + STI + CLD + IRET — 実 DOS の「DOS 内割り込み窓」の再現。
+ * 実 MS-DOS の INT 21h ディスパッチャは入口で CLD; STI を実行するため、CLI した
+ * ままのプログラムでも DOS コールの最中だけは係属 IRQ が配送されていた。HLE は
+ * C で原子的に処理して即 IRET するのでこの窓が消え、CLI で回りながら INT 21h を
+ * ポーリングするプログラム (Borland disable() 系。実例 = sol110 ソリティア: INT 1Ch
+ * 単発タイマの IRQ0 が永遠に届かずスナップバックアニメーションでフリーズ) が死ぬ。
+ * フック処理後に STI (i386c 実装は shadow として次の 1 命令を inline 実行) → CLD →
+ * ここで係属 IRQ の配送点が 1 回開く → IRET。IRET はスタックの FLAGS を pop する
+ * ので呼び出し元の IF/DF は変化しない (窓は漏れない)。CLD を挟むのは実 DOS と同じ
+ * 選択 + 0x90 だと biosfunc を余分に踏むため。
+ * 注: blocking 入力の再ポーリング (CPU_IP-- → slot+0 の NOP 踏み直し) は IRET に
+ * 到達しないため窓が開かない。CLI + blocking 入力 + タイマ併用のタイトルが現れたら
+ * その経路にも窓が要る (現状実例なしで据え置き)。INT 33h/DCh も同様に据え置き。 */
+static void put_trampoline_sti(uint32_t linear) {
+    poke8(linear,     0x90);  /* NOP — ia32_bioscall を踏む */
+    poke8(linear + 1, 0xFB);  /* STI — 割り込み窓を開く */
+    poke8(linear + 2, 0xFC);  /* CLD — STI shadow の 1 命令 (この直後に係属 IRQ 配送) */
+    poke8(linear + 3, 0xCF);  /* IRET — 呼び出し元 FLAGS (IF/DF 含む) を復元 */
+}
+
 /* ---- XMS/EMS 需要プローブ (計測器, 2026-06-05) ----
  * XMS/EMS は未 HLE。だが「フロッピー 2D・〜1998 同人」群が実際に XMS/EMS を要求するか
  * が不明なので、まず検出だけの計測器を常設する。INT 2Fh AX=43xx (XMS インストールチェック)、
@@ -1256,8 +1276,9 @@ void qb_dos_install_trampolines(void) {
     poke8(QB_TRAMP_LOADER_START + 0, 0x90);
     poke8(QB_TRAMP_LOADER_START + 1, 0xF4);
 
-    /* INT 21h / INT 20h: NOP + IRET */
-    put_trampoline(QB_TRAMP_INT21);
+    /* INT 21h: NOP + STI + CLD + IRET (実 DOS の DOS 内割り込み窓 — 上記コメント参照)。
+     * INT 20h: NOP + IRET (exit 専用。CS:IP が halt へ書き換わるので IRET は踏まれない)。 */
+    put_trampoline_sti(QB_TRAMP_INT21);
     put_trampoline(QB_TRAMP_INT20);
 
     /* XMS/EMS 需要プローブ: INT 2Fh / INT 67h も NOP + IRET (C フックでログだけ) */

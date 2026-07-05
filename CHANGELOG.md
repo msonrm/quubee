@@ -1,5 +1,48 @@
 # CHANGELOG
 
+## [DOS 内割り込み窓を再現 — sol110 ソリティアのフリーズ根治 (SimK 氏報告)] — 2026-07-06
+
+SimK 氏報告: sol110.lzh (DOS 版ソリティア, J.Oketani 氏, 1994) が「一見動くが、カードを
+中途半端な場所に移動するとフリーズ。-T (タイマ割り込み不使用) なら OK」。ヘッドレスで
+マウス D&D を注入して再現 (ドロップ直後に INT 33h ポーリングが +100k/120f → 0 に停止) し根治。
+
+### 真因 — HLE には実 MS-DOS の「DOS コール中だけ割り込みが有効」という窓が無かった
+
+- sol110 は INT 1Ch AH=02h 単発タイマを callback 内から自己再アームして周期化する典型作法
+  (静的に CD 1C が無いのは Turbo C int86 系がスタック上に INT 命令を動的生成するため)。
+  スナップバックアニメーションはこの tick を待つ。
+- NP2kai 側のタイマ経路は完全にシロ: 合成 BIOS の IRQ0 ハンドラ (FD80:01FC) は 0:058A を
+  デクリメントし満了で INT 07h 経由 callback 呼び出しまで実装済み。単発発火・自己再アーム
+  とも単体 COM では正常動作を実測確認。
+- 決め手は診断値: arm 後も 0:058A=1 固着・irr=1 (IRQ0 係属)・imr=7C (アンマスク済) なのに
+  isr=0 = **CPU が一度も割り込みを受理していない**。ゲスト IF=0 が全サンプルで観測された。
+- sol110 は Borland disable() 系で **CLI したまま** INT 21h AH=0Bh / INT 33h をポーリングして
+  回るプログラム。実 MS-DOS では INT 21h ディスパッチャが入口で CLD; STI するため、CLI した
+  ままの呼び出し元でも「DOS コールの最中だけ」係属 IRQ が配送されていた (これが実機で動く
+  理由)。我々の HLE は C で原子的に処理して即 IRET するのでこの窓が存在せず、tick は永遠に
+  係属のまま → フリーズ。-T はタイマ不使用でポーリング駆動になるため無事、とも整合。
+
+### 修正 (native/dos_loader.c — INT 21h トランポリン 2 バイト追加)
+
+- `NOP(hook); IRET` → `NOP(hook); STI; CLD; IRET` (put_trampoline_sti)。フック処理後、
+  IRET 直前に係属 IRQ の配送点が 1 回開く。i386c の STI は shadow (次 1 命令 inline 実行)
+  → IRQCHECKTERM の実装なのでこの並びで正しく機能する。IRET がスタックの FLAGS を pop
+  するので **呼び出し元の IF/DF は変化しない** (窓は漏れない)。CLD は実 DOS ディスパッチャ
+  と同じ選択 (NOP だと biosfunc を余分に踏む)。
+- blocking 入力の再ポーリング経路 (CPU_IP-- → NOP 踏み直し) は IRET 非到達で窓が開かない。
+  CLI + blocking 入力 + タイマ併用の実例が出たら拡張 (INT 33h/DCh への窓も同様に据え置き)。
+- 副産物: qbDebug 向けに np2kai_debug_get_reg16 へ診断 index 13〜18 (FLAGS / PIC imr,irr,isr /
+  PIT ch0 ctrl,flag,value / systimer nevent 生死・残 clock) を追加 (native/bridge.c)。
+
+### 検証
+
+- 再現ハーネス (マウス注入 D&D): 修正前 = ドロップ後 INT 33h +0/120f (フリーズ)、
+  修正後 = +83k/120f 継続・タイマ正常満了・カードは列へスナップバック (PNG 確認)。
+- falsify: 同一ビルドで「窓の無い INT 2Fh」をポーリングする変種 COM はハングしたまま =
+  窓が配送点であることの因果を分離確認。
+- 回帰 `tools/int1c_timer_test.js` (T1 単発発火 / T2 自己再アーム ×50 / T3 SOL 同型
+  CLI+INT 21h ポーリング + IF 漏れ検査)。既存全回帰スイート 60 本ゼロ失敗。
+
 ## [filer 同期の取りこぼし根治 — 爆速プログラムが作ったファイルが一覧に出ない (Stosstruppe 氏 fig1)] — 2026-07-05
 
 Stosstruppe 氏の同じ X 投稿 (6/28) にあった fig1.exe の報告「D&D して Run すると何も作られず

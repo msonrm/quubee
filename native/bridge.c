@@ -424,6 +424,15 @@ uint32_t np2kai_debug_get_reg16(np2kai_handle h, int idx) {
 	case 10: return (uint16_t)CPU_REGS_SREG(CPU_SS_INDEX);
 	case 11: return (uint16_t)CPU_REGS_SREG(CPU_CS_INDEX);
 	case 12: return (uint16_t)(CPU_EIP & 0xffff);
+	/* 13〜18: タイマ割り込み診断 (INT 1Ch 単発タイマ系の追跡用)。
+	 * IF は FLAGS bit9。PIC/PIT は iocore の生状態、17/18 は systimer nevent の生死。 */
+	case 13: return (uint16_t)CPU_FLAG;
+	case 14: return (uint32_t)pic.pi[0].imr | ((uint32_t)pic.pi[0].irr << 8)
+	              | ((uint32_t)pic.pi[0].isr << 16);
+	case 15: return (uint32_t)pit.ch[0].ctrl | ((uint32_t)pit.ch[0].flag << 8);
+	case 16: return (uint16_t)pit.ch[0].value;
+	case 17: return (uint32_t)nevent_iswork(NEVENT_ITIMER);
+	case 18: return (uint32_t)nevent_getremain(NEVENT_ITIMER);
 	default: return 0;
 	}
 }
