@@ -29,6 +29,10 @@
     }
 
     function parseEntry(buf, base) {
+        // 末尾切詰め書庫: 基本ヘッダ (level@+20, nameLen@+21) が読み切れない位置なら
+        // 正常終端扱いで打ち切る (throw すると読めていたエントリごと全滅し、
+        // 「未対応・破損はエントリ単位で skip」の方針と矛盾する)。
+        if (base + 22 > buf.length) return null;
         const headerSize = buf[base];
         if (headerSize === 0) return null;
         const method = String.fromCharCode(
@@ -121,6 +125,11 @@
         let data = null;   // 未対応メソッドは null (throw せず、呼び出し側で skip)
         if (method === '-lh0-' || method === '-lhd-' || method === '-lz4-') {
             data = buf.slice(dataStart, dataStart + compBytes);   // stored (-lz4- = LArc 無圧縮)
+        } else if (origSize > 64 * 1024 * 1024 || origSize > compBytes * 2048 + 65536) {
+            // ヘッダの u32 origSize を無検証で確保しない (細工/破損 .lzh の origSize=FFFFFFFF が
+            // 4GiB 確保 → タブ OOM だった)。フロッピー時代の実書庫は 64MB にも圧縮率 1:2048 にも
+            // 遠く及ばないので正規品はすべて通る。異常値はエントリ単位で skip。
+            console.warn(`LZH: origSize ${origSize} が異常 (comp ${compBytes}) — skip: ${name}`);
         } else if (LH_DICBIT[method] !== undefined) {
             data = lhDecode(buf.subarray(dataStart, dataStart + compBytes),
                             origSize, LH_DICBIT[method]);
@@ -419,7 +428,9 @@
         const eocd = findEocd(buf);
         if (eocd >= 0) {
             const entries = await parseZipViaCentralDir(buf, eocd);
-            if (entries) return entries;
+            // 空配列は truthy — cdOffset がズレて CDH sig 不一致で即 break した場合 (SFX 等の
+            // 前置データ付き zip) も [] が返るので、0 件は LFH 走査へフォールバックする。
+            if (entries && entries.length) return entries;
         }
         return parseZipViaLocalHeaders(buf);
     }
@@ -436,10 +447,21 @@
     // 中央ディレクトリ経由 (正典)。ZIP64 は範囲外なので null を返して LFH フォールバックへ。
     async function parseZipViaCentralDir(buf, eocd) {
         const cdCount  = buf[eocd + 10] | (buf[eocd + 11] << 8);
+        const cdSize   = readU32(buf, eocd + 12);
         const cdOffset = readU32(buf, eocd + 16);
         if (cdOffset === 0xffffffff || cdCount === 0xffff) return null;   // ZIP64
+        // SFX 等の前置データ付き zip: 記録された cdOffset は「アーカイブ先頭」基準で、前置分
+        // だけ実位置とズレる。CD は物理的に EOCD 直前で終わるので実位置 = eocd - cdSize。
+        // cdOffset に CDH sig が無いときだけ shift を適用する (Info-ZIP と同じ流儀)。
+        let shift = 0;
+        if (readU32(buf, cdOffset) !== ZIP_CDH_SIG) {
+            const actual = eocd - cdSize;
+            if (actual >= 0 && actual !== cdOffset && readU32(buf, actual) === ZIP_CDH_SIG) {
+                shift = actual - cdOffset;
+            }
+        }
         const out = [];
-        let p = cdOffset;
+        let p = cdOffset + shift;
         for (let n = 0; n < cdCount && p + 46 <= buf.length; n++) {
             if (readU32(buf, p) !== ZIP_CDH_SIG) break;
             const flags    = buf[p + 8]  | (buf[p + 9]  << 8);
@@ -451,7 +473,7 @@
             const nameLen  = buf[p + 28] | (buf[p + 29] << 8);
             const extraLen = buf[p + 30] | (buf[p + 31] << 8);
             const cmntLen  = buf[p + 32] | (buf[p + 33] << 8);
-            const lfhOff   = readU32(buf, p + 42);
+            const lfhOff   = readU32(buf, p + 42) + shift;   // LFH も前置分ズレる
             const name = zipEntryName(buf, p + 46, nameLen, flags);
             p += 46 + nameLen + extraLen + cmntLen;
             // データ開始位置は LFH 側の name/extra 長で決まる (CD の extra 長とは別物のことがある)。

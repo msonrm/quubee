@@ -1,5 +1,38 @@
 # CHANGELOG
 
+## [精査グループ A — 小修正 9 件を一括 (堅牢化 + honest failure)] — 2026-07-05
+
+精査残件のうち「小さくて低リスク」の 9 件 (ユーザー選択)。JS 5 + C 4、リビルド 1 回。
+
+### JS (archive.js / diskimage.js / index.html)
+- **origSize キャップ**: 細工/破損 .lzh のヘッダ u32 origSize (FFFFFFFF 等) を無検証で
+  `new Uint8Array()` に渡してタブ OOM → 64MB or comp×2048+64KB 超はエントリ単位 skip +
+  console.warn。**lh5_test 実書庫 1315 エントリ無回帰** = 正規品を誤射しない反証。
+- **parseEntry 境界チェック**: 末尾切詰め .lzh がヘッダレベル読みで throw し読めていた
+  エントリごと全滅 → base+22 境界で正常終端扱い (エントリ単位 skip 方針と整合)。
+- **parseZip の前置データ zip**: CD 0 件 (空配列=truthy) で LFH フォールバック不達 →
+  `entries.length` チェック + **cdOffset shift 補正 (実 CD 位置 = EOCD−cdSize、Info-ZIP 流。
+  cdOffset に CDH sig が無いときだけ適用)**。合成 zip (前置 16B) で通常/前置とも展開成功。
+- **diskimage parseDir**: 訪問済みディレクトリクラスタ未記録で、自己参照 subdir の細工
+  イメージが depth ガード内でも B^16 に組合せ爆発 → seenDirs Set。diskimage_test 30/0。
+- **Open ピッカー accept に .lha/.lzs 追加** (D&D では受理済みだったのに選べなかった)。
+
+### C (dos_loader.c / dos_int21.c)
+- **MCB 走査 4 ループに前進保証** (`nxt <= s` で break): ゲストが MCB size を踏むと 16bit
+  ラップで nxt==s → ホスト C 無限ループ = run_frame が返らず worker 凍結 (Stop も死ぬ)。
+  実 DOS なら「ゲストが固まる」だけの事故がホスト被害に格上げされるのを防ぐ。
+- **qb_env_set の 1 バイトスタック OOB**: len=207 で '=' 無しの set 文が tmp[208] に NUL →
+  クランプを sizeof-2 に。
+- **AH=4Dh に TSR 終了種別 type 3**: g_last_exit_type が 0 代入しか無い死にフィールドだった。
+  signal_tsr で 3 = 実 DOS 同様「常駐成功したか」を 4Dh で確認するインストーラが正しく判定。
+- **ESC[1J (先頭〜カーソル消去)**: 0K/1K/2K は揃っていたのに J だけ p=1 が欠けて無言 no-op
+  だった。INT DCh CL=10h AH=0Ah DX=1 も同経路で解消。
+
+### 検証
+回帰 28 本すべて PASS (seek_trunc 8/8・lh5 1315 エントリ・diskimage 30・intdc/esc/sgr 系・
+touhou 4/4 含む)。書庫修正 3 件は合成入力 (origSize 爆弾 / 切詰め書庫 / 前置 zip) の単体
+チェックでも直接確認。node --check OK。
+
 ## [全体コード精査の最優先 4 件を修正 — mouse33 0除算 / mergeEntries / 40h・42h / worker エラー伝搬] — 2026-07-05
 
 ### 発端

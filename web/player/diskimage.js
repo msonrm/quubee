@@ -238,6 +238,9 @@
         }
 
         const files = [];
+        // 走査済みディレクトリ先頭クラスタ。depth ガードだけだと「自分自身を指す subdir
+        // エントリ×B 個」の細工イメージで再帰木が B^16 に爆発する (循環は幅も断つ必要がある)。
+        const seenDirs = new Set();
 
         // ディレクトリ 32B エントリ列 (raw バイト) を走査
         function parseDir(dirBytes, prefix, depth) {
@@ -258,6 +261,8 @@
                 const mtime = dosDateTime(u16(dirBytes, o + 0x16), u16(dirBytes, o + 0x18));
                 if (attr & 0x10) {                // サブディレクトリ
                     if (cl < 2) continue;
+                    if (seenDirs.has(cl)) continue;   // 既訪問 (自己参照/循環)
+                    seenDirs.add(cl);
                     // ディレクトリのサイズは 0 なので、チェーン全長を集める
                     const sub = readChainAll(cl);
                     parseDir(sub, prefix + name + '/', depth + 1);

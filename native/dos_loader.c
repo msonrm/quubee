@@ -136,12 +136,17 @@ static void mcb_set(uint16_t s, uint8_t sig, uint16_t owner, uint16_t size) {
 }
 static int mcb_valid(uint16_t s) { uint8_t g = mcb_sig(s); return (g == QB_MCB_M || g == QB_MCB_Z); }
 
-/* 隣接する空きブロックを結合する。 */
+/* 隣接する空きブロックを結合する。
+ * 前進保証: MCB size はゲストが直接書ける (実体がゲストメモリ) ので、踏まれて 0xFFFF 等に
+ * なると s+1+size が 16bit ラップして nxt <= s になり得る。ガード無しだとこのホスト C ループが
+ * 無限化し run_frame が返らない = worker ごと凍結 (Stop も死ぬ)。実 DOS なら「ゲストが固まる」
+ * だけの事故がホスト被害へ格上げされるため、鎖を歩く 4 ループ全てで nxt <= s を打ち切る。 */
 static void mcb_coalesce(void) {
     uint16_t s = g_first_mcb;
     while (s < QB_DOS_MEM_TOP_SEG && mcb_valid(s)) {
         if (mcb_sig(s) == QB_MCB_Z) break;
         uint16_t nxt = (uint16_t)(s + 1 + mcb_size(s));
+        if (nxt <= s) break;                                    /* 破壊された鎖 (ラップ) */
         if (nxt >= QB_DOS_MEM_TOP_SEG || !mcb_valid(nxt)) break;
         if (mcb_owner(s) == 0 && mcb_owner(nxt) == 0) {
             /* nxt を s に取り込む。s は nxt の sig (M/Z) を継ぐ。 */
@@ -280,7 +285,9 @@ int qb_dos_alloc_request(uint16_t paragraphs, uint16_t *out_seg, uint16_t *out_l
             }
         }
         if (sig == QB_MCB_Z) break;
-        s = (uint16_t)(s + 1 + sz);
+        uint16_t nxt = (uint16_t)(s + 1 + sz);
+        if (nxt <= s) break;                                    /* 破壊された鎖 (mcb_coalesce 参照) */
+        s = nxt;
     }
     if (!pick) { if (out_largest_free) *out_largest_free = largest; return -1; }
 
@@ -371,7 +378,9 @@ void qb_dos_alloc_free_owner(uint16_t psp) {
         uint8_t sig = mcb_sig(s);
         if (mcb_owner(s) == psp) mcb_set(s, sig, 0x0000, mcb_size(s));
         if (sig == QB_MCB_Z) break;
-        s = (uint16_t)(s + 1 + mcb_size(s));
+        uint16_t nxt = (uint16_t)(s + 1 + mcb_size(s));
+        if (nxt <= s) break;                                    /* 破壊された鎖 (mcb_coalesce 参照) */
+        s = nxt;
     }
     mcb_coalesce();
 }
@@ -386,7 +395,9 @@ static uint16_t mcb_largest_free(uint16_t *out_size) {
         uint8_t sig = mcb_sig(s);
         if (mcb_owner(s) == 0 && mcb_size(s) > bestsz) { best = s; bestsz = mcb_size(s); }
         if (sig == QB_MCB_Z) break;
-        s = (uint16_t)(s + 1 + mcb_size(s));
+        uint16_t nxt = (uint16_t)(s + 1 + mcb_size(s));
+        if (nxt <= s) break;                                    /* 破壊された鎖 (mcb_coalesce 参照) */
+        s = nxt;
     }
     if (out_size) *out_size = bestsz;
     return best;
@@ -1080,7 +1091,7 @@ int qb_dos_signal_tsr(uint16_t keep_paras, int code) {
         g_cur_psp = f->psp_seg;
         qb_dos_dta_set(f->dta_seg, f->dta_off);     /* 親 DTA を復元 */
         g_last_exit_code = (uint8_t)code;
-        g_last_exit_type = 0;
+        g_last_exit_type = 3;                       /* AH=4Dh: 実 DOS は TSR 終了を type 3 で返す */
         fprintf(stderr,
                 "[dos_exec] TSR keep=%u para (常駐) → 親 PSP=%04X 復帰 CS:IP=%04X:%04X\n",
                 (unsigned)keep_paras, g_cur_psp, CPU_CS, CPU_IP);
@@ -1328,7 +1339,9 @@ static void env_remove(const char *uname, size_t nlen) {
  * VALUE 空なら削除、重複名は置換。 */
 static void qb_env_set(const char *assign, size_t len) {
     char tmp[QB_ENV_VAR_CAP];
-    if (len >= sizeof(tmp)) len = sizeof(tmp) - 1;
+    /* -2: tmp は最悪 "NAME…(len 文字, '=' 無し)" + 補完 '=' + NUL を持つ。-1 だと
+     * len=207 の '=' 無し set 文で tmp[208] に NUL が出る 1 バイト OOB だった。 */
+    if (len >= sizeof(tmp) - 1) len = sizeof(tmp) - 2;
     size_t nl = 0;
     while (nl < len && assign[nl] != '=') nl++;           /* 名前部の長さ */
     if (nl == 0) return;                                  /* '=' 始まり = 無効 */

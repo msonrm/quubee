@@ -338,6 +338,11 @@ static void csi_dispatch(uint8_t final) {
             for (int c = g_cur_col; c < TEXT_COLS; c++) vram_put_clear(g_cur_row, c);
             for (int r = g_cur_row + 1; r < TEXT_ROWS; r++)
                 for (int c = 0; c < TEXT_COLS; c++) vram_put_clear(r, c);
+        } else if (p == 1) {
+            /* 先頭から cursor まで (cursor 位置含む — 0K/2J と同じく K/J 系は cursor 込み) */
+            for (int r = 0; r < g_cur_row && r < TEXT_ROWS; r++)
+                for (int c = 0; c < TEXT_COLS; c++) vram_put_clear(r, c);
+            for (int c = 0; c <= g_cur_col && c < TEXT_COLS; c++) vram_put_clear(g_cur_row, c);
         }
         break;
     }

@@ -47,9 +47,10 @@ QuuBee 側は実装・回帰・デプロイ済 (patch `tools/np2kai_patches/05_l
    **stage されるのは旧 `.data`**。Save も旧データ。syncRunDir (1553) は in-place 更新で同一性を
    保っており mergeEntries だけ非対称。裏取り済。
    → 修正済 (CHANGELOG 2026-07-05): in-place 更新 + 選択中 .bat はレシピ再解決。ブラウザ実機確認待ち。
-3. **書庫 origSize 無検証の巨大確保** — archive.js の全 LZH デコーダがヘッダの u32 origSize を
+3. ✅ **[2026-07-05 修正済]** **書庫 origSize 無検証の巨大確保** — archive.js の全 LZH デコーダがヘッダの u32 origSize を
    そのまま `new Uint8Array()` へ (125-132)。細工/破損 .lzh (origSize=FFFFFFFF) でタブ OOM。
    compSize×最大圧縮率 or 数十 MB でキャップを。裏取り済。
+   → 修正済: 64MB or comp×2048+64KB でキャップ・エントリ単位 skip。lh5_test 実書庫 1315 エントリ無回帰。
 
 ### A: 実バグ (顕在化条件あり)
 
@@ -65,26 +66,22 @@ QuuBee 側は実装・回帰・デプロイ済 (patch `tools/np2kai_patches/05_l
 6. **Stop 後に注入エンジン PMD86.COM/PMP.COM が一覧に出現** — resetToIdle が
    `hideEngineFiles=false` (bridge.js:1127) を同期で倒した後、非同期の onExit → syncRunDir が
    フィルタ無しで scanRun し、/run 残置のエンジンが「新規ファイル」として一覧へ。
-7. **MCB 走査ループに前進保証なし → ゲスト暴走がホスト凍結に化ける** — mcb_coalesce /
+7. ✅ **[2026-07-05 修正済]** **MCB 走査ループに前進保証なし → ゲスト暴走がホスト凍結に化ける** — mcb_coalesce /
    alloc_request / free_owner / mcb_largest_free (dos_loader.c:140 他) の `nxt = s+1+size` は
    16bit ラップし、ゲストが MCB を size=0xFFFF に踏むと `nxt==s` で C 側無限ループ =
-   run_frame が返らず worker ごと凍結 (Stop も死ぬ)。`if (nxt <= s) break;` を各所に。裏取り済。
-8. **qb_env_set の 1 バイトスタック OOB** — dos_loader.c:1329-1348。len=207 で '=' 無しの
-   set 文のとき `tmp[208]` に NUL 書込み (tmp は 208B)。破損 .bat で誘発可能。裏取り済。
-9. **AH=4Dh の TSR 終了種別が返らない** — `g_last_exit_type` は 0 代入しか無い死にフィールド
-   (grep 裏取り済: dos_loader.c:86/1009/1040/1083/1628)。signal_tsr で 3 を入れるだけ。
-   docs/dos_hle_gaps.md §4-19 と同件 (実装 1 行 + 乖離解消の両面)。
-10. **parseZip が前置データ付き zip を黙って 0 件にする** — parseZipViaCentralDir が CDH sig
-    不一致で即 break → 空配列 (truthy) → LFH フォールバック不達 (archive.js:418-424, 443-444)。
-    `entries.length` チェック 1 語 + (任意) cdOffset shift 補正。裏取り済。
-11. **parseEntry の境界チェック漏れで切詰め書庫が全滅** — 末尾切詰め .lzh で buf[base+20] が
-    undefined → throw → 読めていたエントリごと ERROR (archive.js:31-38)。方針 (エントリ単位 skip)
-    と不整合。早期 return null 1 行。裏取り済。
-12. **diskimage parseDir の組合せ爆発** — 訪問済みディレクトリクラスタを記録せず depth ガードのみ
-    (diskimage.js:243-267)。自己参照 subdir エントリ B 個 × depth16 で B^16。細工イメージ限定。
-    裏取り済。
-13. **Open ピッカーの accept に .lha/.lzs が無い** — index.html:516。D&D では受理される LArc が
-    ダイアログで選べない。`.lha,.lzs` 追加のみ。裏取り済。
+   run_frame が返らず worker ごと凍結 (Stop も死ぬ)。→ 4 ループ全てに `if (nxt <= s) break;`。
+8. ✅ **[2026-07-05 修正済]** **qb_env_set の 1 バイトスタック OOB** — dos_loader.c:1329-1348。len=207 で '=' 無しの
+   set 文のとき `tmp[208]` に NUL 書込み (tmp は 208B)。→ len クランプを sizeof-2 に。
+9. ✅ **[2026-07-05 修正済]** **AH=4Dh の TSR 終了種別が返らない** — `g_last_exit_type` は 0 代入しか無い死にフィールド。
+   → signal_tsr で type 3 (docs/dos_hle_gaps.md §4-19 も解消)。
+10. ✅ **[2026-07-05 修正済]** **parseZip が前置データ付き zip を黙って 0 件にする** — 空配列 (truthy) で LFH
+    フォールバック不達。→ `entries.length` チェック + **cdOffset shift 補正 (実 CD 位置 = EOCD−cdSize、
+    Info-ZIP 流)** も実装。合成 zip (前置 16B) で通常/前置とも展開成功を確認。
+11. ✅ **[2026-07-05 修正済]** **parseEntry の境界チェック漏れで切詰め書庫が全滅** — 末尾切詰め .lzh で throw →
+    読めていたエントリごと ERROR。→ base+22 境界で正常終端扱い。合成切詰め書庫で正常分生存を確認。
+12. ✅ **[2026-07-05 修正済]** **diskimage parseDir の組合せ爆発** — 訪問済みディレクトリクラスタ未記録で
+    自己参照 subdir × depth16 が B^16。→ seenDirs Set。diskimage_test 30/0 無回帰。
+13. ✅ **[2026-07-05 修正済]** **Open ピッカーの accept に .lha/.lzs が無い** — index.html:516 に追加。
 14. **パッド押しっぱなしでタブ切替するとゲスト側キーが押されたまま自走** — blur ハンドラ
     (bridge.js:2661) が pressed だけ解放し padPressed を触らない + 非表示中は rAF 停止で
     エッジ検出も走らない。
