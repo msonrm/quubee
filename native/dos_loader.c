@@ -1029,11 +1029,26 @@ int qb_dos_get_exit(int *code_out) {
     return g_run.exited ? 1 : 0;
 }
 
+/* 終了するプロセスの PSP+0Ah/0Eh/12h から INT 22h/23h/24h を IVT へ復元する (実 DOS の
+ * 終了処理)。PSP 構築時に psp_save_term_vectors が保存した親の値へ戻すことで、プログラムが
+ * AH=25h で差し替えた ^C ハンドラ等を終了後に残さない (ダングリングベクタ防止)。
+ * 12 バイト全ゼロ (保存を経ていない古い PSP 等) は防御的にスキップする。 */
+static void psp_restore_term_vectors(uint16_t psp) {
+    uint32_t pbase = (uint32_t)psp << 4;
+    uint8_t nonzero = 0;
+    for (int i = 0; i < 12; i++) nonzero |= mem[(pbase + 0x0A + i) & QB_GUEST_MEM_MASK];
+    if (!nonzero) return;
+    for (int i = 0; i < 12; i++)
+        poke8(0x88u + (uint32_t)i, mem[(pbase + 0x0A + i) & QB_GUEST_MEM_MASK]);
+}
+
 /* 終了通知 (dos_int21.c から呼ばれる)。
  * CPU_CS:IP を BIOS 領域の HLT ループへリダイレクトして、image の続きを実行
  * させない。ia32_bioscall は呼び出し元 NOP 後にセグメントを LOAD_SEGREG で
- * 反映するので、直後に新 CS:IP から実行が再開される。 */
-int qb_dos_signal_exit(int code) {
+ * 反映するので、直後に新 CS:IP から実行が再開される。
+ * term_type は AH=4Dh の上位バイト (0=通常、1=^C 中断)。 */
+int qb_dos_signal_exit2(int code, int term_type) {
+    psp_restore_term_vectors(g_cur_psp);            /* INT 22h/23h/24h を親の値へ (実 DOS の終了処理) */
     /* EXEC した子の終了なら、親 (ランチャ) を復元して続行する (= メニューに戻る)。 */
     if (g_exec_sp > 0) {
         exec_frame_t *f = &g_exec_stack[--g_exec_sp];
@@ -1048,7 +1063,7 @@ int qb_dos_signal_exit(int code) {
         g_cur_psp = f->psp_seg;
         qb_dos_dta_set(f->dta_seg, f->dta_off);     /* 親 DTA を復元 */
         g_last_exit_code = (uint8_t)code;
-        g_last_exit_type = 0;
+        g_last_exit_type = (uint8_t)term_type;
         fprintf(stderr,
                 "[dos_exec] child exited code=%d → 親 PSP=%04X 復帰 CS:IP=%04X:%04X SS:SP=%04X:%04X\n",
                 code, g_cur_psp, CPU_CS, CPU_IP, CPU_SS, CPU_SP);
@@ -1065,6 +1080,10 @@ int qb_dos_signal_exit(int code) {
     return 0;
 }
 
+int qb_dos_signal_exit(int code) {
+    return qb_dos_signal_exit2(code, 0);
+}
+
 /* AH=31h Keep Process (TSR) — 子を常駐させたまま親へ復帰する。
  * signal_exit の「EXEC 子復帰」分岐とほぼ同じだが、決定的な違いは
  *   (1) 子の PSP ブロックを keep_paras に縮める (余りは解放) が、所有者は子 PSP のまま
@@ -1078,6 +1097,8 @@ int qb_dos_signal_tsr(uint16_t keep_paras, int code) {
      * PSP(0x10) を下回る要求は最低 0x11 para に丸める (DX=0 渡し対策)。 */
     if (keep_paras < 0x11) keep_paras = 0x11;
     qb_dos_alloc_resize(g_cur_psp, keep_paras, NULL);
+    psp_restore_term_vectors(g_cur_psp);   /* TSR 終了でも INT 22h/23h/24h は親の値へ (実 DOS 契約)。
+                                            * TSR が今後も使う自前フック (INT 33h 等) は 22-24h でないので影響なし */
 
     if (g_exec_sp > 0) {
         exec_frame_t *f = &g_exec_stack[--g_exec_sp];
@@ -1502,6 +1523,14 @@ static uint16_t build_child_env(uint16_t src_env_seg, const char *child_path) {
     return env_seg;
 }
 
+/* PSP+0Ah/0Eh/12h へ現在の INT 22h/23h/24h ベクタを保存する (実 DOS のプロセス生成契約)。
+ * 終了時に psp_restore_term_vectors がここから IVT へ復元する。プロセス生成時点の
+ * 「現在値」= 親の値なので、子が AH=25h で差し替えても終了後に親環境へ戻る。 */
+static void psp_save_term_vectors(uint32_t pbase) {
+    for (int i = 0; i < 12; i++)
+        poke8(pbase + 0x0A + (uint32_t)i, mem[0x88 + i]);   /* IVT[0x22..0x24] = linear 0x88..0x93 */
+}
+
 /* PSP を seg:0000 に構築する。最小限の DOS 互換版。 */
 static void build_psp(uint16_t seg, const char *cmdline) {
     uint32_t base = (uint32_t)seg << 4;
@@ -1515,6 +1544,9 @@ static void build_psp(uint16_t seg, const char *cmdline) {
 
     /* 0x02-0x03: top-of-memory paragraphs (とりあえず 0xA000 = 640KB) */
     poke16(base + 0x02, 0xA000);
+
+    /* 0x0A/0x0E/0x12: INT 22h/23h/24h の現在ベクタを保存 (終了時に IVT へ復元) */
+    psp_save_term_vectors(base);
 
     /* 0x05: far call to DOS dispatch — 標準の CALL FAR (0x9A) + addr。
      *       簡略化: ここから飛ばずに INT 21h ショートカット (0x50 で別途) を使う */
@@ -1620,6 +1652,13 @@ int qb_dos_loader_start_hook(void) {
     /* INT 33h (マウスドライバ API) を HLE ドライバへ (dos_mouse33.c、既定 MS 仕様)。
      * ゲームが実ドライバ (MOUSE.COM 同梱等) を常駐させれば IVT が上書きされ影に隠れる。 */
     set_ivt(0x33, 0xF000, (uint16_t)(QB_TRAMP_INT33 & 0xFFFF));
+
+    /* INT 23h (Ctrl-C ハンドラ) の既定を INT 20h トランポリン (= プログラム中断) へ。
+     * 実 DOS の既定動作 = ^C でプログラム終了。dos_int21.c の int23_raise はこのベクタ値を
+     * 「既定」と認識して guest を経由せず直接中断する (発火は cooked コンソール入力
+     * AH=01/08/0Ah/0Bh/3Fh handle 0)。上の 0x22..0xFF ループは空きエントリしか触らないので、
+     * 前 Run のプログラムが差し替えたまま残したベクタを毎 Run ここで既定へ戻す。 */
+    set_ivt(0x23, 0xF000, (uint16_t)(QB_TRAMP_INT20 & 0xFFFF));
     g_probe_xms = g_probe_ems = g_probe_emm_open = 0;  /* この Run の計測をリセット */
     g_probe_int33 = 0;
     qb_mouse33_reset_run();   /* マウス HLE の動的状態も Run 毎に初期化 (ペルソナは維持) */
@@ -1895,6 +1934,7 @@ int qb_dos_exec_load(const uint8_t *image, size_t size, uint32_t file_bytes,
     memset(&mem[pbase], 0, 0x100);
     poke8(pbase + 0x00, 0xCD); poke8(pbase + 0x01, 0x20);   /* INT 20h */
     poke16(pbase + 0x02, QB_DOS_MEM_TOP_SEG);               /* top of memory */
+    psp_save_term_vectors(pbase);                           /* INT 22h/23h/24h の現在値 (=親の値) を保存 */
     poke16(pbase + 0x16, parent_psp);                       /* 親 PSP */
     /* env: ① パラメータブロック明示 (env_seg!=0) → そのまま指す (完全 faithful は拡張ポイント、
      *      build_child_env のコメント参照。corpus に該当タイトル無し)。② 継承 (env_seg=0) →

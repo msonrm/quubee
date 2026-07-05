@@ -2150,11 +2150,15 @@ async function makeWorkerEmu() {
         // ControlLeft/Right→0x74 が永久に死にコードになる。Ctrl 押下中の他キーは従来どおり
         // ブラウザへ委ねるため、押下キー自身が Control のときだけ素通しさせる。
         const isCtrlKey = (e.code === 'ControlLeft' || e.code === 'ControlRight');
-        if (!isCtrlKey && (e.ctrlKey || e.metaKey || e.altKey)) return;
+        // Ctrl+C だけは例外的にゲストへ通す: DOS の ^C (INT 23h 発火、bios09 の CTRL バンクが
+        // C キーを 0x03 に変換する)。canvas 上に選択は無いのでコピーを奪っても実害はない。
+        // keyup 側は pressed セット基準なので押しっぱなしにはならない。
+        const isCtrlC = (e.code === 'KeyC' && e.ctrlKey && !e.metaKey && !e.altKey);
+        if (!isCtrlKey && !isCtrlC && (e.ctrlKey || e.metaKey || e.altKey)) return;
         const code = PC98_KEYMAP[e.code];
         if (code === undefined) return;
         // 透過時 (BS/DEL は KEY_PREVENT_DEFAULT 外) も欄の既定動作を抑止してゲストへ回す
-        if (passThru || KEY_PREVENT_DEFAULT.has(e.code)) e.preventDefault();
+        if (passThru || isCtrlC || KEY_PREVENT_DEFAULT.has(e.code)) e.preventDefault();
         if (pressed.has(e.code)) return;     // OS のオートリピートは無視
         pressed.add(e.code);
         emu.keyDown(code);

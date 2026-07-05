@@ -1,5 +1,46 @@
 # CHANGELOG
 
+## [INT 23h (Ctrl-C ハンドラ) 発火を実装 — Stosstruppe 氏 X 投稿 fig5 の指摘に対応] — 2026-07-05
+
+Stosstruppe 氏 (@Stosstruppe) が X に投稿したテストプログラム 5 枚 (fig1/fig5/fig6 の C + MASM
+リスティング) を解読。
+fig1 (環境セグメントのファイルダンプ) と fig6 (INT 2Fh multiplex C0-FFh スキャン → 全 AL=0) は
+既存実装で実 DOS と同挙動、残る指摘 = fig5 の **INT 23h (^C) 未サポート** を根治した。
+
+### ブラウザで機能するかの事前調査 (結論: する)
+
+- NP2kai bios09 の CTRL バンク (keytable.res) は C キー (scan 0x2B) を **0x03 に変換済み** =
+  ゲスト側は最初から完成していた。
+- 唯一の障壁は bridge.js の「Ctrl 修飾中の他キーはブラウザへ委ねる」早期 return で C が届かない
+  こと → **Ctrl+C だけ例外透過** (preventDefault 付き。canvas 上に選択は無いのでコピーを奪っても
+  実害なし。keyup は pressed セット基準なので対称性は自動)。
+
+### 実装 (native/dos_int21.c + dos_loader.c、新トランポリン不要 = patch/submodule 無変更)
+
+- **発火点** (実 DOS 契約): cooked コンソール入力 AH=01/08/0Ah/0Bh/3Fh handle 0 が ^C (03h) を
+  見たら "^C"+CRLF をエコーして int23_raise()。AH=06/07h と raw モード (IOCTL bit5) は見ない。
+  AH=0Bh は kb_peek_char (消費しない覗き見) で「状態問い合わせでも次が ^C なら発火」を再現。
+- **既定ハンドラ = プログラム中断**: IVT[0x23] の既定を INT 20h トランポリン (F000:EE20) へ向け、
+  int23_raise はこのベクタ値を「既定」と認識して guest を経由せず直接 signal_exit2(0, type=1)
+  (AH=4Dh に ^C 終了 type 1 を報告)。
+- **ユーザーハンドラ (AX=2523h)**: INT フレームの復帰先を INT 21h トランポリンの NOP (F000:EE10)
+  自身にして発火。ハンドラが IRET すると NOP 踏み直し = 中断された入力コールが同レジスタで再開
+  (実 DOS の「IRET なら DOS 呼び出し再開」契約と同型)。far RET 復帰 (FLAGS 残留で SP が 2 少ない)
+  は dispatch 入口の SP 規律で判別し、CF=1 なら中断・CF=0 なら残留 FLAGS を捨て再開。ハンドラ内の
+  入れ子 INT 21h (fig5 の AH=09h 表示等) は SP 不一致で素通り = pending 継続。
+- **PSP+0Ah/0Eh/12h (INT 22h/23h/24h) の保存/復元** (dos_hle_gaps §18 の一残件): PSP 構築時
+  (最上位 build_psp / EXEC 子インライン) に現在ベクタを保存、終了時 (4Ch/INT 20h/TSR) に
+  psp_restore_term_vectors で IVT へ復元 — 差し替えた ^C ハンドラのダングリングを塞ぐ。
+
+### 検証
+
+- 回帰 `tools/int23_test.js` 新設 (14 チェック): 既定中断 + "^C" エコー / fig5.asm 同型バイト列
+  (ハンドラが "hoge" を出して IRET → 継続、2 発目も可、ESC で exit 7) / far RET CF=1→中断・
+  CF=0→再開 / AH=0Bh ポーリング中断 / 3Fh cooked 行入力途中の中断 / 終了後の IVT[0x23] 復元。
+- 既存回帰 42 スイート (stdin/exec/TSR/batch/tty/touhou/xms/mouse 他) 全 PASS = ゼロ回帰。
+  exec_env_test が一時 FAIL したのは子終了ログへの type 挿入がテストの正規表現を壊しただけ
+  (ログ書式を復元して解消 — 実回帰ではない)。
+
 ## [精査グループ B 完結 — ちびおと ADPCM -10dB を実測確定し BEEP ブーストを専用ゲインへ再設計 (patch 06)] — 2026-07-05
 
 精査残件の最後のグループ。#15「ちびおと ADPCM が BEEP ブースト相殺の巻き添えで減衰している疑い」を

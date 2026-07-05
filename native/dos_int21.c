@@ -74,6 +74,8 @@ extern UINT8 mem[];
 /* dos_loader.c の終了通知。戻り値 1 = EXEC 子の終了で親を復元した (CPU リダイレクト済 →
  * dispatch tail の FLAGS 書き戻しを skip すること)、0 = 最上位プログラム終了で halt。 */
 int qb_dos_signal_exit(int code);
+/* term_type 付き版 (AH=4Dh の上位バイト)。^C 中断は type 1 で報告する (実 DOS 契約)。 */
+int qb_dos_signal_exit2(int code, int term_type);
 /* AH=4Dh 用: 直近に終了した子の (type<<8 | code)。 */
 uint16_t qb_dos_exec_last_code(void);
 /* AH=52h 用: MCB チェーンの先頭 (空きアリーナ起点) セグメント。List of Lists の [BX-2]。 */
@@ -904,6 +906,16 @@ static int dos_next_input_byte(void) {
     return ch;
 }
 
+/* 次に読まれる 1 文字を消費せず覗く (-1 = 無し)。優先順は dos_next_input_byte と同じ:
+ * ソフトキー発行文字列の残り → BIOS キーバッファ (0x502) の先頭 word の文字バイト。
+ * AH=0Bh の ^C チェック用 (実 DOS は状態問い合わせでも次の文字が 03h なら INT 23h を発火する)。 */
+static int kb_peek_char(void) {
+    if (g_softkey_pos < g_softkey_len) return g_softkey_buf[g_softkey_pos];
+    inject_pump();
+    if (!mem[QB_KB_COUNT]) return -1;
+    return peek8(peek16(QB_KB_HEAD));
+}
+
 /* INT DCh CL=10h のカーソル移動/消去/行操作で使う: DX を CSI param0 にして final を dispatch。
  * DX=0 は ESC[<final> (パラメータ省略=既定 1、消去系は既定 0) と同義 (NEC PC-98 CON 準拠)。
  * has_digit を (n!=0) にすることで、n=0 のとき csi_param が各 final の既定値を返す。 */
@@ -1598,6 +1610,58 @@ static void int21_06_direct_io(void) {
     }
 }
 
+/* ===== INT 23h (Ctrl-C ハンドラ) 発火 (2026-07-05) ==========================================
+ * cooked コンソール入力 (AH=01/08/0Ah/0Bh/3Fh handle 0) が ^C (03h) を見たら INT 23h を
+ * 発火するのが実 DOS の契約。AH=06/07h と raw モード (IOCTL bit5) はチェックしない (同契約)。
+ * 既定ベクタは loader-start が INT 20h トランポリン (= プログラム中断) へ向けており、
+ * その場合は guest を経由せず直接中断する (実 DOS の既定 Ctrl-C abort、AH=4Dh type 1)。
+ *
+ * ユーザーハンドラ (AX=2523h で差し替え) への発火は「INT フレームの復帰先 = INT 21h
+ * トランポリンの NOP (F000:EE10) 自身」で行う。ハンドラの戻り方は実 DOS と同じ SP 規律で
+ * 判別する (dispatch 入口の g_int23_pending チェック):
+ *   - IRET 復帰 (SP が発火前へ完全に戻る) → NOP 踏み直しで中断された INT 21h 呼び出しが
+ *     同じレジスタで再開する (実 DOS の「IRET なら DOS 呼び出し再開」契約)。^C は消費済み。
+ *   - far RET 復帰 (FLAGS 1 word がスタックに残留、SP が 2 少ない) → CF=1 なら中断・
+ *     CF=0 なら残留 FLAGS を捨てて再開。
+ * レジスタ保存はハンドラの責務 (実 DOS 同様 — AX 等を壊すハンドラでは再開後の挙動は不定)。 */
+static int      g_int23_pending;         /* ユーザーハンドラへ発火中 (復帰規律の判定待ち) */
+static uint16_t g_int23_ss, g_int23_sp;  /* 発火直前の SS:SP (= IRET 完全復帰時の値) */
+
+/* ^C 検出時に呼ぶ。呼び出し側は直後に必ず return すること (CPU 状態は書き換え済み)。
+ * 検出した 03h は呼び出し側で消費済みであること (再発火ループ防止)。 */
+static void int23_raise(void) {
+    /* 実 DOS は break 処理時に "^C" + CRLF をエコーする */
+    tty_putc('^'); tty_putc('C'); tty_putc(0x0D); tty_putc(0x0A);
+
+    uint16_t off = peek16(0x23u * 4u);
+    uint16_t seg = peek16(0x23u * 4u + 2u);
+
+    /* 既定ベクタ (INT 20h トランポリン = プログラム中断) と、防御的に 0:0 (未初期化) は
+     * guest を経由せず直接中断する。4Ch と同じく、親復帰 (戻り 1) なら dispatch tail の
+     * FLAGS 書き戻しを skip (親スタックを壊さない)。 */
+    if ((seg == 0xF000 && off == (uint16_t)(QB_TRAMP_INT20 & 0xFFFF)) ||
+        (seg == 0 && off == 0)) {
+        fprintf(stderr, "[int23h] ^C → 既定ハンドラ = プログラム中断\n");
+        if (qb_dos_signal_exit2(0, 1)) g_int21_repoll = 1;
+        return;
+    }
+
+    /* ユーザーハンドラへ INT フレームを積んで発火。push する FLAGS は IF=1 にする
+     * (IRET 再開後の入力待ちがキーボード IRQ を受けられるように — dos_getch_block と同じ理由)。 */
+    uint16_t pushed = (uint16_t)(CPU_FLAG | I_FLAG);
+    CPU_SP = (uint16_t)(CPU_SP - 2); poke16(lin(CPU_SS, CPU_SP), pushed);
+    CPU_SP = (uint16_t)(CPU_SP - 2); poke16(lin(CPU_SS, CPU_SP), 0xF000);
+    CPU_SP = (uint16_t)(CPU_SP - 2); poke16(lin(CPU_SS, CPU_SP), (uint16_t)(QB_TRAMP_INT21 & 0xFFFF));
+    g_int23_pending = 1;
+    g_int23_ss = CPU_SS;
+    g_int23_sp = (uint16_t)(CPU_SP + 6);              /* IRET 完全復帰時の SP */
+    CPU_FLAG &= (uint16_t)~I_FLAG;                    /* 実 INT と同じくハンドラは IF=0 で開始 */
+    CPU_CS = seg;
+    CPU_IP = off;
+    g_int21_repoll = 1;   /* dispatch tail の FLAGS 書き戻しを skip (スタック頂は INT 23h フレーム) */
+    fprintf(stderr, "[int23h] ^C → ユーザーハンドラ %04X:%04X\n", (unsigned)seg, (unsigned)off);
+}
+
 /* blocking 入力の共通部。文字があれば 0-255 を返す。無ければ NP2kai 流に
  * CPU_IP を NOP に巻き戻し IRQ 処理へ譲って (bios18.c AH=00h と同手法) -1 を返す。
  * 呼び出し側は -1 のとき AL を設定せず即 return すること。 */
@@ -1617,26 +1681,31 @@ static int dos_getch_block(void) {
     return w & 0xFF;
 }
 
-static void int21_01_getch_echo(void) {        /* 文字入力 (echo あり) */
+static void int21_01_getch_echo(void) {        /* 文字入力 (echo あり)。^C は INT 23h 発火 */
     int c = dos_getch_block();
     if (c < 0) return;
+    if (c == 0x03) { int23_raise(); return; }
     CPU_AL = (uint8_t)c;
     tty_putc((uint8_t)c);
 }
 
-static void int21_07_getch_raw(void) {         /* 文字入力 (echo 無し・Ctrl-C 無視) */
+static void int21_07_getch_raw(void) {         /* 文字入力 (echo 無し・Ctrl-C 無視 = 実 DOS 契約) */
     int c = dos_getch_block();
     if (c < 0) return;
     CPU_AL = (uint8_t)c;
 }
 
-static void int21_08_getch_noecho(void) {      /* 文字入力 (echo 無し)。Ctrl-C は無視 */
+static void int21_08_getch_noecho(void) {      /* 文字入力 (echo 無し)。^C は INT 23h 発火 (07h との差) */
     int c = dos_getch_block();
     if (c < 0) return;
+    if (c == 0x03) { int23_raise(); return; }
     CPU_AL = (uint8_t)c;
 }
 
 static void int21_0b_instat(void) {            /* 入力状態 (非ブロッキング kbhit) */
+    /* 実 DOS は状態問い合わせでも次の文字が ^C なら消費して INT 23h を発火する。
+     * コンソール入力を 0Bh ポーリングで待つプログラムを ^C で中断できる本流の経路。 */
+    if (kb_peek_char() == 0x03) { (void)dos_next_input_byte(); int23_raise(); return; }
     CPU_AL = kb_available() ? 0xFF : 0x00;
 }
 
@@ -1677,6 +1746,11 @@ static void int21_0a_buffered(void) {
             return;
         }
         uint8_t ch = (uint8_t)(w & 0xFF);
+        if (ch == 0x03) {                      /* ^C → INT 23h (組み立て中の行は g_la_* が保持) */
+            g_la_len = len;
+            int23_raise();
+            return;
+        }
         if (ch == 0x00) continue;              /* 拡張キー (矢印/Fn 等): NUL を行に書かない */
         if (ch == 0x0D) {                      /* 確定 */
             poke8(buf + 2 + len, 0x0D);
@@ -2102,6 +2176,11 @@ static void int21_3f_read_stdin(uint32_t dst, uint16_t want) {
         }
         uint8_t ch = (uint8_t)(w & 0xFF);
         if (ch == 0x00) continue;              /* 拡張キー (矢印/Fn 等): cooked モードでは無視 */
+        if (ch == 0x03) {                      /* ^C → INT 23h (組み立て中の行は g_con_* が保持)。
+                                                * raw モードはこの経路に来ない (上で分岐済) = 実 DOS 契約 */
+            int23_raise();
+            return;
+        }
         if (ch == 0x0D) {                      /* Enter: CR LF を付けて行確定 → 持ち越しから配る */
             g_con_line[g_con_len++] = 0x0D;
             g_con_line[g_con_len++] = 0x0A;
@@ -3116,6 +3195,25 @@ int qb_dos_int29_hook(void) {
 void qb_dos_int21_dispatch(void) {
     uint8_t ah = CPU_AH;
     g_int21_repoll = 0;
+
+    /* INT 23h ユーザーハンドラからの復帰判定 (int23_raise のコメント参照)。SP 規律:
+     *   SP == 発火前     → IRET 完全復帰 = そのまま下の通常 dispatch で呼び出し再開。
+     *   SP == 発火前 - 2 → far RET 復帰 (FLAGS 残留) = CF=1 なら中断・CF=0 なら残留を捨て再開。
+     *   それ以外         → ハンドラ内の入れ子 INT 21h (AH=09h 表示等) = pending 継続で通常処理。 */
+    if (g_int23_pending && CPU_SS == g_int23_ss) {
+        if (CPU_SP == g_int23_sp) {
+            g_int23_pending = 0;               /* IRET 復帰 → 再開 */
+        } else if (CPU_SP == (uint16_t)(g_int23_sp - 2)) {
+            g_int23_pending = 0;
+            CPU_SP = (uint16_t)(CPU_SP + 2);   /* 残留 FLAGS を捨てる */
+            if (CPU_FLAG & C_FLAG) {
+                fprintf(stderr, "[int23h] ハンドラ far RET CF=1 → プログラム中断\n");
+                qb_dos_signal_exit2(0, 1);
+                return;   /* CPU はリダイレクト済み (親復帰 or halt)。スタックには触らない */
+            }
+        }
+    }
+
     g_dbg_ah_count[ah]++;
     if (g_int21_trace) {
         fprintf(stderr, "[i21] AH=%02X AL=%02X BX=%04X CX=%04X DX=%04X "
@@ -3277,6 +3375,7 @@ void qb_dos_tty_reset(void) {
     g_softkey_len = 0;
     g_softkey_pos = 0;
     g_inject_head = g_inject_tail = 0;   /* ホスト IME 注入 FIFO も Run 毎にクリア (前 Run を持ち越さない) */
+    g_int23_pending = 0;                 /* INT 23h 発火中フラグも破棄 (前 Run の復帰判定を持ち越さない) */
 }
 
 /* オリジナル PC-98 CRT/キーボード BIOS (NP2kai 合成 BIOS)。30 行モード時のパススルー先。 */
