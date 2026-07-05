@@ -2372,13 +2372,15 @@ async function makeWorkerEmu() {
         },
         // BEEP (PC-98 内蔵ブザー = 多くのフリーソフトの効果音) の音量ブースト。x = 倍率 (1=素の np2kai)。
         // np2kai 標準の BEEP は peak 2048 (-24dBFS) で頭打ちのため FM/MIDI 楽曲の下で SE が埋もれる
-        // (amel133 作者報告)。既定は 4 倍 (≈+12dB、BEEP peak ≈ MIDI 同等)。FM/MIDI/ADPCM には無影響。
+        // (amel133 作者報告)。既定は 4 倍 (≈+12dB、BEEP peak ≈ MIDI 同等)。FM/MIDI/ADPCM には無影響
+        // (patch 06 の BEEP 専用ゲイン = beepg.c レンダラ内で完結。旧 vol_master/vol_pcm 相殺
+        // ハックは fmgen ADPCM を -10dB にする副作用があり 2026-07-05 撤去)。
         // 例: qbDebug.beepgain(4) で 4 倍、qbDebug.beepgain(1) で素の np2kai に戻して聴き比べ。
-        // beep は即時反映、ADPCM/PCM の相殺は次の Run (reset) で反映。純設定の上限は約 3.83 倍。
+        // 全部 live 反映 (reset 不要)。純設定の上限は約 3.83 倍。
         beepgain: async (x = 4) => {
             const pct = Math.max(50, Math.min(383, Math.round(x * 100)));
             const got = await emu.setBeepGain(pct);
-            return `beepgain=${(got / 100).toFixed(2)}x (${got}%) — beep 即時反映 / ADPCM 相殺は次の Run で`;
+            return `beepgain=${(got / 100).toFixed(2)}x (${got}%) — live 反映`;
         },
         // 音声/エミュ進行の計測ハーネス。曲を再生しながら呼ぶと、症状①(揺れ・スキップ)が
         // 「音声コールバックの遅刻 (cbLate)」由来か「エミュの追いつけなさ (emuSaturated)」由来かを

@@ -1,0 +1,39 @@
+diff --git a/sound/beepg.c b/sound/beepg.c
+index 01bf457..7fc976e 100755
+--- a/sound/beepg.c
++++ b/sound/beepg.c
+@@ -24,6 +24,14 @@ static void resetBeepOffsetData() {
+ 
+ extern	BEEPCFG		beepcfg;
+ 
++/* qb: BEEP 専用ゲイン (%, 既定 100)。bridge.c の np2kai_set_beep_gain が設定する。
++ * BEEP は beepcfg.vol 0..3 の 4 段階で矩形波 peak 2048 (-24dBFS) 頭打ちのため、FM/MIDI
++ * 楽曲の下で SE が埋もれる。旧方式 (vol_master を 255 へ上げ vol_pcm=25 で相殺) は
++ * vol_master が fmgen に届かない一方で相殺の vol_pcm だけが fmgen ADPCM に素で効き、
++ * ADPCM が意図値より -10dB になる副作用があった (2026-07-05 実測)。BEEP のレンダラ内で
++ * 独立に増幅すれば他音源へ一切波及しない。 */
++extern int g_qb_beep_gain;
++
+ static void oneshot(BEEP bp, SINT32 *pcm, UINT count) {
+ 	
+ 	SINT32		volM;
+@@ -37,7 +45,7 @@ static void oneshot(BEEP bp, SINT32 *pcm, UINT count) {
+ 		curBeepOffset = 0x2500 * beepcfg.vol; // 固定オフセット
+ 	}
+ 
+-	volM = np2cfg.vol_master;
++	volM = np2cfg.vol_master * g_qb_beep_gain / 100;	/* qb: BEEP 専用ゲイン (上記) */
+ 
+ 	if(bp->beep_data_load_loc != 0)
+ 		bound = (beep_time[bp->beep_data_load_loc - 1] - firsttime) / count;
+@@ -79,8 +87,8 @@ const BPEVENT	*bev;
+ 	SINT32		clk;
+ 	int			event;
+ 	UINT		r;
+-	
+-	volM = np2cfg.vol_master;
++
++	volM = np2cfg.vol_master * g_qb_beep_gain / 100;	/* qb: BEEP 専用ゲイン (上記) */
+ 
+ 	vol = beepcfg.vol;
+ 	bev = bp->event;

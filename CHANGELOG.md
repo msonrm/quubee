@@ -1,5 +1,47 @@
 # CHANGELOG
 
+## [精査グループ B 完結 — ちびおと ADPCM -10dB を実測確定し BEEP ブーストを専用ゲインへ再設計 (patch 06)] — 2026-07-05
+
+精査残件の最後のグループ。#15「ちびおと ADPCM が BEEP ブースト相殺の巻き添えで減衰している疑い」を
+headless で客観実測し、クロ確定 → 設計ごと根治した。
+
+### 実測 (ユーザーの耳に頼らない A/B)
+
+fmp_test.js のハーネス (FMP 常駐 + PLAY、ちびおと ON、毎回 reset = ブラウザ Run と同条件) を流用し、
+beepgain 383 (既定) ⇄ 100 で PCM ストリームを丸ごと収集して比較:
+- 対照 (.opi FM のみ): 完全同一 = FM は無関係
+- 検出力ガード (adpcm ノブ 0⇄128): 差あり = ADPCM 成分が窓に実在
+- 実験 (.ovi ADPCM 入り): **ストリームが変化 = vol_pcm 相殺が fmgen ADPCM に素で効いている**
+- ADPCM 成分単体 (mute run とのストリーム減算): **既定 (vol_pcm=25) は意図値 (64) より −10.0dB**
+  (TODO の理論見積 −21dB は fmgen の dB スケール解釈が想定の半分だったため過大。実測が正)
+
+注: 最初の測定は「create 内 reset が set_beep_gain(400) 適用後」である罠で両群同一になり無効だった。
+gain 変更後に明示 reset (ブラウザの毎 Run と同条件) を挟んで有効化。ちびおと実機確認 (06-27) は
+beep ブースト既定化 (06-28) の前なので、本番 ADPCM はユーザーが当時承認した音より 10dB 小さかった。
+
+### 根治 (patch 06_beep_gain — 設計ごと)
+
+旧設計 = vol_master を 255 へ上げ BEEP を持ち上げ、vol_pcm=25 で ADPCM/PCM を相殺 (整数経路のみ有効)。
+新設計 = **BEEP 専用ゲイン g_qb_beep_gain (bridge.c 定義・既定 100) を beepg.c のレンダラ内で volM に
+畳む** (y2k クランプと同じ extern 共有パターン)。他音源への波及がゼロになるので:
+- fmgen ADPCM (ちびおと) が意図値 vol 64 へ復帰 (**+10dB 是正**)
+- vol_master=100 / vol_pcm=64 の中立に戻り、**設定パネル adpcm スライダとの奪い合いが根本解消**
+- 隠れ副作用も解消: vol_master=255 は qbDebug.fmgen(0) A/B 時の opngen FM を 2.55 倍で鳴らしていた
+- beepgain が完全 live 化 (旧: ADPCM 相殺が次 reset 待ち)
+- 整数経路 ADPCM/PCM は 64×100=6400 ≈ 旧 25×255=6375 (+0.03dB) で実質不変
+
+### 検証
+- **新設回帰 `tools/adpcm_beepgain_test.js` (3 PASS)**: ①検出力ガード (adpcm 0⇄128 で差が出る =
+  空虚な PASS を防ぐ) ②beepgain 383⇄100 でストリーム完全一致 (旧設計ではここが不一致) ③既定の
+  ADPCM レベル = vol 64 と完全一致。corpus 不在時は SKIP (CI 安全)。
+- `beep_gain_test` 3/3 — BEEP peak 7833・比 3.82x = **旧実装と同値** (BEEP 側はゼロ回帰)
+- bio100 triage --fresh ベースライン完全一致 (描画到達 25/動作確認 27/EXIT 0/CRASH 0)
+- 全テストスイープ **61/61 PASS** (既存 59 + faithful_gap + adpcm_beepgain。pmd/fmp/rhythm/vol の
+  音系回帰含む)
+- **ブラウザ実機確認済み (ユーザー、2026-07-05)**: 「パーカッションがあきらかに変わって良くなった」
+  = ADPCM +10dB 是正を聴感でも確認。BEEP SE ほか他音源も問題なし。**精査残件はこれで全グループ完結**
+  (D は据え置き確定 = 当たり付けリファレンス)。
+
 ## [精査グループ C 完結 — dos_hle_gaps §4 faithful 化 4 点 (C 側)] — 2026-07-05
 
 精査残件グループ C の後半 = 実 DOS との乖離 4 点を faithful 化 (native/dos_int21.c、Wasm

@@ -17,6 +17,8 @@
 | `02_font_reset_fix.patch` | `pccore_reset()` の `ZeroMemory(mem + FONT_ADRS, 0x08000)` を抑止。リセット毎に fontrom 先頭 0x8000 (= JIS 点 0..7 の漢字ブロック) が消去され、Wasm には再生成する hook_fontrom バックエンドが無いため、点1..7 の漢字 (あ/い/う 等) が永久に欠けるのを防ぐ |
 | `03_rtc_y2k_clamp.patch` | `calendar.c:date2bcd` で年 >=2000 を 1999 にクランプ。90 年代ゲームが PC-98 RTC (μPD4990A) から直読みする年が 2026→126 の 3 桁になり固定幅セーブを壊す Y2K バグを汎用シムで回避 (蟹味噌のテキスト残留の真因)。共有フラグ `g_qb_y2k_clamp` (bridge.c・既定 ON) を参照し、実行時に `qbDebug.y2k(0)` で一括オフ可 (native の qb_timemng=RTC 種・dos_int21=DOS AH=2Ah も同フラグ)。回帰 `tools/y2k_test.js` |
 | `04_lio_gscreen_disp_page.patch` | `lio/gscreen.c:lio_gscreen` の表示ページバグ修正。GSCREEN の disp パラメータ省略 (0xFF) 時にローカル変数 0xFF がそのまま `mode |= disp << 4` に流れ、bit4=1 で表示ページが勝手に 1 へ切り替わる (page0 に描いた絵が表示されず真っ黒)。`lio->work.disp` (正規化済み保持値) を使うよう修正。LIO (N88-BASIC グラフィック BIOS、INT A0h〜) で描画する MIMPI 等の背景消失の真因 |
+| `05_lio_gcircle_arc.patch` | `lio/gcircle.c` の GCIRCLE に円弧 (扇形、e→s CCW・パイ線 flag bit2/3) と楕円 (rx≠ry) 描画を実装 (上流は真円のみ・`not support` マーカ)。真円は既存整数中点法パスのまま byte 同一 = ゼロ回帰。実 LIO テストプログラム 2 本のパラメータ実測 + np21w 出力照合によるクリーンルーム実装。回帰 `tools/lio_gcircle_test.js` (10 PASS)。NP2kai 上流への PR 候補 |
+| `06_beep_gain.patch` | `sound/beepg.c` に BEEP 専用ゲイン `g_qb_beep_gain` (%, bridge.c 定義・既定 100) を追加し、volM (`vol_master`) に畳む。BEEP は beepcfg.vol 0..3 の 4 段階で peak 2048 (-24dBFS) 頭打ちのため FM/MIDI 下で SE が埋もれる (amel133 報告)。旧方式 (vol_master 255 + vol_pcm=25 相殺) は相殺だけが fmgen ADPCM (ちびおと) に素で効き ADPCM -10dB の副作用 (2026-07-05 実測・精査 #15)。レンダラ内ゲインなら他音源へ波及ゼロ。回帰 `tools/beep_gain_test.js` + `tools/adpcm_beepgain_test.js` |
 
 > 注: かつての `04_vermouth_gs_effects.patch` (VERMOUTH に GS リバーブ等を追加) は **revert 済み**
 > (現在の 04 は別内容の LIO 修正)。MIDI 合成は VERMOUTH から TinySoundFont (`native/qb_tsf.c` +

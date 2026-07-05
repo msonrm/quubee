@@ -33,10 +33,14 @@ QuuBee 側は実装・回帰・デプロイ済 (patch `tools/np2kai_patches/05_l
 
 **処理状況 (2026-07-05 ユーザー判断)**: 最優先 4 件 (commit 0e7b807) + グループ A 小修正 9 件
 (commit 72a317d) は修正・デプロイ済み。残件は下記グループに割り振り、後日ここから再開する:
-- **グループ B (要実測・再開待ち)**: #15 ちびおと ADPCM の音量疑い。**再開手順**: ADPCM 入りの曲
-  (FMP .ovi / PMD .PPC) を再生し `qbDebug.beepgain(100)` ⇄ 既定 (383 相当) で ADPCM 音量を聴き比べ。
-  差が出たら「beep_gain の vol_pcm=25 相殺が fmgen 経路に効かない」がクロ = beep_gain と設定パネル
-  vol 系の vol_pcm 奪い合い設計ごと修正 (bridge.c:515/583 周辺)。シロなら #15 をクローズ。
+- **グループ B (#15 ちびおと ADPCM 音量)**: **クロ確定・根治済み (2026-07-05)**。headless 実測
+  (fmp_test 流用の A/B、ストリーム減算で ADPCM 成分単体を定量) で「vol_pcm=25 相殺が fmgen ADPCM に
+  素で効き**意図値 (64) より −10.0dB**」を確認 (理論見積 −21dB は fmgen の dB スケール解釈違いで
+  半分だった)。根治 = **patch 06_beep_gain**: BEEP ブーストを beepg.c 内の専用ゲイン
+  (g_qb_beep_gain) に移し vol_master=100/vol_pcm=64 の中立へ → ADPCM +10dB 是正・設定パネル
+  adpcm スライダとの奪い合い解消・qbDebug.fmgen(0) A/B 時の opngen 2.55 倍副作用も解消。
+  回帰 = 新設 tools/adpcm_beepgain_test.js (3 PASS: 検出力ガード + beepgain⇄ADPCM 分離 +
+  既定=vol64) + beep_gain_test 3/3 (BEEP peak 7833・3.82x = 旧実装と同値) + triage ベースライン一致。
 - **グループ C (挙動変更系)**: **全 8 件修正済 (2026-07-05)**。JS 側 4 件 (~~#5 音楽初回スワップ /
   #6 hideEngineFiles レース / #14 パッド blur / #16 Pointer Lock 窓~~) はブラウザ実機確認済み・
   commit b3c35b3。docs/dos_hle_gaps.md §4 の faithful 化 4 点 (~~§4-2-10 AH=0Ah エコー CR のみ /
@@ -106,12 +110,15 @@ QuuBee 側は実装・回帰・デプロイ済 (patch `tools/np2kai_patches/05_l
     (bridge.js:2661) が pressed だけ解放し padPressed を触らない + 非表示中は rAF 停止で
     エッジ検出も走らない。
     → 修正済: releasePadKeys 新設 + blur/visibilitychange で両方解放。実機確認済 (CHANGELOG 2026-07-05)。
-15. 🕘 **[グループ B・要実測]** **ちびおと ADPCM が BEEP ブースト相殺の巻き添えで約 -21dB の疑い (要 A/B 実測)** —
+15. ✅ **[2026-07-05 修正済]** **ちびおと ADPCM が BEEP ブースト相殺の巻き添えで約 -21dB の疑い (要 A/B 実測)** —
     beep_gain の vol_master×2.55 を vol_pcm=25 で相殺する設計は整数経路にしか効かず、
     fmgen 経路 (usefmgen=1 既定) の ADPCM は opna_reset が vol_pcm を素で dB 化 → 素の 25。
     ちびおと実機確認 (06-27) は beep ブースト既定化 (06-28) の前で、以後未再検証。
     `qbDebug.beepgain(100)` A/B で 1 分検証可。+ 設定パネルの adpcm スライダと beep_gain が
     同じ np2cfg.vol_pcm を別意味論で奪い合う設計問題も同根。
+    → headless 実測でクロ確定 (実測 −10.0dB)・patch 06_beep_gain で設計ごと根治
+    (BEEP 専用ゲイン化・vol_master/vol_pcm 中立復帰)。回帰 tools/adpcm_beepgain_test.js。
+    上の「グループ B」項参照 (CHANGELOG 2026-07-05)。
 16. ✅ **[2026-07-05 修正済]** **worker モード初期化中の Pointer Lock リスナーが未定義 emu を触る** — makeWorkerEmu の
     await 窓 (秒オーダー) で canvas クリック→マウス操作すると TypeError (致命ではない)。
     → 修正済: mousemove/mousedown/mouseup/pointerlockchange に emu ガード。実機確認済 (CHANGELOG 2026-07-05)。

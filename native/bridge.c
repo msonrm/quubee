@@ -139,16 +139,12 @@ np2kai_handle np2kai_create(void) {
 	 * メモリカウントが消える (ゲーム Run も同様に速くなる)。実機 POST を見たい層向けに
 	 * np2kai_set_itf_post(1) (= qbDebug.itfpost(1)) で復活できる (既定はこの 0 のまま)。 */
 	np2cfg.ITF_WORK = 0;
-	/* BEEP 音量ブースト (既定 4x)。【重要】vol_master が実際に効くのは opngen/beep/psg(opngen)/
-	 * cs4231/ADPCM/PCM 等の整数合成経路だけで、既定の fmgen FM にも TSF MIDI にも届かない: fmgen の
-	 * 音量は opna_reset が vol_fm で直接設定し vol_master を畳む経路 (fmboard_updatevolume→
-	 * opna_fmgen_setallvolume*_linear) は opnalist 未 populate で完全 no-op、MIDI は qb_tsf の
-	 * QB_OUT_SCALE 経路で vol_master を通らない。この性質を使い、vol_master を上げて BEEP を持ち上げ、
-	 * ADPCM/PCM 側を相殺して不変に保つ = FM/MIDI/ADPCM を一切変えず BEEP だけを増幅する。
-	 * 動機: np2kai 標準の BEEP は beepcfg.vol が 0..3 の 4 段階しか持たず矩形波が peak 2048 (-24dBFS)
-	 * で頭打ちのため、FM/MIDI 楽曲の下で SE が ~18-23dB 埋もれて聴こえない (amel133 作者報告・実測確認)。
-	 * np2kai_set_beep_gain(400) で BEEP_VOL=3 + vol_master=255 (UINT8 上限) → 実 ~383% (+11.7dB)、
-	 * BEEP peak ≈ 7834 (-12dBFS、MIDI と同等)。実行時に qbDebug.beepgain(x) で A/B 可。 */
+	/* BEEP 音量ブースト (既定 4x)。np2kai 標準の BEEP は beepcfg.vol が 0..3 の 4 段階しか持たず
+	 * 矩形波が peak 2048 (-24dBFS) で頭打ちのため、FM/MIDI 楽曲の下で SE が ~18-23dB 埋もれて
+	 * 聴こえない (amel133 作者報告・実測確認)。BEEP_VOL=3 (×1.5) + patch 06 の BEEP 専用ゲイン
+	 * g_qb_beep_gain (beepg.c レンダラ内で完結・他音源へ波及なし) で実 ~383% (+11.7dB)、
+	 * BEEP peak ≈ 7834 (-12dBFS、MIDI と同等)。実行時に qbDebug.beepgain(x) で A/B 可 (live)。
+	 * 旧 vol_master/vol_pcm ハックの教訓は np2kai_set_beep_gain のコメント参照 (2026-07-05 撤去)。 */
 	np2kai_set_beep_gain(400);
 	/* FM 音源は fmgen (cisc C++ ライブラリ) を既定にする。以前は「低音のビリビリ」を理由に
 	 * opngen (NP2 オリジナル) へ切り替えていたが、その歪みの主因は soft-clip 導入前の
@@ -560,29 +556,32 @@ int np2kai_set_beep_mute(int mute) {
 }
 
 /* BEEP (PC-98 内蔵ブザー) の音量ブースト。gain_pct=100 が素の np2kai (矩形波 peak 2048 = -24dBFS)。
- * vol_master は fmgen FM/TSF MIDI に効かず BEEP と ADPCM/PCM だけに効くので、vol_master を上げて BEEP を
- * 持ち上げ、ADPCM/PCM の音量を相殺して不変に保つ (= FM/MIDI/ADPCM を変えず BEEP だけ増幅)。BEEP_VOL は
- * 0..3 の 4 段階なので ×1.5 までしか稼げず、残りは vol_master(UINT8、上限 255) で。よって純設定での上限は
- * BEEP_VOL=3 × vol_master=255 ≈ 383% (+11.7dB)。それ以上は要コア改変 (beepg.c のゲイン項)。
- * 既定は np2kai_create が 400 (→クランプ 383) で呼ぶ。実行時は qbDebug.beepgain(x) で A/B (beep は live、
- * ADPCM/PCM 相殺は次 reset で反映)。戻り値 = 実際に適用した % (クランプ後)。 */
+ * BEEP_VOL は 0..3 の 4 段階で ×1.5 までしか稼げないので、残りは patch 06 が beepg.c に足した
+ * BEEP 専用ゲイン g_qb_beep_gain (%, beepg のレンダラ内で volM に畳む) で増幅する。他音源へは
+ * 一切波及しない (BEEP のレンダラ内で完結)。
+ * 【旧設計の教訓 2026-07-05】以前は vol_master を 255 へ上げて BEEP を持ち上げ vol_pcm=25 で
+ * ADPCM/PCM を相殺していたが、vol_master が fmgen に届かない一方で相殺の vol_pcm だけが
+ * fmgen ADPCM (ちびおと経路・opna_reset が素で dB 化) に効き、ADPCM が意図値 (64) より
+ * -10dB になる副作用があった (headless 実測・tools/adpcm_beepgain_test.js)。ついでに
+ * vol_master=255 は qbDebug.fmgen(0) A/B 時の opngen FM を 2.55 倍で鳴らす副作用もあった。
+ * 現設計では vol_master=100 (中立)・vol_pcm/vol_adpcm は initload 既定 64 のまま = ユーザーの
+ * ノブ (設定パネル adpcm スライダ = np2kai_set_vol) と奪い合わない。
+ * 上限 383% は旧設計 (vol_master 255 クランプ) の踏襲 (既定 400→383 の挙動を変えないため)。
+ * 既定は np2kai_create が 400 (→クランプ 383) で呼ぶ。実行時は qbDebug.beepgain(x) で A/B
+ * (BEEP_VOL も g_qb_beep_gain も live 反映 = reset 不要)。戻り値 = 実際に適用した % (クランプ後)。 */
+int g_qb_beep_gain = 100;   /* patch 06 (beepg.c) が読む BEEP 専用ゲイン (%) */
 int np2kai_set_beep_gain(int gain_pct) {
-	int bv, vm, comp;
+	int bv, bg;
 	if (gain_pct < 50)  gain_pct = 50;
 	if (gain_pct > 383) gain_pct = 383;
-	if (gain_pct >= 150) { bv = 3; vm = gain_pct * 100 / 150; }  /* BEEP_VOL=3 が ×1.5、残りを vol_master で */
-	else                 { bv = 2; vm = gain_pct; }              /* 等倍以下は BEEP_VOL=2 (×1.0) */
-	if (vm < 1)   vm = 1;
-	if (vm > 255) vm = 255;
-	comp = 6400 / vm;                  /* vol_adpcm*vol_master/100 を ~64 一定に (= 64*100/vm) */
-	if (comp < 1)   comp = 1;
-	if (comp > 128) comp = 128;
+	if (gain_pct >= 150) { bv = 3; bg = gain_pct * 100 / 150; }  /* BEEP_VOL=3 が ×1.5、残りを g_qb_beep_gain で */
+	else                 { bv = 2; bg = gain_pct; }              /* 等倍以下は BEEP_VOL=2 (×1.0) */
+	if (bg < 1) bg = 1;
 	np2cfg.BEEP_VOL   = (UINT8)bv;
-	np2cfg.vol_master = (UINT8)vm;
-	np2cfg.vol_adpcm  = (UINT8)comp;   /* ADPCM/PCM は次 reset の setvol で相殺反映 */
-	np2cfg.vol_pcm    = (UINT8)comp;
+	g_qb_beep_gain    = bg;
+	np2cfg.vol_master = 100;           /* 中立を明示 (旧設計の 255 が残らないように) */
 	if (s_beep_muted) s_beep_vol_saved = (UINT)bv;  /* ミュート中は復元値だけ更新 (起動音ミュートを壊さない) */
-	else              beep_setvol((UINT)bv);        /* live 反映 (beepg が vol_master を実時間で読む) */
+	else              beep_setvol((UINT)bv);        /* live 反映 (beepg が g_qb_beep_gain を実時間で読む) */
 	return gain_pct;
 }
 
