@@ -1563,8 +1563,13 @@ async function makeWorkerEmu() {
     }
 
     async function fsSnapshot() {  // run 開始時の FS 状態を「同期済み」として記録 (差分の基準)
+        // 基準は raw (emu.scanRun 直) で撮る。snapshot は reset より前 = hideEngineFiles が
+        // loadLoaderDisk で今回の Run 用に切り替わる前に走るので、フィルタ済み scanRun() だと
+        // 音楽セッション直後の通常 Run で注入エンジン (PMD86.COM/PMP.COM) が基準から漏れ
+        // 「新規ファイル」として一覧に出てしまう。raw なら不変ファイルとして正しくスキップされる
+        // (実行中の一覧反映 syncRunDir は従来どおりフィルタ済み — 隠しファイルは追加されない)。
         fsSig = new Map();
-        for (const f of await scanRun()) fsSig.set(f.name, f.size + ':' + f.mtimeMs);
+        for (const f of await emu.scanRun()) fsSig.set(f.name, f.size + ':' + f.mtimeMs);
     }
 
     async function syncRunDir() {  // 差分だけ loadedEntries に反映。変化があれば再描画
@@ -1608,13 +1613,19 @@ async function makeWorkerEmu() {
     async function startRunSync() { stopRunSync(); await fsSnapshot(); runSyncTimer = setInterval(syncRunTick, 1000); }
     function stopRunSync()  { if (runSyncTimer) { clearInterval(runSyncTimer); runSyncTimer = null; } }
 
-    // staging 後の共通処理: loader.d88 を A: に挿入してリセット → /run ライブ反映 → exit polling。
+    // staging 後の共通処理: /run 同期基準 → loader.d88 を A: に挿入してリセット → exit polling。
     async function runStaged(label) {
         runStatusEl.textContent = `${label}: starting…`;
+        // 同期基準 (fsSnapshot) は必ず reset より前に撮る。loader boot は実質ゼロ遅延で、
+        // 「creat→write→exit だけ」の爆速プログラムは boot 込み 1 フレームで完走する (実測)。
+        // 旧順序 (reset 後に snapshot) だと worker の tick が 1 回先行しただけでプログラムが
+        // 走り切り、作られたファイルが「開始時から存在」とみなされ一覧に永遠に載らなかった
+        // (Stosstruppe 氏報告「fig1.exe を Run しても a.txt が作られない」の真因 — 実際は
+        // MEMFS に作られており、一覧同期が取りこぼしていた)。
+        await startRunSync();           // 基準を確定し、実行中の /run 変化を一覧へライブ反映
         await loadLoaderDisk();
         runStatusEl.textContent = `${label}: running`;
         stopButton.hidden = false;
-        await startRunSync();           // 実行中の /run 変化を一覧へライブ反映
         pollDosExit(async (code) => {
             stopRunSync();
             await syncRunDir();         // 終了直前の書き込みを最終取り込み

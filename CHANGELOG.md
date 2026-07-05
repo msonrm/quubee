@@ -1,5 +1,32 @@
 # CHANGELOG
 
+## [filer 同期の取りこぼし根治 — 爆速プログラムが作ったファイルが一覧に出ない (Stosstruppe 氏 fig1)] — 2026-07-05
+
+Stosstruppe 氏の同じ X 投稿 (6/28) にあった fig1.exe の報告「D&D して Run すると何も作られず
+code 0 で終了。Open して Run すると a.txt が作られる」の調査と根治。
+
+### 真因 — D&D vs Open は無関係、run 開始 snapshot と reset の順序 race
+
+- D&D と Open は同一の openDropped → 同一の Run 経路で、staging に差は無い。
+- エンジン層はシロ: fig1 相当 (creat→write→close→exit) は **boot 込み 1 フレームで完走**し
+  (headless 実測)、a.txt は MEMFS に正しく作られていた。「作られない」は見え方の問題。
+- 真因は runStaged の順序。旧: `loadLoaderDisk (reset) → fsSnapshot (一覧同期の基準)`。
+  reset の直後に worker の tick が 1 回でも先行するとプログラムが走り切り、作られた a.txt が
+  基準 (fsSnapshot) に含まれてしまう → 差分同期 (syncRunDir) は「開始時から存在・不変」と
+  みなして**一覧に永遠に載せない**。tick と scanRun メッセージの競争なので結果は
+  非決定的 — 報告の「D&D だと出ない / Open だと出る」は経路でなく race の裏表。
+
+### 修正 (web/player/bridge.js のみ・2 点)
+
+- **fsSnapshot を reset より前に**: runStaged を `startRunSync (基準確定) → loadLoaderDisk (reset)`
+  の順へ。基準確定後に書かれたファイルは必ず差分として拾われる (実行中 1s ライブ反映 +
+  終了時の最終同期)。
+- **基準は raw スキャンで撮る**: snapshot が reset 前に走ると hideEngineFiles (音楽セッションの
+  注入エンジン隠し) が前 Run の値のままなので、フィルタ済みスキャンだと音楽→ゲーム Run の順で
+  PMD86.COM/PMP.COM が基準から漏れて一覧に出てしまう (audit で直した「Stop 後エンジン出現」の
+  再発形)。raw で基準に含めれば不変ファイルとしてスキップされる。実行中の一覧反映は従来どおり
+  フィルタ済み。
+
 ## [INT 23h (Ctrl-C ハンドラ) 発火を実装 — Stosstruppe 氏 X 投稿 fig5 の指摘に対応] — 2026-07-05
 
 Stosstruppe 氏 (@Stosstruppe) が X に投稿したテストプログラム 5 枚 (fig1/fig5/fig6 の C + MASM
