@@ -3,6 +3,9 @@
 ## [精査グループ A — 小修正 9 件を一括 (堅牢化 + honest failure)] — 2026-07-05
 
 精査残件のうち「小さくて低リスク」の 9 件 (ユーザー選択)。JS 5 + C 4、リビルド 1 回。
+**デプロイ済 (2026-07-05、最優先 4 件と合わせて本番反映。wasm md5 一致 + JS/HTML の変更マーカを
+本番 URL で確認済)**。残件はグループ B/C = TODO.md 精査節に再開手順つきで記録、D = 据え置き
+(当たり付けは docs/dos_hle_gaps.md §4)。
 
 ### JS (archive.js / diskimage.js / index.html)
 - **origSize キャップ**: 細工/破損 .lzh のヘッダ u32 origSize (FFFFFFFF 等) を無検証で
