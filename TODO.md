@@ -26,10 +26,25 @@ QuuBee 側は実装・回帰・デプロイ済 (patch `tools/np2kai_patches/05_l
 
 ### 関連メモリ: [[reference_lio_gcircle_arc_gap]] / scope B = GPAINT 本塗り (別途)
 
-## 🔍 全体コード精査 (2026-07-05) — 発見バグ一覧 (未修正・修正方針は要ユーザー判断)
+## 🔍 全体コード精査 (2026-07-05) — 発見バグ一覧と残作業
 
 多エージェント精査 + 手動裏取り済み。実 DOS との乖離 (挙動ギャップ) は docs/dos_hle_gaps.md §4 へ
 記載。ここは「コード自体の欠陥」のみ。裏取り済み = コードを直接読んで実在確認したもの。
+
+**処理状況 (2026-07-05 ユーザー判断)**: 最優先 4 件 (commit 0e7b807) + グループ A 小修正 9 件
+(commit 72a317d) は修正・デプロイ済み。残件は下記グループに割り振り、後日ここから再開する:
+- **グループ B (要実測・再開待ち)**: #15 ちびおと ADPCM の音量疑い。**再開手順**: ADPCM 入りの曲
+  (FMP .ovi / PMD .PPC) を再生し `qbDebug.beepgain(100)` ⇄ 既定 (383 相当) で ADPCM 音量を聴き比べ。
+  差が出たら「beep_gain の vol_pcm=25 相殺が fmgen 経路に効かない」がクロ = beep_gain と設定パネル
+  vol 系の vol_pcm 奪い合い設計ごと修正 (bridge.c:515/583 周辺)。シロなら #15 をクローズ。
+- **グループ C (挙動変更系・個別に実機確認して再開)**: #5 音楽初回スワップ / #6 hideEngineFiles
+  レース / #14 パッド blur / #16 Pointer Lock 窓、+ docs/dos_hle_gaps.md §4 の faithful 化 3 点
+  (§4-2-10 AH=0Ah エコーを CR のみに / §4-1-3 read-only write を error 5 に / §4-1-4 41h の 2/3
+  出し分け / §4-2-15 IOCTL AL=01h のハンドル検証)。いずれも修正は小さいが挙動が変わるので
+  1 件ずつ実機確認を挟むこと。
+- **グループ D (据え置き・corpus 遭遇待ち)**: 修正しない。**動かないタイトルが出たときの当たり付け
+  リファレンス** = docs/dos_hle_gaps.md §4 (PSP フィールド一式・AH=29h DBCS・標準ハンドル 0-4 の
+  不整合・INT 27h の CS 基準・FindFirst "."".."・g_fh path 160B 等) + 下の「B: 小物・コメント腐り」。
 
 ### S: クラッシュ / 誤実行 (即修正価値・いずれも小修正)
 
@@ -59,11 +74,11 @@ QuuBee 側は実装・回帰・デプロイ済 (patch `tools/np2kai_patches/05_l
    bridge.js の await が永久 pending。onmessage も try/catch 無しで FS 例外 (ENOTDIR 等) 同様。
    local モードは showFatal が出るのに worker モード (既定) は真っ暗なまま = デプロイ事故が見えない。
    → 修正済 (CHANGELOG 2026-07-05): init を .catch + onmessage try/catch + 親 call() の reject 化。
-5. **音楽セッション初回スワップで残響対策が空振り (off-by-one)** — 初回 pass は stageMusic →
+5. 🕘 **[グループ C・再開待ち]** **音楽セッション初回スワップで残響対策が空振り (off-by-one)** — 初回 pass は stageMusic →
    musicPlay(曲A) → runStaged(reset) の順で、reset が `g_musicStarted=false` に倒す
    (emu-worker.js:324)。曲 B への最初の差し替えで 337 の clearRing+swap-silence が発火しない。
    フラグ倒しは reset でなく stageMusic 側へ。裏取り済 (bridge.js:1674-1683 で順序確認)。
-6. **Stop 後に注入エンジン PMD86.COM/PMP.COM が一覧に出現** — resetToIdle が
+6. 🕘 **[グループ C・再開待ち]** **Stop 後に注入エンジン PMD86.COM/PMP.COM が一覧に出現** — resetToIdle が
    `hideEngineFiles=false` (bridge.js:1127) を同期で倒した後、非同期の onExit → syncRunDir が
    フィルタ無しで scanRun し、/run 残置のエンジンが「新規ファイル」として一覧へ。
 7. ✅ **[2026-07-05 修正済]** **MCB 走査ループに前進保証なし → ゲスト暴走がホスト凍結に化ける** — mcb_coalesce /
@@ -82,19 +97,19 @@ QuuBee 側は実装・回帰・デプロイ済 (patch `tools/np2kai_patches/05_l
 12. ✅ **[2026-07-05 修正済]** **diskimage parseDir の組合せ爆発** — 訪問済みディレクトリクラスタ未記録で
     自己参照 subdir × depth16 が B^16。→ seenDirs Set。diskimage_test 30/0 無回帰。
 13. ✅ **[2026-07-05 修正済]** **Open ピッカーの accept に .lha/.lzs が無い** — index.html:516 に追加。
-14. **パッド押しっぱなしでタブ切替するとゲスト側キーが押されたまま自走** — blur ハンドラ
+14. 🕘 **[グループ C・再開待ち]** **パッド押しっぱなしでタブ切替するとゲスト側キーが押されたまま自走** — blur ハンドラ
     (bridge.js:2661) が pressed だけ解放し padPressed を触らない + 非表示中は rAF 停止で
     エッジ検出も走らない。
-15. **ちびおと ADPCM が BEEP ブースト相殺の巻き添えで約 -21dB の疑い (要 A/B 実測)** —
+15. 🕘 **[グループ B・要実測]** **ちびおと ADPCM が BEEP ブースト相殺の巻き添えで約 -21dB の疑い (要 A/B 実測)** —
     beep_gain の vol_master×2.55 を vol_pcm=25 で相殺する設計は整数経路にしか効かず、
     fmgen 経路 (usefmgen=1 既定) の ADPCM は opna_reset が vol_pcm を素で dB 化 → 素の 25。
     ちびおと実機確認 (06-27) は beep ブースト既定化 (06-28) の前で、以後未再検証。
     `qbDebug.beepgain(100)` A/B で 1 分検証可。+ 設定パネルの adpcm スライダと beep_gain が
     同じ np2cfg.vol_pcm を別意味論で奪い合う設計問題も同根。
-16. **worker モード初期化中の Pointer Lock リスナーが未定義 emu を触る** — makeWorkerEmu の
+16. 🕘 **[グループ C・再開待ち]** **worker モード初期化中の Pointer Lock リスナーが未定義 emu を触る** — makeWorkerEmu の
     await 窓 (秒オーダー) で canvas クリック→マウス操作すると TypeError (致命ではない)。
-17. **mouse33 fn17 restore が ratio=0 を無検証で復元** — #1 と同じ trap への第 2 経路
-    (dos_mouse33.c:328-339)。#1 と同時にサニタイズ。
+17. ✅ **[2026-07-05 修正済]** **mouse33 fn17 restore が ratio=0 を無検証で復元** — #1 と同じ trap への第 2 経路
+    (dos_mouse33.c:328-339)。#1 と同時にサニタイズ済 (commit 0e7b807)。
 
 ### B: 小物・コメント腐り (ついで修正枠)
 
