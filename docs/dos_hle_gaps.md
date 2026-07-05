@@ -144,6 +144,18 @@ TODO.md「プリンタ出力 → ブラウザ」参照。
 
 ## 3. INT 21h の外（DOS 周辺機能）
 
+- **DOS 内割り込み窓（INT 21h 入口の CLD; STI）= 実装済み（2026-07-06、sol110 フリーズ根治）**。
+  実 MS-DOS の INT 21h ディスパッチャは入口で CLD; STI するため、CLI したまま（Borland
+  `disable()` 系）DOS を呼ぶプログラムでも「DOS コール中だけ」係属 IRQ が配送される。HLE は
+  C で原子的に処理するのでこの窓が消えており、INT 1Ch 単発タイマ（IRQ0）待ちがフリーズした。
+  INT 21h トランポリン = `NOP(hook); STI; CLD; IRET`（`dos_loader.c` `put_trampoline_sti`）で
+  IRET 直前に配送点を 1 回再現。IRET が FLAGS を pop するので呼び出し元 IF/DF は不変。
+  回帰 = `tools/int1c_timer_test.js`。**残存ギャップ**:
+  - blocking 入力の再ポーリング経路（`CPU_IP--` → NOP 踏み直し）は IRET 非到達で窓が開かない。
+    CLI + blocking 入力（AH=01h 等）+ タイマ callback 併用のタイトルは依然ハングし得る（実例未確認）。
+  - INT 33h / INT DCh トランポリンは窓なし（実ドライバの STI 保証が不明確なため保守的に据え置き）。
+    CLI したまま INT 33h だけをポーリングして tick を待つタイトルが出たら同じ手当てを検討。
+
 - **XMS（HIMEM.SYS 相当）= 実装済み（Tier 1 MVP、2026-06-05、既定 ON）**。EXTMEM 32MB は
   `i386core.e.ext`（`CPU_EXTMEM`、`extbase = ext - 0x100000`）に実在し、これを「HIMEM ロード済の DOS」
   として素直に再現する。`native/dos_xms.{c,h}`。
