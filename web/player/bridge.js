@@ -476,7 +476,10 @@ async function makeWorkerEmu() {
             canvas.classList.add('captured');
         } else {
             canvas.classList.remove('captured');
-            // キャプチャ解除時はボタン状態をリセット (スタックボタン防止)
+            // キャプチャ解除時はボタン状態をリセット (スタックボタン防止)。
+            // emu ガード: worker 初期化 (makeWorkerEmu の await 窓・秒オーダー) 中に
+            // canvas クリック→ロック→解除すると emu が未代入で TypeError になるため。
+            if (!emu) return;
             emu.mouseButton(0, 0);
             emu.mouseButton(1, 0);
         }
@@ -488,6 +491,7 @@ async function makeWorkerEmu() {
     // のスケールで割る。
     document.addEventListener('mousemove', (e) => {
         if (document.pointerLockElement !== canvas) return;
+        if (!emu) return;   // worker 初期化中 (emu 未確立) は送らない
         // canvas.style.width は (w * N / dpr) px、source は w なので、
         // 1 source px = canvas.style.width / w CSS px
         const cssW = parseFloat(canvas.style.width)  || canvas.width;
@@ -501,11 +505,13 @@ async function makeWorkerEmu() {
 
     document.addEventListener('mousedown', (e) => {
         if (document.pointerLockElement !== canvas) return;
+        if (!emu) return;   // worker 初期化中 (emu 未確立) は送らない
         if (e.button === 0) emu.mouseButton(0, 1);
         else if (e.button === 2) emu.mouseButton(1, 1);
     });
     document.addEventListener('mouseup', (e) => {
         if (document.pointerLockElement !== canvas) return;
+        if (!emu) return;   // worker 初期化中 (emu 未確立) は送らない
         if (e.button === 0) emu.mouseButton(0, 0);
         else if (e.button === 2) emu.mouseButton(1, 0);
     });
@@ -1139,7 +1145,11 @@ async function makeWorkerEmu() {
         return musicElapsedMs + (musicState === 'playing' ? performance.now() - musicAnchorMs : 0);
     }
     async function resetToIdle() {
-        if (currentPoll && pollDosExit._stop) pollDosExit._stop();   // exit 監視を停止
+        // exit 監視を停止し、onExit (最終 syncRunDir) の完了まで待つ。待たずに下の
+        // hideEngineFiles=false へ進むと、最終 scanRun が worker 往復の await 後に倒れた
+        // フラグを読んでフィルタ無しになり、音楽セッションの注入エンジン (PMD86.COM/
+        // PMP.COM) が「新規ファイル」として一覧に出てしまう (Stop 後の出現バグ)。
+        if (currentPoll && pollDosExit._stop) await pollDosExit._stop();
         emu.setPaused(false);       // 凍結したまま reset すると HELLO が描かれない
         musicState = 'stopped';
         musicSessionUp = false;     // セッション破棄 (C 側も qb_dos_reset_state で g_music_active=0)
@@ -1520,7 +1530,7 @@ async function makeWorkerEmu() {
             if (currentPoll !== self) return;  // 既に停止済 (二重停止防止)
             clearInterval(self.tick);
             currentPoll = null;
-            onExit(code);
+            return onExit(code);   // async onExit の完了を Stop 経路 (resetToIdle) が待てるよう返す
         }
         // exit code は emu.getExit() で取得 (ローカルは HEAP、worker はメッセージ往復)。
         // busy で多重往復を防ぐ。100ms 間隔。
@@ -2201,6 +2211,13 @@ async function makeWorkerEmu() {
     let padLive = -1;                     // 今押している対象ボタン番号 (設定パネルの live 表示用・-1=なし)
     const padPressed = new Set();         // パッド由来で押下中の NKEY (キーボードとは独立管理)
 
+    // パッド由来の押下を全解放。blur/タブ非表示中は rAF が止まりエッジ検出が走らないため、
+    // 押しっぱなしのままタブを離れるとゲスト側でキーが押されたまま自走する — 明示解放で断つ。
+    function releasePadKeys() {
+        for (const k of padPressed) emu.keyUp(k);
+        padPressed.clear();
+    }
+
     function pollGamepads() {
         const want = new Set();
         let live = -1;
@@ -2677,13 +2694,12 @@ async function makeWorkerEmu() {
         });
     }
 
-    // ウィンドウフォーカス喪失時に全キーを解放 (スタックキー防止)
-    window.addEventListener('blur', () => {
-        for (const c of pressed) {
-            const code = PC98_KEYMAP[c];
-            if (code !== undefined) emu.keyUp(code);
-        }
-        pressed.clear();
+    // ウィンドウフォーカス喪失/タブ非表示時に全キーを解放 (スタックキー防止)。
+    // キーボード (pressed) とゲームパッド (padPressed) の両方 — パッドは rAF 停止中に
+    // エッジ検出が走らないので、ここで解放しないと押しっぱなしがゲストに残る。
+    window.addEventListener('blur', () => { releaseHeldKeys(); releasePadKeys(); });
+    document.addEventListener('visibilitychange', () => {
+        if (document.hidden) { releaseHeldKeys(); releasePadKeys(); }
     });
 
     // Output parameter slots for np2kai_get_framebuffer

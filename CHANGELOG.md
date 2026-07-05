@@ -1,5 +1,32 @@
 # CHANGELOG
 
+## [精査グループ C の JS 側 4 件 — 音楽初回スワップ / Stop 後エンジン出現 / パッド blur / Pointer Lock ガード] — 2026-07-05
+
+精査残件グループ C (挙動変更系) のうち JS のみで完結する 4 件。Wasm 再ビルド不要。
+**4 件ともブラウザ実機確認済み (ユーザー、2026-07-05)**。グループ C の残りは
+docs/dos_hle_gaps.md §4 の faithful 化 4 点 (C 側・要リビルド)。
+
+- **#5 音楽セッション初回スワップの off-by-one (emu-worker.js)**: 残響対策 (clearRing+
+  swap-silence) の判定フラグ `g_musicStarted` を reset で倒していたが、初回パスは
+  stageMusic → musicPlay(曲A) → reset の順なので、曲 B への最初の差し替えだけ対策が
+  空振りしていた。倒す場所を stageMusic (新セッション確立) へ移動。全 reset 経路が
+  `musicSessionUp=false` に倒す = 次の再生は必ず stageMusic を再走することを確認済み。
+- **#6 Stop 後に注入エンジン PMD86.COM/PMP.COM が一覧に出現 (bridge.js)**: scanRun は
+  worker 往復の await **後** に hideEngineFiles を読むため、resetToIdle が同期でフラグを
+  倒すと最終 syncRunDir は必ずフィルタ無しで走っていた (レースでなく決定的)。stopPolling
+  が onExit の Promise を返し、resetToIdle がそれを await してからフラグを倒す順序に修正。
+  副次効果: Stop 時のセーブ最終取り込み完了がリセット進行より前に保証される。
+- **#14 パッド押しっぱなしタブ切替でゲスト自走 (bridge.js)**: blur ハンドラが pressed
+  (キーボード) だけ解放し padPressed を放置 + 非表示タブでは rAF 停止でエッジ検出も
+  走らなかった。`releasePadKeys()` 新設、blur + visibilitychange (非表示化) で
+  キーボード/パッド両方を解放。復帰後もボタンを握ったままならエッジ検出が張り直す。
+- **#16 worker 初期化中の Pointer Lock TypeError (bridge.js)**: makeWorkerEmu の await 窓
+  (秒オーダー) で canvas クリック→マウス操作すると未代入の `emu` を触って TypeError。
+  mousemove / mousedown / mouseup / pointerlockchange の 4 ハンドラに `if (!emu) return;`。
+
+検証: node --check OK。実機 = #5 初回差し替えで前曲の尻尾が漏れない / #6 Stop 後に一覧へ
+エンジンが出ない / #14 タブ切替で自走しない / #16 初期化中の操作でエラー無し (ユーザー確認)。
+
 ## [精査グループ A — 小修正 9 件を一括 (堅牢化 + honest failure)] — 2026-07-05
 
 精査残件のうち「小さくて低リスク」の 9 件 (ユーザー選択)。JS 5 + C 4、リビルド 1 回。
