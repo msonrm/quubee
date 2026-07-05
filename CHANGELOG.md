@@ -1,5 +1,34 @@
 # CHANGELOG
 
+## [精査グループ C 完結 — dos_hle_gaps §4 faithful 化 4 点 (C 側)] — 2026-07-05
+
+精査残件グループ C の後半 = 実 DOS との乖離 4 点を faithful 化 (native/dos_int21.c、Wasm
+再ビルド済)。いずれも「嘘の成功より正直な失敗」ポリシーの適用。**ブラウザ実機スモーク済み
+(ユーザー、2026-07-05 — 通常タイトル/テキスト系とも変化なく普通に動作) = グループ C 完結**。
+
+- **§4-2-10 AH=0Ah の Enter エコーを CR のみに**: 実 DOS は buffered input の確定を CR 単独で
+  エコーする (カーソルは同じ行の桁 0 へ。LF はプログラム側が出す規約)。旧実装の CR+LF は
+  自前で LF を出すソフトが 1 行余分に進む。3Fh handle 0 の cooked 行入力は別契約
+  (行+CR LF、np21w 突合済) なので不変。
+- **§4-1-3 read-only open への AH=40h write を CF=1/AX=5 に**: 旧実装は fwrite が 0 を返して
+  「0 バイト書けた・成功 (CF=0)」になり、CF しか見ないソフトが書けたと誤認して進んでいた。
+  CX=0 の truncate も同じ検査を通る (従来は ftruncate の EINVAL 頼み)。判定は g_fh[].mode
+  ("rb" = AH=3Dh AL=0 の read-only open)。
+- **§4-1-4 AH=41h Delete のエラー出し分け**: 一律 AX=2 だったのを open/create 系と同じ
+  st 基準に: 途中ディレクトリ欠=3 (path not found) / 親はあるがファイル無し=2 / 実在する
+  のに消せない (ディレクトリ等)=5 (access denied)。
+- **§4-2-15 IOCTL AL=01h にハンドル検証**: AL=00h と同じ検証 (標準デバイス 0-4 と open 済み
+  以外は AX=6)。旧実装はどんな BX でも黙って CF=0 成功で AL=00h と非対称だった。open 済み
+  ファイルハンドルは従来どおり no-op 成功 (AL=00 と対で呼ばれるため、失敗にすると回帰する)。
+
+### 検証
+- **新設回帰 `tools/faithful_gap_test.js` (19 項目 PASS)**: 分岐なし線形 COM (int 21h 直後に
+  AX 保存 + `sbb ax,ax` で CF を語化・固定番地スロット) で 4 契約を直接照合。ro-write 後の
+  ファイル無傷 (MEMFS byte 照合)・delete の実消滅・0Ah 確定後のカーソル行不変 (0:0710) まで確認。
+- 既存テストスイープ **59/59 PASS** (stdin 3 本・dev_info・seek_trunc・conwork・touhou 4/4 含む)。
+- **bio100 triage --fresh がベースライン完全一致**: 描画到達 25/31・動作確認 27/31・EXIT=0・
+  CRASH=0 (BUSY=DYNAMO16 は従来からの分類癖・pc=USER で生存)。
+
 ## [精査グループ C の JS 側 4 件 — 音楽初回スワップ / Stop 後エンジン出現 / パッド blur / Pointer Lock ガード] — 2026-07-05
 
 精査残件グループ C (挙動変更系) のうち JS のみで完結する 4 件。Wasm 再ビルド不要。

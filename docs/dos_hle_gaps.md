@@ -261,10 +261,12 @@ TODO.md「プリンタ出力 → ブラウザ」参照。
    で末尾フッタを後読みする型が異常系へ分岐した。ハンドル表に負の論理位置 `neg_pos` を持たせ、
    負位置中の read/write は error 5・非負 seek で解除（EOF 超え SEEK_SET は従来どおり成功）。
    回帰 `tools/seek_trunc_test.js`（8 項目、DX:AX=FFFF:FFA4 まで検証）。
-3. **read-only ("rb") ハンドルへの AH=40h が「0 バイト書けた・成功」**— 実 DOS は
-   CF=1/AX=5 (access denied)。CF しか見ないソフトは書けたと誤認して進む。
-4. **AH=41h Delete のエラーコードが一律 AX=2**— 途中ディレクトリ欠は実 DOS では 3。
-   open/create 系は st で 2/3 を出し分けており不整合。
+3. ~~**read-only ("rb") ハンドルへの AH=40h が「0 バイト書けた・成功」**~~ → ✅ 2026-07-05
+   実装。実 DOS 同様 CF=1/AX=5 (access denied)。CX=0 の truncate も同じ検査を通る
+   (従来は ftruncate の EINVAL 頼み)。回帰 `tools/faithful_gap_test.js`。
+4. ~~**AH=41h Delete のエラーコードが一律 AX=2**~~ → ✅ 2026-07-05 実装。open/create 系と
+   同じ st 基準で出し分け: 途中ディレクトリ欠=3 / 親はあるがファイル無し=2 / 実在する
+   のに消せない (ディレクトリ等)=5。回帰 `tools/faithful_gap_test.js`。
 5. **AH=29h Parse Filename が DBCS 非対応**— `IS_FCB_SEP` に SJIS トレイル範囲の
    `\ [ ] |` が入っておりトレイルで名前パースが切れる + トレイルバイトへの大文字化で
    別文字に化ける（`dta_write_find` は丁寧に回避しているのに 29h だけ素通し）。
@@ -280,8 +282,9 @@ TODO.md「プリンタ出力 → ブラウザ」参照。
 
 ### 4-2. コンソール / tty 系
 
-10. **AH=0Ah の Enter エコーが CR+LF**— 実 DOS は **CR のみ**（LF はプログラム側が
-    出す規約）。自前で LF を出すソフトは 1 行余分に進む。
+10. ~~**AH=0Ah の Enter エコーが CR+LF**~~ → ✅ 2026-07-05 実装。Enter は CR のみエコー
+    (カーソルは同じ行の桁 0 へ。LF はプログラム側が出す規約)。3Fh handle 0 の cooked
+    行入力は別契約 (行+CR LF、np21w 突合済) で不変。回帰 `tools/faithful_gap_test.js`。
 11. ~~**ESC[1J（先頭〜カーソル消去）が黙って no-op**~~ → ✅ 2026-07-05 実装。`case 'J'` に
     p=1（先頭〜カーソル、カーソル位置含む）を追加。INT DCh CL=10h AH=0Ah DX=1 も同経路で解消。
 12. **TAB がセルを書かずカーソル前進のみ**— 実 CON は空白に展開して書く（AH=02h が
@@ -292,8 +295,9 @@ TODO.md「プリンタ出力 → ブラウザ」参照。
 14. **標準ハンドル 0-4 の扱いが関数間で不整合**— 44h/3Eh は「open な char device」と
     申告するのに、3Fh は h=0 のみ・40h は h=1/2 のみ・42h は 0-4 全部 AX=6（実 DOS は
     char device の seek に AX=0:DX=0 成功）。IOCTL プローブ成功→write 失敗の矛盾。
-15. **IOCTL AL=01h がハンドル未検証**— 未 open/範囲外でも CF=0 成功（AL=00h は AX=6 を
-    返すのと非対称。「正直な失敗」ポリシー違反）。
+15. ~~**IOCTL AL=01h がハンドル未検証**~~ → ✅ 2026-07-05 実装。AL=00h と同じ検証
+    (標準デバイス 0-4 と open 済み以外は AX=6)。open 済みファイルハンドルは従来どおり
+    no-op 成功 (AL=00 と対で呼ばれるため)。回帰 `tools/faithful_gap_test.js`。
 16. **AH=33h AL=05/06 が別契約を get 扱い**— AL=05 (DOS4+: DL=起動ドライブ) /
     AL=06 (DOS5+: BX=true version) を実装せず break フラグ get として応答。
     AX=3306h で DOS5 判定するランタイムは caller の BX 残骸を読む。

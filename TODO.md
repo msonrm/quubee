@@ -37,12 +37,13 @@ QuuBee 側は実装・回帰・デプロイ済 (patch `tools/np2kai_patches/05_l
   (FMP .ovi / PMD .PPC) を再生し `qbDebug.beepgain(100)` ⇄ 既定 (383 相当) で ADPCM 音量を聴き比べ。
   差が出たら「beep_gain の vol_pcm=25 相殺が fmgen 経路に効かない」がクロ = beep_gain と設定パネル
   vol 系の vol_pcm 奪い合い設計ごと修正 (bridge.c:515/583 周辺)。シロなら #15 をクローズ。
-- **グループ C (挙動変更系・個別に実機確認して再開)**: ~~#5 音楽初回スワップ / #6 hideEngineFiles
-  レース / #14 パッド blur / #16 Pointer Lock 窓~~ → **JS 側 4 件は 2026-07-05 修正・ブラウザ
-  実機確認済み (CHANGELOG 2026-07-05)**。**残 = docs/dos_hle_gaps.md §4 の faithful 化 4 点**
-  (§4-2-10 AH=0Ah エコーを CR のみに / §4-1-3 read-only write を error 5 に / §4-1-4 41h の 2/3
-  出し分け / §4-2-15 IOCTL AL=01h のハンドル検証)。いずれも修正は小さいが挙動が変わるので
-  1 件ずつ実機確認を挟むこと。
+- **グループ C (挙動変更系)**: **全 8 件修正済 (2026-07-05)**。JS 側 4 件 (~~#5 音楽初回スワップ /
+  #6 hideEngineFiles レース / #14 パッド blur / #16 Pointer Lock 窓~~) はブラウザ実機確認済み・
+  commit b3c35b3。docs/dos_hle_gaps.md §4 の faithful 化 4 点 (~~§4-2-10 AH=0Ah エコー CR のみ /
+  §4-1-3 read-only write error 5 / §4-1-4 41h の 2/3/5 出し分け / §4-2-15 IOCTL AL=01h ハンドル
+  検証~~) も実装済み — 新設回帰 tools/faithful_gap_test.js (19 項目) + 既存スイープ 59/59 PASS +
+  bio100 triage ベースライン一致 (描画到達 25/動作確認 27/EXIT 0/CRASH 0) + ブラウザ実機スモーク済
+  (2026-07-05)。**グループ C 完結**。
 - **グループ D (据え置き・corpus 遭遇待ち)**: 修正しない。**動かないタイトルが出たときの当たり付け
   リファレンス** = docs/dos_hle_gaps.md §4 (PSP フィールド一式・AH=29h DBCS・標準ハンドル 0-4 の
   不整合・INT 27h の CS 基準・FindFirst "."".."・g_fh path 160B 等) + 下の「B: 小物・コメント腐り」。

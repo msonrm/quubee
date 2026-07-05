@@ -1681,7 +1681,11 @@ static void int21_0a_buffered(void) {
         if (ch == 0x0D) {                      /* 確定 */
             poke8(buf + 2 + len, 0x0D);
             poke8(buf + 1, len);
-            tty_putc(0x0D); tty_putc(0x0A);
+            /* 実 DOS の AH=0Ah は Enter を CR のみエコーする (カーソルは同じ行の桁 0 へ。
+             * LF はプログラム側が出す規約)。CR+LF を出すと自前で LF を出すソフトが
+             * 1 行余分に進む。3Fh handle 0 の cooked 行入力は別契約 (行+CR LF、np21w
+             * 突合済) なのでここだけ CR 単独。docs/dos_hle_gaps.md §4-2-10。 */
+            tty_putc(0x0D);
             g_la_active = 0;
             return;
         }
@@ -2168,6 +2172,11 @@ static void int21_40_write(void) {
     FILE *fp = fh_get(h);
     if (!fp) { CPU_AX = 6; CPU_FLAG |= C_FLAG; return; }
     if (g_fh[h].neg_pos < 0) { CPU_AX = 5; CPU_FLAG |= C_FLAG; return; }  /* 負位置 (AH=42h 参照) */
+    /* read-only open (AH=3Dh AL=0 → "rb") への write は実 DOS 同様 error 5 (access denied)。
+     * 旧実装は fwrite が 0 を返して「0 バイト書けた・成功 (CF=0)」になり、CF しか見ない
+     * ソフトが書けたと誤認して進んでいた。CX=0 の truncate も書き込み操作なので同罪
+     * (従来は ftruncate の EINVAL 頼み)。docs/dos_hle_gaps.md §4-1-3。 */
+    if (strcmp(g_fh[h].mode, "rb") == 0) { CPU_AX = 5; CPU_FLAG |= C_FLAG; return; }
     if (want == 0) {
         /* CX=0 は「現在位置でファイルを切り詰め/延長」(実 DOS 契約)。seek→write(0byte) で
          * セーブを短く書き直す定石。未対応だと旧データの尻尾が残り固定長パースが壊れる。
@@ -2201,10 +2210,14 @@ static void int21_40_write(void) {
 
 static void int21_41_delete(void) {
     char host[256];
-    dos_path_to_host(CPU_DS, CPU_DX, host, sizeof(host));
-    if (fs_unlink(host) != 0) {
-        fprintf(stderr, "[int21h/41] unlink(%s) failed\n", host);
-        CPU_AX = 2;
+    int st = dos_path_to_host(CPU_DS, CPU_DX, host, sizeof(host));
+    if (st != 0 || fs_unlink(host) != 0) {
+        fprintf(stderr, "[int21h/41] unlink(%s) failed (st=%d)\n", host, st);
+        /* 実 DOS の出し分け (open/create 系と同じ st 基準): 途中ディレクトリ欠 = 3
+         * (path not found) / 親はあるがファイル無し = 2 (file not found) / 実在する
+         * のに消せない (ディレクトリ等) = 5 (access denied)。旧実装は一律 AX=2 で
+         * open/create 側と不整合だった。docs/dos_hle_gaps.md §4-1-4。 */
+        CPU_AX = (st == 2) ? 3 : (st == 1) ? 2 : 5;
         CPU_FLAG |= C_FLAG;
         return;
     }
@@ -2317,7 +2330,18 @@ static void int21_44_ioctl(void) {
             CPU_FLAG |= C_FLAG;
             return;
         }
-        if (h >= 0 && h <= 2) g_con_raw = (int)((CPU_DX >> 5) & 1);
+        /* AL=00h と同じハンドル検証: 標準デバイス 0-4 と open 済みハンドル以外は
+         * AX=6 (invalid handle)。旧実装は未 open/範囲外でも黙って CF=0 成功で、
+         * AL=00h が AX=6 を返すのと非対称 = 「正直な失敗」ポリシー違反だった。
+         * open 済みファイルハンドルはモードを保持しないので従来どおり no-op 成功
+         * (AL=00 と対で呼ばれるため、失敗にすると逆に回帰する)。§4-2-15。 */
+        if (h >= 0 && h <= 2) {
+            g_con_raw = (int)((CPU_DX >> 5) & 1);
+        } else if (!(h == 3 || h == 4 || fh_get(h))) {
+            CPU_AX = 6;
+            CPU_FLAG |= C_FLAG;
+            return;
+        }
         CPU_FLAG &= ~C_FLAG;
         break;
     default:
