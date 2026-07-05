@@ -67,7 +67,10 @@ typedef struct {
     int      warned_handler;
 } mouse33_t;
 
-static mouse33_t g_m33 = { .mode = QB_MOUSE33_MS };
+/* ratio 8/8 (= m33_soft_reset と同値) を静的初期化にも入れる。soft_reset は初回 Run
+ * (loader-start) まで走らないが、ホストの mousemove は待機画面でも qb_mouse33_post_move
+ * の除算を踏むため、0 のままだと Wasm の i32.div_s trap でランタイム全体が落ちる。 */
+static mouse33_t g_m33 = { .mode = QB_MOUSE33_MS, .ratio_x = 8, .ratio_y = 8 };
 
 /* ---------------- 内部ヘルパ ---------------- */
 
@@ -334,6 +337,9 @@ int qb_mouse33_int33(void) {
         tmp.calls = g_m33.calls;
         tmp.logged_fns = g_m33.logged_fns;
         tmp.warned_handler = g_m33.warned_handler;
+        /* ゲスト由来バイトなので ratio=0 (post_move の除数) は受け入れない (fn0F と同じ 0 拒否) */
+        if (!tmp.ratio_x) tmp.ratio_x = 8;
+        if (!tmp.ratio_y) tmp.ratio_y = 8;
         g_m33 = tmp;
         m33_log_fn(ax, "restore state");
         break;

@@ -6,8 +6,12 @@
 > 80〜90% 想定）。BIOS レベル（INT 18h/1Bh/1Ch/DCh 等）は NP2kai の合成 BIOS が担当する
 > ので、本書の「未対応」は **DOS(INT 21h) 層に限った話**。
 
-実装済み AH: `01-0C / 19 1A 25 2A 2C 2F 30 31 33 35 / 3C-49 4A-4F / 52 58 63`
-（ディスパッチは `dos_int21.c` の `qb_dos_int21_dispatch()`）。
+実装済み AH: `01 02 06-0C 0E / 19 1A 25 29 2A 2C 2F / 30 31 33 34 35 36 38 39-3B / 3C-4F /
+50 51 52 58 62 63`（ディスパッチは `dos_int21.c` の `qb_dos_int21_dispatch()`）。
+2026-07-05 訂正: 旧記載の「01-0C」は過大申告 — **AH=03/04/05 (AUX in/out・PRN out) と 0Dh
+(disk reset) は未実装**で default（CF=1/AX=1）に落ちる。実 DOS の AH=05h はエラーを返さない
+関数なので、プリンタ出力を試すソフトは CF=1 を受ける（大半は無視する）。PRN 経路は
+TODO.md「プリンタ出力 → ブラウザ」参照。
 
 ## 1. 未実装の INT 21h ファンクション（`default` → CF=1, AL=01「invalid function」）
 
@@ -237,6 +241,115 @@
 - ~~**子の env 共有（C1）**~~ → **解消済（2026-06-04）**: `env_seg=0` 継承の子も `build_child_env` で子固有 env を
   確保し `argv[0]` を子パス（`A:\NAME`）へ正規化する（`tools/exec_env_test.js` で headless 回帰）。残る拡張
   ポイントは `env_seg!=0`（明示 env）の完全 faithful 化のみ（現 corpus に該当タイトル無し）。
+
+## 4. 2026-07-05 全体精査で見つかった未記載ギャップ（指摘のみ・未修正）
+
+> 2026-07-05 のコードベース全体精査（多エージェント + 手動裏取り）で判明した、本書に
+> 未記載だった実 DOS との乖離。修正はユーザー判断待ち。実装バグ（クラッシュ等）の一覧は
+> TODO.md「全体コード精査 (2026-07-05)」を参照。
+
+### 4-1. ファイル I/O 系（当たりやすい順）
+
+1. ~~**AH=40h CX=0 の truncate/extend 未実装**~~ → ✅ 2026-07-05 実装（`int21_40_write`）。
+   実 DOS は CX=0 で「現在位置でファイルを切り詰め（または延長）」する。旧実装は AX=0/CF=0 を
+   返すだけで何もせず、seek→write(0 byte) でセーブを短く書き直す定石が壊れ、旧データの尻尾が
+   残って次回ロードのパースが壊れる遠隔破壊型だった。fflush + `ftruncate(fileno)` で実装、
+   read-only ("rb") ハンドルは EINVAL → 実 DOS 同様 error 5。回帰 `tools/seek_trunc_test.js`。
+2. ~~**AH=42h Seek の負オフセット**~~ → ✅ 2026-07-05 実装。実 DOS は whence=1/2 でファイル
+   先頭より前に seek してもエラーにしない（負の位置を DX:AX (CF=0) で返し後続 I/O が失敗する）。
+   旧実装は MEMFS fseek の失敗を CF=1/**AX=6 (invalid handle)** で返し、`seek(h, -N, SEEK_END)`
+   で末尾フッタを後読みする型が異常系へ分岐した。ハンドル表に負の論理位置 `neg_pos` を持たせ、
+   負位置中の read/write は error 5・非負 seek で解除（EOF 超え SEEK_SET は従来どおり成功）。
+   回帰 `tools/seek_trunc_test.js`（8 項目、DX:AX=FFFF:FFA4 まで検証）。
+3. **read-only ("rb") ハンドルへの AH=40h が「0 バイト書けた・成功」**— 実 DOS は
+   CF=1/AX=5 (access denied)。CF しか見ないソフトは書けたと誤認して進む。
+4. **AH=41h Delete のエラーコードが一律 AX=2**— 途中ディレクトリ欠は実 DOS では 3。
+   open/create 系は st で 2/3 を出し分けており不整合。
+5. **AH=29h Parse Filename が DBCS 非対応**— `IS_FCB_SEP` に SJIS トレイル範囲の
+   `\ [ ] |` が入っておりトレイルで名前パースが切れる + トレイルバイトへの大文字化で
+   別文字に化ける（`dta_write_find` は丁寧に回避しているのに 29h だけ素通し）。
+   漢字名を FCB 経由で受け渡す親子連携で破壊。
+6. **`ci_equal_fsname` / `glob_field` の byte 単位 case-fold がトレイルに及ぶ**—
+   トレイルが 0x20 ビット違いの別漢字同士が誤一致し得る（該当ペア共存が要るので稀）。
+7. **FindFirst/Next が `.` / `..` を返さない**— 実 DOS は attr に 0x10 を含む検索で
+   返す。ファイラの「.. で親へ」項目が出ない。逆方向の安全はあるので実害は片方向。
+8. **FindFirst CX=0x08（volume label 専用検索）が通常ファイルを返す**— 古典意味論では
+   label のみ返すべき。ラベル取得ツールがファイル名をラベル表示する。
+9. **`g_fh[].path` が 160 バイト**— 長い SJIS パスのハンドルは記録パスが黙って切れ、
+   AH=45h/46h DUP の「同 path 開き直し」が失敗または別ファイルを掴む。
+
+### 4-2. コンソール / tty 系
+
+10. **AH=0Ah の Enter エコーが CR+LF**— 実 DOS は **CR のみ**（LF はプログラム側が
+    出す規約）。自前で LF を出すソフトは 1 行余分に進む。
+11. **ESC[1J（先頭〜カーソル消去）が黙って no-op**— `case 'J'` は p=0/2 のみ。
+    0K/1K/2K は揃っているのに J だけ 1 が欠け、未実装ログも出ない。
+12. **TAB がセルを書かずカーソル前進のみ**— 実 CON は空白に展開して書く（AH=02h が
+    AL=20h を返す自前実装とも矛盾）。前フレームの残骸が TAB 区間に消え残る。
+13. **AH=0Ch の flush が 0x502 リングのみ**— softkey 発行文字列の未消費分・3Fh cooked
+    の持ち越し行・inject FIFO は生き残る。type-ahead 破棄の目的からは softkey 残りも
+    捨てるべき。
+14. **標準ハンドル 0-4 の扱いが関数間で不整合**— 44h/3Eh は「open な char device」と
+    申告するのに、3Fh は h=0 のみ・40h は h=1/2 のみ・42h は 0-4 全部 AX=6（実 DOS は
+    char device の seek に AX=0:DX=0 成功）。IOCTL プローブ成功→write 失敗の矛盾。
+15. **IOCTL AL=01h がハンドル未検証**— 未 open/範囲外でも CF=0 成功（AL=00h は AX=6 を
+    返すのと非対称。「正直な失敗」ポリシー違反）。
+16. **AH=33h AL=05/06 が別契約を get 扱い**— AL=05 (DOS4+: DL=起動ドライブ) /
+    AL=06 (DOS5+: BX=true version) を実装せず break フラグ get として応答。
+    AX=3306h で DOS5 判定するランタイムは caller の BX 残骸を読む。
+17. **CSI パラメータ 9 個目以降が第 8 パラメータへ連結される**（実害ほぼ無し）。
+
+### 4-3. プロセス / PSP / ローダ系
+
+18. **PSP フィールドの欠落一式**（`build_psp` / EXEC 子共通）:
+    - +05h CP/M CALL 5 ゲート無し（既知）に加え **+06h「セグメント内使用可能バイト数」も 0**
+      — これで自メモリ量を測る古典ソフトが 0 と誤読。
+    - **+0Ah/0Eh/12h（INT 22h/23h/24h 保存）を EXEC 時に保存せず、終了時の復元も無い**
+      — 現 HLE は 23h/24h を発火しないため潜在バグ止まり。
+    - **+18h JFT 20 バイト全ゼロ**（実 DOS: `01 01 01 00 02 FF…`）、+32h ハンドル数・
+      +34h JFT far ptr も 0 — PSP:19h で stdout リダイレクト判定するソフトが誤動作。
+    - **最上位 PSP の +16h（親 PSP）= 0**（実 DOS の最初のシェルは自己参照）— EXEC 子は
+      正しく設定されるのと非対称。親チェーン歩行ツールが seg 0 = IVT を PSP と誤読し得る。
+19. **AH=4Dh の終了種別 (AH) が常に 0**— `g_last_exit_type` は 0 代入しか無い死に
+    フィールド。実 DOS は TSR 終了後 AH=3 を返す。「常駐成功したか」を 4Dh で確認する
+    インストーラが誤判定（signal_tsr で 3 を入れるだけで直る）。
+20. **最上位 COM のブロックが 64KB 固定**— 実 DOS は最大ブロック全部を渡す
+    (PSP:2=0xA000 とも整合)。self-shrink 前の AH=48h が実 DOS では失敗するのに成功する /
+    shrink せず EXEC する行儀の悪い COM は実 DOS なら AX=8 で失敗するが、ここでは
+    64KB 超に spill した親データの上に子がロードされ得る。
+21. **最上位 COM の SS:SP に zero word を積まない**— EXEC 子 COM / load-only は積むのに
+    loader-start だけ欠落。RET 終了（CP/M 流）の契約。※実害は現状ほぼ無し —
+    `pccore_reset` が毎 Run `ZeroMemory(mem, 0x110000)` するため当該 word は常に 0。
+22. **起動時 AX が常に 0**— 実 DOS はコマンドライン FCB のドライブ有効性を AL/AH に
+    返す（無効ドライブで FFh）。EXEC 子は FCB parse するようになったのに AX は未対応。
+23. **EXEC 子の `build_one_fcb` が '*' を '?' に展開しない**（INT 21h AH=29h 側は展開
+    する）+ 区切りが space/tab のみ（実 DOS は `, ; =` も）。
+24. **FCB1=null で FCB2 が無視される**（EXEC パラメータブロック処理の構造）。
+25. **INT 27h が CS でなく current PSP を常駐対象にする**— 実 INT 27h は CS=PSP 前提。
+    CS を far jmp で移した変則 TSR では別ブロックを縮める。
+26. **TSR が開いたままのハンドルが祖先の終了で閉じられる**— TSR は fh_mask を捨てて
+    pop するため、祖先の close_since がTSR の open 中ハンドルを巻き込む。実 DOS では
+    常駐 SFT は生存。
+27. **AH=50h Set PSP 後の 4Ch/31h で EXEC スタックと g_cur_psp が乖離し得る**—
+    signal_exit/tsr は LIFO pop + g_cur_psp 基準の解放。実 DOS は PSP:0Ah (INT 22h)
+    連鎖で復帰先を決める。デバッガ的な使い方（load-only の子を自前で走らせて終了させる）
+    で顕在化。
+28. **exec_load の必要量計算に EXE スタック頂点が入らない**（loader-start は入れる）—
+    minalloc がスタックを覆わない変則 EXE をぎりぎりで EXEC すると子の push が隣接
+    ブロックを破壊。
+
+### 4-4. INT 21h の外
+
+29. **XMS AH=08h: 空きゼロでも BL=00h**— XMS 3.0 は BL=A0h。32MB を使い切るのは稀。
+30. **INT 33h fn5/6 (MS) の BX=2（中ボタン）が右ボタン扱い**— 実 7.06 は存在しない
+    中ボタンとして空カウンタを返すはず（2 ボタン前提の PC-98 では実害ほぼ無し。
+    真理値表とコードの突合はこれ以外全項目一致）。
+31. **ミニ COMMAND.COM（batscript.js）の追加乖離**: ②線形シーケンス経路が `call` /
+    `for` / `choice` / `shift` を**無言スキップ**（③は honest fallback するのと非対称）/
+    リダイレクト `> nul` がトークンとして子の command tail に漏れる（実 COMMAND.COM は
+    剥がす。`echo x > file` もファイルを作らず画面表示）/ tail 再構成で連続空白・タブが
+    単一空白に潰れる（実 DOS は raw tail を PSP:80h へ）/ goto ラベル照合が完全一致
+    （実 DOS は先頭 8 文字有意）/ `if "%1"==FM` の非対称 quote が実 DOS と逆判定。
 
 ## まとめ（当たりやすさ・優先度）
 

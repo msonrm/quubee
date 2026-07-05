@@ -1331,6 +1331,9 @@ typedef struct {
     FILE *fp;
     char  path[160];
     char  mode[8];     /* fopen モード ("rb"/"r+b"/"w+b") — AH=45h DUP の再オープン用 */
+    int32_t neg_pos;   /* AH=42h で先頭より前へ seek した論理位置 (<0 のときのみ有効)。
+                        * 実 DOS は負 seek をエラーにせず後続 I/O を失敗させる。ホスト
+                        * FILE* は負位置を持てないのでここに記録し read/write が error 5。 */
 } qb_fh_t;
 static qb_fh_t g_fh[DOS_HANDLE_MAX];
 
@@ -1339,6 +1342,7 @@ static int fh_alloc(FILE *fp, const char *path, const char *mode) {
         if (!g_fh[h].used) {
             g_fh[h].used = 1;
             g_fh[h].fp   = fp;
+            g_fh[h].neg_pos = 0;
             strncpy(g_fh[h].path, path ? path : "", sizeof(g_fh[h].path) - 1);
             g_fh[h].path[sizeof(g_fh[h].path) - 1] = '\0';
             strncpy(g_fh[h].mode, mode ? mode : "rb", sizeof(g_fh[h].mode) - 1);
@@ -2124,6 +2128,7 @@ static void int21_3f_read(void) {
     }
     FILE *fp = fh_get(h);
     if (!fp) { CPU_AX = 6; CPU_FLAG |= C_FLAG; return; }
+    if (g_fh[h].neg_pos < 0) { CPU_AX = 5; CPU_FLAG |= C_FLAG; return; }  /* 負位置 (AH=42h 参照) */
     uint16_t want = CPU_CX;
     uint32_t dst = lin(CPU_DS, CPU_DX);
     /* チャンク化 (mem は 2MB 連続なので直接書ける) */
@@ -2157,6 +2162,22 @@ static void int21_40_write(void) {
 
     FILE *fp = fh_get(h);
     if (!fp) { CPU_AX = 6; CPU_FLAG |= C_FLAG; return; }
+    if (g_fh[h].neg_pos < 0) { CPU_AX = 5; CPU_FLAG |= C_FLAG; return; }  /* 負位置 (AH=42h 参照) */
+    if (want == 0) {
+        /* CX=0 は「現在位置でファイルを切り詰め/延長」(実 DOS 契約)。seek→write(0byte) で
+         * セーブを短く書き直す定石。未対応だと旧データの尻尾が残り固定長パースが壊れる。
+         * read-only ("rb") ハンドルは ftruncate が EINVAL → 実 DOS 同様 error 5。 */
+        fflush(fp);
+        long pos = ftell(fp);
+        if (pos < 0 || ftruncate(fileno(fp), pos) != 0) {
+            CPU_AX = 5;
+            CPU_FLAG |= C_FLAG;
+            return;
+        }
+        CPU_AX = 0;
+        CPU_FLAG &= ~C_FLAG;
+        return;
+    }
     uint8_t buf[4096];
     uint32_t src = lin(CPU_DS, CPU_DX);
     uint16_t total = 0;
@@ -2189,24 +2210,39 @@ static void int21_42_seek(void) {
     int h = (int)CPU_BX;
     FILE *fp = fh_get(h);
     if (!fp) { CPU_AX = 6; CPU_FLAG |= C_FLAG; return; }
-    int whence;
-    switch (CPU_AL) {
-        case 0: whence = SEEK_SET; break;
-        case 1: whence = SEEK_CUR; break;
-        case 2: whence = SEEK_END; break;
-        default: CPU_AX = 1; CPU_FLAG |= C_FLAG; return;
-    }
     /* CX:DX は符号付き 32-bit (DOS 標準) */
     int32_t off = (int32_t)(((uint32_t)CPU_CX << 16) | CPU_DX);
-    if (fseek(fp, (long)off, whence) != 0) {
-        CPU_AX = 6;
-        CPU_FLAG |= C_FLAG;
-        return;
+    int32_t target;
+    switch (CPU_AL) {
+    case 0:
+        target = off;
+        break;
+    case 1: {
+        long cur = (g_fh[h].neg_pos < 0) ? (long)g_fh[h].neg_pos : ftell(fp);
+        target = (int32_t)(cur + off);
+        break;
     }
-    long pos = ftell(fp);
-    if (pos < 0) pos = 0;
-    CPU_AX = (uint16_t)(pos & 0xFFFF);
-    CPU_DX = (uint16_t)((pos >> 16) & 0xFFFF);
+    case 2: {
+        fseek(fp, 0, SEEK_END);
+        target = (int32_t)(ftell(fp) + off);
+        break;
+    }
+    default: CPU_AX = 1; CPU_FLAG |= C_FLAG; return;
+    }
+    /* 実 DOS は whence=1/2 で先頭より前へ seek してもエラーにしない — 負の位置を
+     * DX:AX で返し、後続の read/write が失敗する (`seek(-N, END)` で末尾フッタを
+     * 後読みする定石が、小さいファイルでは seek 成功→read 失敗と流れる)。
+     * ホスト FILE* は負位置を持てないので neg_pos に論理位置を記録し、実位置は
+     * 先頭へ置く。非負 seek で解除。EOF 超えの SEEK_SET は実 DOS 同様成功する。 */
+    if (target < 0) {
+        g_fh[h].neg_pos = target;
+        fseek(fp, 0, SEEK_SET);
+    } else {
+        g_fh[h].neg_pos = 0;
+        if (fseek(fp, (long)target, SEEK_SET) != 0) { CPU_AX = 1; CPU_FLAG |= C_FLAG; return; }
+    }
+    CPU_AX = (uint16_t)((uint32_t)target & 0xFFFF);
+    CPU_DX = (uint16_t)(((uint32_t)target >> 16) & 0xFFFF);
     CPU_FLAG &= ~C_FLAG;
 }
 

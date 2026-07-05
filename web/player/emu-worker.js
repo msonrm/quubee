@@ -293,8 +293,17 @@ async function init(msg) {
 // ---- メッセージディスパッチ ----
 onmessage = (ev) => {
     const m = ev.data;
+    try {
     switch (m.type) {
-        case 'init': init(m); break;
+        // init は async。fire-and-forget にすると importScripts 404 / wasm instantiate 失敗が
+        // unhandled rejection になり reply が返らず、bridge.js の await が永久 pending =
+        // デプロイ事故が「無言の真っ暗」になる (local モードは showFatal が出るのと非対称)。
+        case 'init':
+            init(m).catch((e) => {
+                console.error('emu-worker: init failed:', e);
+                reply(m.id, { error: String((e && e.message) || e) });
+            });
+            break;
         case 'run': if (m.on) startLoop(); else running = false; break;
         case 'setVerbose': logVerbose = !!m.on; break;   // qbDebug.verbose(1) で chatter を前面表示へ切替
 
@@ -364,5 +373,11 @@ onmessage = (ev) => {
             break;
 
         default: console.warn('emu-worker: unknown message', m.type);
+    }
+    } catch (e) {
+        // 同期例外 (FS の ENOTDIR 等) も握りつぶさない: id 付き (= 返信待ちがいる) メッセージは
+        // error reply で呼び出し元の await を必ず決着させる (無いと Promise が永久 pending)。
+        console.error('emu-worker: ' + (m && m.type) + ' failed:', e);
+        if (m && m.id != null) reply(m.id, { error: String((e && e.message) || e) });
     }
 };

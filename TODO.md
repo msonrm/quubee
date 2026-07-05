@@ -26,6 +26,101 @@ QuuBee 側は実装・回帰・デプロイ済 (patch `tools/np2kai_patches/05_l
 
 ### 関連メモリ: [[reference_lio_gcircle_arc_gap]] / scope B = GPAINT 本塗り (別途)
 
+## 🔍 全体コード精査 (2026-07-05) — 発見バグ一覧 (未修正・修正方針は要ユーザー判断)
+
+多エージェント精査 + 手動裏取り済み。実 DOS との乖離 (挙動ギャップ) は docs/dos_hle_gaps.md §4 へ
+記載。ここは「コード自体の欠陥」のみ。裏取り済み = コードを直接読んで実在確認したもの。
+
+### S: クラッシュ / 誤実行 (即修正価値・いずれも小修正)
+
+1. ✅ **[2026-07-05 修正済]** **mouse33 の 0 除算 → Wasm 全体 trap (本番到達可能)** — `dos_mouse33.c:70` の静的初期化が
+   `.mode = QB_MOUSE33_MS` のみで **ratio_x/ratio_y = 0**。8 に設定する `m33_soft_reset()` は
+   loader-start (初回 Run) まで走らない。一方 JS は待機画面でも canvas クリック → Pointer Lock →
+   mousemove を無条件転送 (bridge.js:460-491 → bridge.c:458 → `qb_mouse33_post_move` の
+   `fx / ratio_x`)。**「Run 前にキャンバスをクリックしてマウスを動かす」だけで i32.div_s trap =
+   プレイヤー全体死亡 (リロードまで復旧不能)**。mouse33 既定 ON (2026-07-03) 以降の本番に存在。
+   修正 = 静的初期化子に ratio 8/8 (+ fn17 restore 後の ratio==0 サニタイズも同時に)。裏取り済。
+   → 修正済 (CHANGELOG 2026-07-05)。Run 前 mouse_move 100 連打で trap しないことを headless 確認。
+2. ✅ **[2026-07-05 修正済]** **mergeEntries の stale 参照で ▶ Run が旧バイナリを実行** — `bridge.js:702-708` が同名エントリを
+   新オブジェクトへ丸ごと置換するが、`selectedEntry`/`selectedRecipe.targetEntry`/`viewedEntry` は
+   旧オブジェクト参照のまま。＋Add でパッチ版を上書き → armed チップは消えるのに Run バーは生き、
+   **stage されるのは旧 `.data`**。Save も旧データ。syncRunDir (1553) は in-place 更新で同一性を
+   保っており mergeEntries だけ非対称。裏取り済。
+   → 修正済 (CHANGELOG 2026-07-05): in-place 更新 + 選択中 .bat はレシピ再解決。ブラウザ実機確認待ち。
+3. **書庫 origSize 無検証の巨大確保** — archive.js の全 LZH デコーダがヘッダの u32 origSize を
+   そのまま `new Uint8Array()` へ (125-132)。細工/破損 .lzh (origSize=FFFFFFFF) でタブ OOM。
+   compSize×最大圧縮率 or 数十 MB でキャップを。裏取り済。
+
+### A: 実バグ (顕在化条件あり)
+
+4. ✅ **[2026-07-05 修正済]** **worker init/onmessage の例外握りつぶし = 無言ハング** — emu-worker.js の init は async
+   fire-and-forget で、importScripts 404 / wasm 失敗が unhandled rejection → reply 無し →
+   bridge.js の await が永久 pending。onmessage も try/catch 無しで FS 例外 (ENOTDIR 等) 同様。
+   local モードは showFatal が出るのに worker モード (既定) は真っ暗なまま = デプロイ事故が見えない。
+   → 修正済 (CHANGELOG 2026-07-05): init を .catch + onmessage try/catch + 親 call() の reject 化。
+5. **音楽セッション初回スワップで残響対策が空振り (off-by-one)** — 初回 pass は stageMusic →
+   musicPlay(曲A) → runStaged(reset) の順で、reset が `g_musicStarted=false` に倒す
+   (emu-worker.js:324)。曲 B への最初の差し替えで 337 の clearRing+swap-silence が発火しない。
+   フラグ倒しは reset でなく stageMusic 側へ。裏取り済 (bridge.js:1674-1683 で順序確認)。
+6. **Stop 後に注入エンジン PMD86.COM/PMP.COM が一覧に出現** — resetToIdle が
+   `hideEngineFiles=false` (bridge.js:1127) を同期で倒した後、非同期の onExit → syncRunDir が
+   フィルタ無しで scanRun し、/run 残置のエンジンが「新規ファイル」として一覧へ。
+7. **MCB 走査ループに前進保証なし → ゲスト暴走がホスト凍結に化ける** — mcb_coalesce /
+   alloc_request / free_owner / mcb_largest_free (dos_loader.c:140 他) の `nxt = s+1+size` は
+   16bit ラップし、ゲストが MCB を size=0xFFFF に踏むと `nxt==s` で C 側無限ループ =
+   run_frame が返らず worker ごと凍結 (Stop も死ぬ)。`if (nxt <= s) break;` を各所に。裏取り済。
+8. **qb_env_set の 1 バイトスタック OOB** — dos_loader.c:1329-1348。len=207 で '=' 無しの
+   set 文のとき `tmp[208]` に NUL 書込み (tmp は 208B)。破損 .bat で誘発可能。裏取り済。
+9. **AH=4Dh の TSR 終了種別が返らない** — `g_last_exit_type` は 0 代入しか無い死にフィールド
+   (grep 裏取り済: dos_loader.c:86/1009/1040/1083/1628)。signal_tsr で 3 を入れるだけ。
+   docs/dos_hle_gaps.md §4-19 と同件 (実装 1 行 + 乖離解消の両面)。
+10. **parseZip が前置データ付き zip を黙って 0 件にする** — parseZipViaCentralDir が CDH sig
+    不一致で即 break → 空配列 (truthy) → LFH フォールバック不達 (archive.js:418-424, 443-444)。
+    `entries.length` チェック 1 語 + (任意) cdOffset shift 補正。裏取り済。
+11. **parseEntry の境界チェック漏れで切詰め書庫が全滅** — 末尾切詰め .lzh で buf[base+20] が
+    undefined → throw → 読めていたエントリごと ERROR (archive.js:31-38)。方針 (エントリ単位 skip)
+    と不整合。早期 return null 1 行。裏取り済。
+12. **diskimage parseDir の組合せ爆発** — 訪問済みディレクトリクラスタを記録せず depth ガードのみ
+    (diskimage.js:243-267)。自己参照 subdir エントリ B 個 × depth16 で B^16。細工イメージ限定。
+    裏取り済。
+13. **Open ピッカーの accept に .lha/.lzs が無い** — index.html:516。D&D では受理される LArc が
+    ダイアログで選べない。`.lha,.lzs` 追加のみ。裏取り済。
+14. **パッド押しっぱなしでタブ切替するとゲスト側キーが押されたまま自走** — blur ハンドラ
+    (bridge.js:2661) が pressed だけ解放し padPressed を触らない + 非表示中は rAF 停止で
+    エッジ検出も走らない。
+15. **ちびおと ADPCM が BEEP ブースト相殺の巻き添えで約 -21dB の疑い (要 A/B 実測)** —
+    beep_gain の vol_master×2.55 を vol_pcm=25 で相殺する設計は整数経路にしか効かず、
+    fmgen 経路 (usefmgen=1 既定) の ADPCM は opna_reset が vol_pcm を素で dB 化 → 素の 25。
+    ちびおと実機確認 (06-27) は beep ブースト既定化 (06-28) の前で、以後未再検証。
+    `qbDebug.beepgain(100)` A/B で 1 分検証可。+ 設定パネルの adpcm スライダと beep_gain が
+    同じ np2cfg.vol_pcm を別意味論で奪い合う設計問題も同根。
+16. **worker モード初期化中の Pointer Lock リスナーが未定義 emu を触る** — makeWorkerEmu の
+    await 窓 (秒オーダー) で canvas クリック→マウス操作すると TypeError (致命ではない)。
+17. **mouse33 fn17 restore が ratio=0 を無検証で復元** — #1 と同じ trap への第 2 経路
+    (dos_mouse33.c:328-339)。#1 と同時にサニタイズ。
+
+### B: 小物・コメント腐り (ついで修正枠)
+
+- dos_loader.c:14 「EXEC は AL=00 のみ」→ AL=01/03 実装済みで古い。
+- 「AX=0 → シェルが AH=4Ch」コメント 3 箇所 (dos_loader.c:996 / dos_loader.h:61 / shell.asm) が
+  blob 実挙動 (sti+hlt アイドル・意図的) と矛盾。shell.asm 側の意図コメントが正。
+- INT DCh CL=10h AH=05h コメント「(ESC E 相当)」は誤り (実装は cursor up = ESC M 系)。
+  将来「ESC E に揃える」と逆に壊れる地雷コメント。
+- bridge.js:2377 chibioto コメント「既定 OFF」→ 実装は forceChibi=true (06-27 既定 ON 化の腐り)。
+- exec_load reloc ループ内の `-8` チェックは事前検証済みで到達不能 (dos_loader.c:1868)。
+- dos_xms.c:291 未実装 AH ログが呼び出し毎 (mouse33 は初回のみと非対称) / m33_log_fn は
+  AX>=63 が bit63 共有で 2 種類目以降のログ欠落。
+- compiler_base.h:21 `_XOPEN_SOURCE` 定義が標準ヘッダ include の後 (無効。Emscripten では実害なし)。
+- archive.js: lh5Decode/lhDecode は dead export / lh1 の n1=512 分岐は到達不能 /
+  buildTree の符号長 ≥17 非対称 (ゴミ出力を黙って返す) / lhDecode の match コピーに
+  outPos ガード無し (lh1 側にはある・コピペ不整合) / L2 ヘッダ長が 256 の倍数だと終端誤認
+  (本家 LHA はパディングで回避する既知コーナー) / CRC/checksum 全面未検証 (ZIP CRC-32 だけでも安い)。
+- piimage.js: Pi の aspect フィールド無視で scaleY 常に 1 (MAG は 200 ライン対応済みと非対称)。
+- emu-worker.js:309 'mkdir' は送信元の無い dead case / index.html:10 コメントの
+  `body[data-theme]` は実際は `:root[data-theme]`。
+- emscripten/build.sh 末尾の「Run: emrun …」案内は CLAUDE.md 正典 (devserver.js 必須) と矛盾。
+- FindFirst 属性・IOCTL 等の乖離系は docs/dos_hle_gaps.md §4 参照。
+
 ## ✅ ia16-elf-gcc 製 EXE 起動 (MZ 負 reloc セグメント) — 根治・デプロイ済 (2026-06-21)
 
 モダンツールチェーン (`ia16-elf-gcc` / 近年の GNU ia16 binutils) でビルドされた PC-98 homebrew が

@@ -170,15 +170,22 @@ async function makeWorkerEmu() {
     const worker = new Worker('player/emu-worker.js');
     let nextId = 1; const pending = new Map();
     let onFrameCb = null, emuObj = null;
-    const call = (msg, transfer) => new Promise((resolve) => {
-        const id = nextId++; pending.set(id, resolve);
+    const call = (msg, transfer) => new Promise((resolve, reject) => {
+        const id = nextId++; pending.set(id, { resolve, reject });
         worker.postMessage(Object.assign({ id }, msg), transfer || []);
     });
     worker.onmessage = (ev) => {
         const m = ev.data;
         if (m.type === 'frame') { if (onFrameCb) onFrameCb(m.w, m.h, m.bpp, new Uint8Array(m.buf)); return; }
         if (m.type === 'audioActive') { if (emuObj && emuObj.onAudioActive) emuObj.onAudioActive(); return; }
-        if (m.type === 'reply') { const r = pending.get(m.id); if (r) { pending.delete(m.id); r(m); } }
+        if (m.type === 'reply') {
+            const p = pending.get(m.id);
+            if (!p) return;
+            pending.delete(m.id);
+            // worker 側の失敗 (init 失敗 / FS 例外) は error reply で届く → reject で await を
+            // 決着させる (resolve のままだと呼び出し元が {error} を成功と誤読して黙って進む)。
+            if (m.error) p.reject(new Error(m.error)); else p.resolve(m);
+        }
     };
     worker.onerror = (e) => showFatal('worker error: ' + (e.message || (e.filename + ':' + e.lineno)));
 
@@ -223,10 +230,11 @@ async function makeWorkerEmu() {
         dataFiles.push({ path: '/tmp/2608_' + nm.toUpperCase() + '.WAV', bytes: rb });
         dataFiles.push({ path: '/tmp/2608_' + nm + '.wav', bytes: rb });
     }
-    const initReply = await call({ type: 'init', coreUrl, audioRate, dataFiles, audioSab: ringSab, ringFrames: RING_FRAMES, verbose: qbVerbose() });
-    if (initReply && initReply.error) {          // np2kai_create 失敗等を握りつぶさず表示 (local の showFatal に揃える)
-        showFatal('worker: ' + initReply.error);
-        throw new Error(initReply.error);        // 以降の boot disk 挿入 (handle=0) へ進ませない
+    try {
+        await call({ type: 'init', coreUrl, audioRate, dataFiles, audioSab: ringSab, ringFrames: RING_FRAMES, verbose: qbVerbose() });
+    } catch (e) {   // core 404 / wasm instantiate / np2kai_create 失敗 — 無言ハングにしない (local の showFatal に揃える)
+        showFatal('worker: ' + ((e && e.message) || e));
+        throw e;    // 以降の boot disk 挿入 (handle=0) へ進ませない
     }
     const bootRes = await fetch('assets/np2kai_boot.d88');
     if (bootRes.ok) {
@@ -698,12 +706,24 @@ async function makeWorkerEmu() {
     const escapeHtml = (s) =>
         s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
-    // path 重複は last-wins でマージ (パッチ書庫を後から重ねる用途)
+    // path 重複は last-wins でマージ (パッチ書庫を後から重ねる用途)。
+    // 既存エントリはオブジェクト置換でなく in-place 更新 (同一性保持、syncRunDir と同じ流儀) —
+    // 置換すると selectedEntry / selectedRecipe.targetEntry / viewedEntry が旧オブジェクトを
+    // 掴んだままになり、▶ Run / Save が上書き前の旧バイトを使ってしまう。
     function mergeEntries(entries) {
         for (const ent of entries) {
             const key = ent.name.toLowerCase();
-            const i = loadedEntries.findIndex((e) => e.name.toLowerCase() === key);
-            if (i >= 0) loadedEntries[i] = ent; else loadedEntries.push(ent);
+            const hit = loadedEntries.find((e) => e.name.toLowerCase() === key);
+            if (!hit) { loadedEntries.push(ent); continue; }
+            Object.assign(hit, ent);
+            // 選択中の .bat 自体が差し替わったら起動レシピも作り直す (旧解析で Run しない)
+            if (hit === selectedEntry && selectedRecipe) {
+                selectedRecipe = resolveBat(hit);
+                if (!selectedRecipe) {
+                    selectedEntry = null; runButton.disabled = true; runEntryEl.textContent = '—';
+                    runStatusEl.textContent = `${sjisName(hit.name)}: launch target not found`;
+                }
+            }
         }
     }
 

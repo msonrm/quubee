@@ -1,5 +1,57 @@
 # CHANGELOG
 
+## [全体コード精査の最優先 4 件を修正 — mouse33 0除算 / mergeEntries / 40h・42h / worker エラー伝搬] — 2026-07-05
+
+### 発端
+コードベース全体の精査 (多エージェント + 手動裏取り) で S/A 級のバグと実 DOS 乖離を洗い出した
+(一覧 = TODO.md「全体コード精査 (2026-07-05)」/ docs/dos_hle_gaps.md §4)。うち最優先 4 件を修正。
+残りは要相談。
+
+### 1. mouse33 の 0 除算 → Wasm 全体 trap (本番クラッシュ・C)
+`g_m33` の静的初期化が `.mode` のみで ratio_x/ratio_y=0。ratio を 8 にする m33_soft_reset は
+初回 Run (loader-start) まで走らない一方、JS は待機画面でも Pointer Lock 中の mousemove を
+無条件転送するため、「Run 前に canvas クリック → マウス移動」で `fx / ratio_x` が i32.div_s
+trap = プレイヤー全体死亡 (リロードまで復旧不能)。mouse33 既定 ON (2026-07-03) 以降の本番に実在。
+- 修正: 静的初期化子に ratio 8/8 + fn17 (状態復元) にゲスト由来 ratio=0 のサニタイズ (fn0F と同じ 0 拒否)。
+- 検証: 新ビルドで「create 直後 (Run 前) に mouse_move/button 100 連打」→ trap しない。
+  mouse33_test 4/4 (真理値表不変)。
+
+### 2. mergeEntries の stale 参照 — ＋Add 上書き後の ▶ Run が旧バイナリを実行 (JS)
+mergeEntries が同名エントリをオブジェクトごと置換し、selectedEntry / selectedRecipe.targetEntry /
+viewedEntry が旧オブジェクト (旧 .data) を掴んだままだった。パッチ版を重ねても Run/Save が上書き前の
+バイトを使う。armed チップだけ消えるので気づきにくい。
+- 修正: syncRunDir と同じ「in-place 更新 (同一性保持)」へ (Object.assign)。選択中の .bat 自体が
+  差し替わった場合は resolveBat でレシピも作り直し (解決不能になったら正直に選択解除)。
+
+### 3. INT 21h AH=40h CX=0 truncate + AH=42h 負 seek — 実 DOS 意味論へ (C)
+- **40h CX=0**: 実 DOS は「現在位置でファイルを切り詰め/延長」(seek→write(0) でセーブを短く
+  書き直す定石)。未対応だと旧データの尻尾が残り固定長パースが壊れる遠隔破壊型だった。
+  fflush + ftruncate(fileno) で実装。read-only ("rb") ハンドルは EINVAL → 実 DOS 同様 error 5。
+- **42h 負 seek**: 実 DOS は whence=1/2 で先頭より前へ seek してもエラーにしない — 負位置を
+  DX:AX (CF=0) で返し、後続 read/write が error 5。旧実装は fseek 失敗を CF=1/**AX=6 (invalid
+  handle!)** にしていて、`seek(-N, SEEK_END)` で末尾フッタを後読みする型が異常系へ落ちた。
+  ハンドル表に neg_pos (負の論理位置) を持たせ、負なら実位置は先頭に置き read/write が AX=5、
+  非負 seek で解除。EOF 超えの SEEK_SET は従来どおり成功。
+- 回帰: **tools/seek_trunc_test.js (新設・8/8 PASS)** — 合成 COM (nasm) が create→write→truncate→
+  END-100 (CF=0・DX:AX=FFFF:FFA4)→負位置 read (CF=1/AX=5)→復帰 read まで一気通貫 +
+  harness が MEMFS の実ファイルサイズ 8 を直接確認。
+
+### 4. worker のエラー伝搬 — デプロイ事故の「無言の真っ暗」を根治 (JS)
+emu-worker.js の init が async fire-and-forget で、importScripts 404 / wasm instantiate 失敗が
+unhandled rejection → reply が返らず bridge.js の await が永久 pending (local モードは showFatal が
+出るのと非対称)。onmessage の同期例外 (FS の ENOTDIR 等) も同様に握りつぶされていた。
+- 修正: worker 側 = init を .catch で error reply 化 + onmessage 全体を try/catch (id 付きは
+  error reply で await を必ず決着)。親側 = call() を reject 対応にし ({error} reply → reject)、
+  init 失敗は showFatal、FS 例外は openDropped 等の既存 catch に流れて ERROR 表示になる。
+
+### 回帰確認 (headless 一式)
+seek_trunc (新規 8/8) / mouse33 4/4 / stdin_read / stdin_cx1 / exec_psp / sft / create_sjis /
+find_sjis / conwork / dev_info / exe_maxalloc 4/0 / xms / memprobe / int27_tsr / batch 21/0 /
+batscript 55/0 / y2k 8/0 / lzh_l1ext / larc / **touhou 4/4** — すべて PASS。JS は node --check OK。
+**ブラウザ実機確認済み (同日ユーザー)**: ①Run 前のマウス移動 — 旧版は「worker error: Uncaught
+RuntimeError: divide by zero」を実際に再現・新版は何も起きない (真因と修正の両方を実証) /
+②＋Add 上書き→Run OK / ③セーブ・ロード不具合なし / ④通常運転問題なし。
+
 ## [設定パネル Phase 2 — ゲームパッドのボタン割当 (案A: キー注入のリマップ)] — 2026-07-04
 
 ### 実装 (JS/HTML/CSS のみ)
