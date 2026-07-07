@@ -46,10 +46,21 @@ async function init() {
     // 先頭が '<' なら辞書ではない (soundfont の RIFF 検査と同じ発想)。
     if (!buf.length || buf[0] === 0x3C) throw new Error('mozc.data が不正 (未配備で HTML が返った可能性)');
 
-    M = await self.MozcQbModule({
+    // ホストのタイムゾーンを cctz の固定オフセットゾーン名 (Fixed/UTC±hh:mm:ss) で注入する。
+    // wasm には zoneinfo が無く TZ 未設定だと absl/cctz が UTC に落ち、「いま」「きょう」の
+    // 日時候補が 9 時間ずれる (JST)。POSIX 形式 (JST-9 等) は zoneinfo 不在では解決できないが、
+    // この特殊名は cctz が合成する (time_zone_fixed.cc FixedOffsetFromName)。DST は起動時
+    // オフセット固定 (日本は DST なし。セッション跨ぎの DST 切替だけ追従しない — 許容)。
+    const offMin = -new Date().getTimezoneOffset();   // 東側が正 (JST = +540)
+    const tzSign = offMin >= 0 ? '+' : '-';
+    const tzAbs = Math.abs(offMin);
+    const tzName = `Fixed/UTC${tzSign}${String(Math.floor(tzAbs / 60)).padStart(2, '0')}:${String(tzAbs % 60).padStart(2, '0')}:00`;
+    const mod = {
         mainScriptUrlOrBlob: new URL('../assets/mozc_qb.js', self.location.href).href,
         locateFile: (p) => new URL('../assets/' + p, self.location.href).href,
-    });
+    };
+    mod.preRun = [() => { mod.ENV.TZ = tzName; }];   // ENV は EXPORTED_RUNTIME_METHODS で公開済み
+    M = await self.MozcQbModule(mod);
     M.FS.writeFile('/mozc.data', buf);
     const r = M.ccall('mozc_qb_init', 'number', ['string'], ['/mozc.data']);
     if (r !== 0) throw new Error('mozc_qb_init failed (r=' + r + ')');
