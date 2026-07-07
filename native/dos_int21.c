@@ -547,6 +547,33 @@ static void tty_kanji_putc(uint8_t sjis_hi, uint8_t sjis_lo) {
     }
 }
 
+/* ---------------- HLE FEP 用セル書き込み (dos_fep.c から使用) ----------------
+ * tty の現在属性 (g_tty_attr) を変えずに任意属性で書けるよう、一時差し替えで既存
+ * プリミティブへ委譲する (セル符号化・kanji-access 保証・dirty 通知を共有)。
+ * tty カーソルは動かさない — composition はアプリのカーソル位置へ「重ねる」だけで、
+ * 確定時は復元してから通常の入力注入でアプリ自身に描かせる。 */
+void qb_tty_put_ank(int row, int col, uint8_t ch, uint8_t attr) {
+    uint8_t save = g_tty_attr;
+    g_tty_attr = attr;
+    vram_put_char(row, col, ch);
+    g_tty_attr = save;
+}
+
+/* SJIS 全角 1 文字を隣接 2 セルへ。区9-11 (PC-98 半角グラフィック、1 セル幅) は
+ * composition に現れない前提 (呼び元 = ホスト変換の出力はかな/漢字/全角英数のみ)。 */
+void qb_tty_put_kanji_sjis(int row, int col, uint8_t sjis_hi, uint8_t sjis_lo, uint8_t attr) {
+    uint8_t jh, jl;
+    uint8_t save = g_tty_attr;
+    sjis_to_jis(sjis_hi, sjis_lo, &jh, &jl);
+    g_tty_attr = attr;
+    vram_put_kanji(row, col, jh, jl);
+    g_tty_attr = save;
+}
+
+int qb_tty_text_rows(void) {
+    return TEXT_ROWS;
+}
+
 /* tty に流れる生バイトを stderr へエコーするデバッグ出力。既定 OFF。
  * ブラウザでは 1 文字ごとに巨大な async スタックトレースが出てコンソールが
  * 埋まるため、必要なときだけ 1 にする (SJIS バイトも "Invalid UTF-8" 警告を量産する)。 */

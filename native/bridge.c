@@ -29,6 +29,7 @@
 #include <qb_soundmng.h>
 #include "dos_loader.h"
 #include "dos_mouse33.h"   /* INT 33h マウスドライバ HLE (並走供給 + カーソル合成) */
+#include "dos_fep.h"       /* HLE FEP (未確定文字列のインライン描画) */
 
 #ifdef __ANDROID__
 #include <android/log.h>
@@ -272,6 +273,7 @@ void np2kai_run_frame(np2kai_handle h) {
 void np2kai_reset(np2kai_handle h) {
 	if (!h) return;
 	pccore_reset();
+	qb_fep_reset();   /* FEP 表示状態を破棄 (リセット前の退避セルを書き戻さない) */
 	LOGD("np2kai_reset");
 }
 
@@ -455,6 +457,18 @@ int np2kai_inject_text(np2kai_handle h, const uint8_t *bytes, int len) {
 	if (!h || !bytes || len <= 0) return 0;
 	qb_dos_inject_input(bytes, len);
 	return len;
+}
+
+/* HLE FEP: 未確定文字列 (composition) をカーソル位置へ属性付きでインライン描画/消去。
+ * キー横取り・ローマ字→かな・変換はホスト (JS) 側、ここは描画と復元だけ (dos_fep.c)。
+ * show は len<=0 なら hide 相当。確定はこの hide → np2kai_inject_text の順で行う。 */
+int np2kai_fep_show(np2kai_handle h, const uint8_t *sjis, const uint8_t *attrs, int len) {
+	if (!h) return 0;
+	return qb_fep_show(sjis, attrs, len);
+}
+void np2kai_fep_hide(np2kai_handle h) {
+	if (!h) return;
+	qb_fep_hide();
 }
 
 void np2kai_mouse_move(np2kai_handle h, int dx, int dy) {

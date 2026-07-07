@@ -267,6 +267,8 @@ async function makeWorkerEmu() {
         keyDown(code)        { worker.postMessage({ type: 'key', down: 1, code }); },
         keyUp(code)          { worker.postMessage({ type: 'key', down: 0, code }); },
         injectText(bytes)    { worker.postMessage({ type: 'injectText', bytes }); },   // SJIS バイト列 (ホスト IME)
+        fepShow(bytes, attrs) { worker.postMessage({ type: 'fepShow', bytes, attrs }); },  // HLE FEP: 未確定文字列のインライン描画
+        fepHide()            { worker.postMessage({ type: 'fepHide' }); },
         mouseMove(dx, dy)    { worker.postMessage({ type: 'mouseMove', dx, dy }); },
         mouseButton(btn, st) { worker.postMessage({ type: 'mouseButton', btn, state: st }); },
         setPaused(p)         { worker.postMessage({ type: 'setPaused', on: p }); },
@@ -1352,6 +1354,14 @@ async function makeWorkerEmu() {
             M.ccall('np2kai_inject_text', 'number', ['number', 'number', 'number'], [handle, p, bytes.length]);
             M._free(p);
         },
+        fepShow(bytes, attrs) {                      // HLE FEP: 未確定文字列のインライン描画 (sjis + 属性)
+            if (!bytes || !bytes.length) { this.fepHide(); return; }
+            const n = bytes.length;
+            const p = M._malloc(n * 2); M.HEAPU8.set(bytes, p); M.HEAPU8.set(attrs, p + n);
+            M.ccall('np2kai_fep_show', 'number', ['number', 'number', 'number', 'number'], [handle, p, p + n, n]);
+            M._free(p);
+        },
+        fepHide() { M.ccall('np2kai_fep_hide', null, ['number'], [handle]); },
         mouseMove(dx, dy)     { mouseMove(handle, dx, dy); },
         mouseButton(btn, st)  { mouseButton(handle, btn, st); },
         setPaused(p)          { emuFrozen = p; },   // local: loop/audio が emuFrozen を読む
@@ -1514,6 +1524,7 @@ async function makeWorkerEmu() {
         // FMP .ovi / PMD .PPC 等 ADPCM 声部が追加設定なしで鳴る。qbDebug.chibioto(0) で素の 86 に戻せる。
         await emu.setChibiOto(forceChibi ? 1 : 0);
         await emu.reset();
+        if (fep) fep.reset();   // FEP の未確定バッファを破棄 (C 側表示状態は np2kai_reset が破棄済み)
         // 起動音 (ピポ) は音楽セッションのブートでだけ消す。ゲーム起動は当時どおり鳴らす
         // (beepcfg.vol は render 時参照なので reset 後でも間に合う)。
         await emu.setBeepMute(musicBoot ? 1 : 0);
@@ -2138,6 +2149,32 @@ async function makeWorkerEmu() {
         pressed.clear();
     }
 
+    // ---- HLE FEP (ホスト側日本語入力、未確定文字列をゲスト画面内へインライン表示) ----
+    // fep.js の純状態機械を emu へ配線する。キーはアプリより上流 (下の keydown) で飲み、
+    // 表示は C 側 dos_fep.c がテキスト VRAM に直接描く。確定は「復元 → SJIS 注入」の順。
+    // 属性スキームはスタイル名 → {yomi(未確定よみ), focus(注目=候補表示中)} の属性バイト。
+    // 実 FEP の表示文法 (よみ=下線系 / 注目文節=反転) の配分違いを qbDebug.fepstyle で A/B する。
+    // 値は仮置き — VZ 実画面での見比べで決める (fmgen A/B と同じ流儀)。
+    const FEP_STYLES = {
+        wx:   { yomi: 0xE9, focus: 0xE5 },   // WX 風: よみ=白下線 / 注目=白反転 (下線多用)
+        atok: { yomi: 0xE5, focus: 0xC5 },   // ATOK 風: よみ=白反転 / 注目=黄反転 (反転主体)
+    };
+    let fepStyleName = 'wx';
+    const fep = window.qbFepCreate ? window.qbFepCreate({
+        show(segments) {
+            const bytes = [], attrs = [];
+            const style = FEP_STYLES[fepStyleName] || FEP_STYLES.wx;
+            for (const seg of segments) {
+                const a = (style[seg.kind] !== undefined) ? style[seg.kind] : 0xE9;
+                for (const b of encodeSjis(seg.text)) { bytes.push(b); attrs.push(a); }
+            }
+            if (!bytes.length) { emu.fepHide(); return; }
+            emu.fepShow(Uint8Array.from(bytes), Uint8Array.from(attrs));
+        },
+        hide()       { emu.fepHide(); },
+        commit(text) { emu.fepHide(); emu.injectText(encodeSjis(text)); },
+    }) : null;
+
     const inField = (e) => e.target && (e.target.tagName === 'INPUT' ||
         e.target.tagName === 'TEXTAREA' || e.target.isContentEditable);
     // 下部 IME 入力欄 (#ime-input) が「フォーカス中・空・変換中でない」ときの透過対象キー
@@ -2155,6 +2192,15 @@ async function makeWorkerEmu() {
         if (!playerModalEl.hidden) { if (e.key === 'Escape') { e.preventDefault(); closePlayer(); } return; }
         // 設定パネルを開いている間も同様 (Esc で閉じる。ゲームは背後で続く = live 設定を聴き比べられる)
         if (!settingsModalEl.hidden) { if (e.key === 'Escape') { e.preventDefault(); settingsModalEl.hidden = true; } return; }
+        // HLE FEP: Ctrl+Space でトグル (実機の CTRL+XFER 相当。qbDebug.fep でも可)。
+        // ON 中は composition がキーを飲む (feed が true を返したキーはゲストへ送らない)。
+        if (fep && e.ctrlKey && !e.altKey && !e.metaKey && e.code === 'Space') {
+            e.preventDefault();
+            const on = fep.toggle();
+            runStatusEl.textContent = on ? 'FEP: ON — ローマ字入力 (Space=変換 / Enter=確定 / Esc=取消 / Ctrl+Space=OFF)' : 'FEP: OFF';
+            return;
+        }
+        if (fep && fep.feed(e)) { e.preventDefault(); return; }
         // Ctrl/Meta/Alt + 他キーのブラウザショートカット (Ctrl+R / Ctrl+W / Ctrl+Shift+I 等)
         // は横取りしない。ただし CTRL キー単体は PC-98 の CTRL(0x74) としてゲームに送る
         // (発射/ダッシュに CTRL を使うゲーム向け)。これを通さないと PC98_KEYMAP の
@@ -2372,6 +2418,16 @@ async function makeWorkerEmu() {
         // ?debug / window.QB_VERBOSE = true でも同じ。ローカル経路は次のログから即反映。
         verbose: (on = 1) => { window.QB_VERBOSE = !!on;
             return `診断ログ ${on ? '前面表示 (console.log)' : '既定 (console.debug = Verbose 送り・captured)'} に切替`; },
+        // HLE FEP (ホスト側日本語入力、未確定はゲスト画面内にインライン表示)。fep(1)=ON / fep(0)=OFF /
+        // fep()=トグル。Ctrl+Space と同じ。M1 はローマ字→ひらがな + Space でカナ巡回 (スタブ変換、
+        // Mozc-Wasm 差し替え予定)。Enter=確定 (SJIS 注入) / Esc=取消 / BS=編集。
+        fep: (on) => fep
+            ? `FEP ${(on === undefined ? fep.toggle() : fep.setActive(on)) ? 'ON' : 'OFF'} (Space=変換/Enter=確定/Esc=取消)`
+            : 'fep.js 未ロード',
+        // FEP 表示スタイルの A/B。wx=よみ白下線・注目白反転 (既定) / atok=よみ白反転・注目黄反転。
+        // 次の表示更新 (キー 1 打) から反映。実画面で見比べて既定を決める (値は仮置き)。
+        fepstyle: (name) => { if (name && FEP_STYLES[name]) fepStyleName = name;
+            return `fepstyle=${fepStyleName} (wx=よみ下線/atok=よみ反転) — 次の表示更新から反映`; },
         // FM 音源エンジンの A/B 切替。fmgen(1)=fmgen(既定) / fmgen(0)=opngen。
         // 次の Run (reset) から反映 → 同じ FM ゲームを再実行して聴き比べる。
         fmgen:  (on=1) => `usefmgen=${setFmgen(on ? 1 : 0)} (1=fmgen/0=opngen) — 次の Run から反映。同じゲームを再実行して聴き比べてください`,

@@ -63,4 +63,11 @@ extern int qb_lines30_enabled;
  * それ以外はオリジナル bios0x18 へパススルー。トランポリン 0xFEEC0 から biosfunc 経由で呼ばれる。 */
 int qb_dos_int18_hook(void);
 
+/* HLE FEP (dos_fep.c) 用: tty の現在属性を変えずに任意属性で 1 セル書く。
+ * セル符号化 (漢字の非対称形式)・kanji-access mode 保証・dirty 通知は tty 経路と同一。
+ * put_kanji_sjis は SJIS のまま受けて内部で JIS へ変換し、隣接 2 セルへ書く。 */
+void qb_tty_put_ank(int row, int col, uint8_t ch, uint8_t attr);
+void qb_tty_put_kanji_sjis(int row, int col, uint8_t sjis_hi, uint8_t sjis_lo, uint8_t attr);
+int  qb_tty_text_rows(void);   /* 現在のテキスト行数 (25 or 30) */
+
 #endif /* QB_DOS_INT21_H */

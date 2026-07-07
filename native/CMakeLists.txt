@@ -164,6 +164,7 @@ set(QB_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dos_int21.c
     ${CMAKE_CURRENT_SOURCE_DIR}/dos_xms.c
     ${CMAKE_CURRENT_SOURCE_DIR}/dos_mouse33.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/dos_fep.c
 )
 
 # Exported bridge functions (prefixed with _ for Emscripten)
@@ -181,6 +182,8 @@ set(EXPORTED_FUNCTIONS
     _np2kai_key_down
     _np2kai_key_up
     _np2kai_inject_text
+    _np2kai_fep_show
+    _np2kai_fep_hide
     _np2kai_mouse_move
     _np2kai_mouse_button
     _np2kai_mouse33_ctl

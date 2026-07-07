@@ -1,5 +1,57 @@
 # CHANGELOG
 
+## [HLE FEP M1 — 未確定文字列のゲスト画面内インライン表示 (VZ 実地検証込み)] — 2026-07-07
+
+日本語入力の第 2 経路として HLE FEP を新設 (M1)。実 PC-98 の FEP (ATOK/VJE/WX...) と同じ
+役割分担 — キーをアプリより上流で飲み、変換中のよみをテキスト VRAM に自前描画し、確定
+SJIS を入力ストリームへ流す — を、キー横取り・ローマ字→かな変換はホスト (JS)、画面描画・
+復元はブリッジ (C) という分担で再現する。既存のホスト IME 経路 (下部入力欄) は不変・併存。
+
+### 実装
+
+- **native/dos_fep.c/h (新規)**: `np2kai_fep_show(sjis, attrs, len)` / `np2kai_fep_hide()`。
+  カーソル位置は GDC HW カーソル (master CSRW、EAD=row*80+col) を正とする (VZ 等のフル
+  スクリーンアプリは DOS CON を通らないため。画面外 EAD は 0:0710h/071Ch フォールバック)。
+  描画規律 = 毎回 restore-all → save → redraw。**復元はセル単位の所有権検証つき** —
+  「今の VRAM がまだ自分の描いたままか」を照合し、アプリが上書きしたセルには触らない
+  (確定注入→アプリのエコー直後に次の composition が始まる高速タイプで、無条件復元が
+  エコー済み文字を古い退避内容で潰す取り合いをセル粒度で根治)。リセット時は qb_fep_reset
+  で状態破棄 (復元しない — 退避内容の書き戻しは初期画面にゴミを出す)。
+- **dos_int21.c**: FEP 用に属性明示版セル書き込み `qb_tty_put_ank` / `qb_tty_put_kanji_sjis`
+  (一時差し替えで既存プリミティブへ委譲 = セル符号化・kanji-access 保証・dirty 通知を共有) と
+  `qb_tty_text_rows` を追加。
+- **web/player/fep.js (新規)**: 純状態機械 (DOM/emu 非依存・依存注入)。ローマ字→ひらがな
+  標準テーブル ("nn"+母音/y → ん+n○ の実 IME 挙動込み)、Space=変換 (M1 スタブ = ひらがな/
+  カタカナ巡回)・Enter=確定・Esc=取消・BS=編集。変換エンジンは convert() 1 点差し替え
+  (Mozc-Wasm が将来ここに入る)。配列エンジン (keymap-format) も前段置換で入る設計。
+- **bridge.js**: Ctrl+Space トグル (実機の CTRL+XFER 相当) + keydown 横取り + 属性スタイル
+  テーブル (`qbDebug.fepstyle('wx'|'atok')`: wx=よみ白下線/注目白反転・atok=よみ白反転/
+  注目黄反転、値は仮置きで実画面 A/B 待ち) + `qbDebug.fep(0|1)`。確定 = 復元 → SJIS 注入の順。
+  worker/local 両モード配線 (emu-worker.js に fepShow/fepHide メッセージ)。
+
+### 検証 — tools/fep_test.js (新設、VZ 1.60 実物の編集画面上で)
+
+- VZ.COM (BSD-3、testdata) + VZ_98.XDF から抽出した VZ.DEF 群を /run に置き編集モードまで
+  headless 起動 (XDF 不在環境は DEF プロンプト画面上で縮退実行)。
+- 16 チェック全 PASS: セル符号化+属性 / 表示更新で古い表示が残らない / hide で 1 バイトも
+  違わない完全復元 / アプリ上書きセルは復元しない (所有権) / 確定注入が VZ 本文にエコー
+  (VZ 直書き形式 左=ku・右=ku|0x80 で照合) / **確定→即次 composition の取り合いでもエコー
+  本文が壊れず overlay の痕跡ゼロ**。
+- 既存回帰 全 60+ テストスイート green (vz_test / ime_inject / conwork / gdc_cursor 等)。
+
+### 経緯・設計判断
+
+- 発端はユーザー提案「INT 2Fh で FEP を偽装し Mozc-Wasm で変換」。調査の結果 PC-98 の FEP は
+  「アプリから呼ばれる側」ではなく「キーを乗っ取り画面に描き確定を流し込む側」で、アプリ側
+  API (MS-KANJI API / 各社独自) は存在検出と ON/OFF 制御が主 — よって主役はホスト側変換
+  ループ + ゲスト画面内描画、INT 2Fh 応答は脇役として後続 (存在を名乗るのは制御 API を本当に
+  効かせられるようになってから — 嘘の成功より正直な失敗)。
+- M1 ゴールは「VZ Editor で不具合が生じない」(ユーザー指定)。表示位置はインライン
+  (composing 中はアプリが静止しているので取り合いが最小、VZ の時計は最下行で被らない)。
+- 後続: Mozc-Wasm ビルド spike (BSD-3 = 配布方針に整合、SoundFont 同様の遅延フェッチ想定) /
+  keymap-format ランタイム (新配列、ホスト側一択 — 同時打鍵の時間窓はゲスト TSR では無理筋) /
+  候補一覧窓 / FEP 流派 API の需要実測 (probe カウンタ)。
+
 ## [DOS 内割り込み窓を再現 — sol110 ソリティアのフリーズ根治 (SimK 氏報告)] — 2026-07-06
 
 SimK 氏報告: sol110.lzh (DOS 版ソリティア, J.Oketani 氏, 1994) が「一見動くが、カードを

@@ -87,6 +87,15 @@ void np2kai_key_up(np2kai_handle h, uint8_t pc98_keycode);
 __attribute__((visibility("default")))
 int np2kai_inject_text(np2kai_handle h, const uint8_t *bytes, int len);
 
+/* HLE FEP: 未確定文字列 (composition) をカーソル位置へインライン描画/消去 (dos_fep.c)。
+ * sjis = SJIS バイト列、attrs = バイト対応の PC-98 属性 (NULL なら白下線)。
+ * show は「復元→退避→描画」を毎回行う。戻り値 = 描画セル数。確定は hide → inject_text。 */
+__attribute__((visibility("default")))
+int np2kai_fep_show(np2kai_handle h, const uint8_t *sjis, const uint8_t *attrs, int len);
+
+__attribute__((visibility("default")))
+void np2kai_fep_hide(np2kai_handle h);
+
 /* Mouse: 相対移動量を累積。PC-98 のマウス I/F は周期的に取り出して
  * カウンタをクリアする。Pointer Lock の movementX/Y をそのまま渡す想定。 */
 __attribute__((visibility("default")))

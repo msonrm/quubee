@@ -250,6 +250,8 @@ async function init(msg) {
     c.keyDown    = M.cwrap('np2kai_key_down', null, ['number', 'number']);
     c.keyUp      = M.cwrap('np2kai_key_up',   null, ['number', 'number']);
     c.injectText = M.cwrap('np2kai_inject_text', 'number', ['number', 'number', 'number']);
+    c.fepShow    = M.cwrap('np2kai_fep_show', 'number', ['number', 'number', 'number', 'number']);
+    c.fepHide    = M.cwrap('np2kai_fep_hide', null, ['number']);
     c.mouseMove  = M.cwrap('np2kai_mouse_move',   null, ['number', 'number', 'number']);
     c.mouseButton= M.cwrap('np2kai_mouse_button', null, ['number', 'number', 'number']);
     c.insertFdd  = M.cwrap('np2kai_insert_fdd', 'number', ['number', 'string', 'number', 'number']);
@@ -311,6 +313,18 @@ onmessage = (ev) => {
         // 入力 (handle はここで前置)
         case 'key':   (m.down ? c.keyDown : c.keyUp)(handle, m.code); break;
         case 'injectText': withHeapBytes(m.bytes, (p, n) => c.injectText(handle, p, n)); break;   // ホスト IME → SJIS 注入
+        // HLE FEP: 未確定文字列のインライン描画 (sjis バイト列 + バイト対応属性を連結して 1 回で渡す)
+        case 'fepShow': {
+            if (!m.bytes || !m.bytes.length) { c.fepHide(handle); break; }
+            const n = m.bytes.length;
+            const p = M._malloc(n * 2);
+            M.HEAPU8.set(m.bytes, p);
+            M.HEAPU8.set(m.attrs, p + n);
+            c.fepShow(handle, p, p + n, n);
+            M._free(p);
+            break;
+        }
+        case 'fepHide': c.fepHide(handle); break;
         case 'mouseMove':   c.mouseMove(handle, m.dx, m.dy); break;
         case 'mouseButton': c.mouseButton(handle, m.btn, m.state); break;
 
