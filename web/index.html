@@ -56,12 +56,25 @@ body {
     flex: 0 0 auto; display: flex; gap: 6px; align-items: center;
     padding: 5px 8px; background: var(--inputbar-bg); border-top: 1px solid var(--inputbar-border);
 }
-#ime-toggle {
+#ime-toggle, #fep-toggle {
     flex: 0 0 auto; width: 34px; height: 30px; cursor: pointer; line-height: 1;
     background: var(--iconbtn-bg); color: var(--iconbtn-fg); border: 1px solid var(--iconbtn-border); border-radius: 5px; font-size: 17px;
 }
-#ime-toggle:hover { background: var(--iconbtn-bg-hover); }
-#ime-toggle.on { background: #1d5e1d; border-color: #2f7d2f; color: #fff; }
+#ime-toggle:hover, #fep-toggle:hover { background: var(--iconbtn-bg-hover); }
+#ime-toggle.on, #fep-toggle.on { background: #1d5e1d; border-color: #2f7d2f; color: #fff; }
+#fep-toggle { font-size: 15px; }
+
+/* 大物アセット取得の進捗トースト (FEP 辞書 ~19MB / MIDI soundfont ~32MB)。run-status の
+ * 小さい文字だと見落とすので、ゲーム画面の上に重ねて大きめに出す (取得中のみ)。 */
+#progress-toast {
+    position: absolute; left: 50%; bottom: 14%; transform: translateX(-50%);
+    min-width: 300px; max-width: 82%; padding: 10px 16px; z-index: 30;
+    background: rgba(24, 21, 16, .9); color: #f0ead8;
+    border: 1px solid rgba(240, 234, 216, .28); border-radius: 8px;
+    font-size: 14px; text-align: center;
+}
+#pt-track { margin-top: 8px; height: 6px; background: rgba(240, 234, 216, .18); border-radius: 3px; overflow: hidden; }
+#pt-fill  { height: 100%; width: 0; background: #b5d67e; border-radius: 3px; transition: width .15s linear; }
 #ime-input {
     flex: 1 1 auto; min-width: 0; height: 30px; display: none; box-sizing: border-box;
     background: #000; color: #3f3; border: 1px solid #333; border-radius: 4px;
@@ -353,11 +366,16 @@ body.panel-hidden #stage-max::before { content: "◂"; }  /* パネルが左へ�
 }
 #settings-modal[hidden] { display: none; }
 #settings-box {
-    position: relative; width: min(540px, 94vw); max-height: 88dvh; overflow: auto;
+    position: relative; width: min(540px, 94vw); max-height: 88dvh;
+    display: flex; flex-direction: column;   /* ヘッダ/フッタ固定、本文 (#settings-body) だけスクロール */
     background: #fffdf6; color: #33302a; border: 1px solid #c8c0ae;
     border-radius: 8px; box-shadow: 0 16px 56px rgba(0,0,0,.55);
     padding: 18px 22px 16px;
     font-family: "Noto Sans CJK JP", "Migu 1M", system-ui, sans-serif;
+}
+#settings-body {
+    flex: 1 1 auto; min-height: 0; overflow-y: auto;
+    margin-right: -16px; padding-right: 16px;   /* スクロールバーを箱の縁近くへ */
 }
 #settings-close {
     position: absolute; top: 8px; right: 10px; background: transparent; color: #8a8377;
@@ -393,7 +411,10 @@ body.panel-hidden #stage-max::before { content: "◂"; }  /* パネルが左へ�
 .set-ctl .val { font-size: 12px; color: #6b6354; font-variant-numeric: tabular-nums; min-width: 40px; text-align: right; white-space: nowrap; }
 .vol-grid { display: grid; grid-template-columns: auto 1fr auto; gap: 3px 8px; align-items: center; }
 .vol-grid label { font-size: 11px; color: #9a948a; }
-.set-foot { display: flex; justify-content: space-between; margin-top: 18px; gap: 10px; }
+.set-foot {
+    display: flex; justify-content: space-between; gap: 10px;
+    flex: 0 0 auto; margin-top: 10px; padding-top: 10px; border-top: 1px solid #efe9da;
+}
 .set-foot button {
     font: inherit; font-size: 13px; padding: 5px 14px; border-radius: 5px;
     border: 1px solid #c8c0ae; background: #fbf9f3; color: #5a5344; cursor: pointer;
@@ -429,8 +450,13 @@ try { var s = JSON.parse(localStorage.getItem('quubee_settings_v1')); if (s && s
     <div id="stage">
         <div id="canvas-wrap">
             <canvas id="screen" width="640" height="400"></canvas>
+            <div id="progress-toast" hidden>
+                <div id="pt-label"></div>
+                <div id="pt-track"><div id="pt-fill"></div></div>
+            </div>
         </div>
         <div id="input-bar">
+            <button id="fep-toggle" title="FEP 日本語入力 (ゲスト画面内で変換) ON/OFF — Ctrl+Space または Ctrl+J">あ</button>
             <button id="ime-toggle" title="テキスト入力 (IME 可) を表示/非表示">&#x270E;</button>
             <input id="ime-input" type="text" placeholder="Type, Enter to send (empty Enter = newline)" autocomplete="off" autocapitalize="off" spellcheck="false">
             <button id="settings-toggle" title="設定 / Settings">&#x2699;</button>
@@ -614,6 +640,7 @@ https://github.com/msonrm/quubee</pre>
         <button id="settings-close" title="閉じる / Close (Esc)">×</button>
         <div id="settings-title">Settings<span class="ja">設定</span></div>
 
+        <div id="settings-body">
         <div class="settings-group">
             <h3>Sound<span class="ja">音</span></h3>
             <div class="set-row">
@@ -685,6 +712,13 @@ https://github.com/msonrm/quubee</pre>
                 </div>
                 <div class="set-ctl"><input id="set-itfpost" type="checkbox"></div>
             </div>
+            <div class="set-row">
+                <div class="set-main">
+                    <div class="set-label">FEP Style<span class="ja">FEP 表示</span></div>
+                    <div class="set-desc">日本語入力の未確定表示。WX 風=下線 / ATOK 風=反転<span class="en"> / Composition look: WX = underline, ATOK = reverse</span></div>
+                </div>
+                <div class="set-ctl"><select id="set-fepstyle"><option value="wx">WX</option><option value="atok">ATOK</option></select></div>
+            </div>
         </div>
 
         <div class="settings-group">
@@ -736,6 +770,7 @@ https://github.com/msonrm/quubee</pre>
             <div id="pad-rows"></div>
             <div class="pad-foot"><button id="pad-reset">パッド割当を既定に戻す / Reset gamepad</button></div>
         </div>
+        </div><!-- /settings-body -->
 
         <div class="set-foot">
             <button id="settings-reset">Reset defaults<span class="ja">既定に戻す</span></button>

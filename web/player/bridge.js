@@ -1423,10 +1423,14 @@ async function makeWorkerEmu() {
         if (midiLoadState === 'failed') return false;   // 同セッション内の再試行はしない
         try {
             runStatusEl.textContent = 'MIDI: fetching instrument data (~32 MB, first time only)…';
+            showProgress('MIDI: downloading soundfont (~32 MB, first time only)…', 0);
             // SF2 の取得。fetch は 404 等で reject しないので res.ok を検査する (未配備時に HTML を SF2 として
             // 書き込んでしまわないように)。ローカルは単一 soundfont.sf2、本番 (Cloudflare Pages は 1 ファイル
             // 25MiB 上限) は deploy.sh が soundfont.sf2.00/.01… に分割するので、単一が無ければ連番パートを連結する。
-            const showMB = (b) => runStatusEl.textContent = `MIDI: downloading soundfont… ${(b / 1048576).toFixed(1)} MB`;
+            const showMB = (b) => {
+                runStatusEl.textContent = `MIDI: downloading soundfont… ${(b / 1048576).toFixed(1)} MB`;
+                showProgress('MIDI: downloading soundfont…', null, b);
+            };
             const readStream = async (res) => {            // 単一ファイルをストリーミングで読み進捗表示
                 const total = Number(res.headers.get('content-length')) || 0;
                 if (!(res.body && res.body.getReader)) return new Uint8Array(await res.arrayBuffer());
@@ -1439,6 +1443,7 @@ async function makeWorkerEmu() {
                     runStatusEl.textContent = total
                         ? `MIDI: downloading soundfont… ${Math.round(n / total * 100)}% (${(n / 1048576).toFixed(1)} MB)`
                         : `MIDI: downloading soundfont… ${(n / 1048576).toFixed(1)} MB`;
+                    showProgress('MIDI: downloading soundfont…', total ? n / total : null, n);
                 }
                 const u = new Uint8Array(n); let o = 0;
                 for (const p of parts) { u.set(p, o); o += p.length; }
@@ -1478,6 +1483,7 @@ async function makeWorkerEmu() {
                 }
             }
             if (!looksLikeSf2(buf)) throw new Error('soundfont 取得失敗 (単一/manifest とも不在 or RIFF 不正)');
+            hideProgress();
             runStatusEl.textContent = `MIDI: soundfont ready (${(buf.length / 1048576).toFixed(1)} MB) — preparing…`;
             // CWD (= data dir /tmp) 直下に soundfont.sf2 を置く。C 側 midimod_create (qb_tsf.c) が
             // tsf_load_filename("soundfont.sf2") で読む。
@@ -1488,6 +1494,7 @@ async function makeWorkerEmu() {
             return !!ok;
         } catch (e) {
             midiLoadState = 'failed';
+            hideProgress();
             console.warn('[midi] soundfont 取得失敗 (production は未配備の可能性):', e);
             return false;
         }
@@ -2149,15 +2156,109 @@ async function makeWorkerEmu() {
         pressed.clear();
     }
 
+    // ---- 進捗トースト (大物アセット取得の可視化) ----
+    // FEP 辞書 (~19MB) / MIDI soundfont (~32MB) の初回フェッチをゲーム画面上のオーバーレイで
+    // 表示する。run-status の 12px 文字では見落とすという実機フィードバック (2026-07-08) 起点。
+    const progressToastEl = document.getElementById('progress-toast');
+    const ptLabelEl = document.getElementById('pt-label');
+    const ptFillEl  = document.getElementById('pt-fill');
+    function showProgress(label, frac, loadedBytes) {
+        progressToastEl.hidden = false;
+        let suffix = '';
+        if (frac != null) suffix = ` ${Math.round(frac * 100)}%`;
+        else if (loadedBytes) suffix = ` ${(loadedBytes / 1048576).toFixed(1)} MB`;
+        ptLabelEl.textContent = label + suffix;
+        ptFillEl.style.width = (frac != null) ? `${Math.round(frac * 100)}%` : '100%';
+    }
+    function hideProgress() { progressToastEl.hidden = true; }
+
+    // ---- Mozc-Wasm (かな漢字変換エンジン) 遅延ロード ----
+    // FEP を初めて ON にした時だけ mozc-worker.js を起こし、辞書 mozc.data (~19MB) を
+    // フェッチする (使わないユーザーは一切ダウンロードしない = soundfont と同じ方針)。
+    // ロード完了までの変換はフォールバック (カナ巡回) で動き、完了後は自動で Mozc に切替わる。
+    // Worker は自己回復式: 変換が MOZC_CONVERT_TIMEOUT_MS 返らない (最有力: Emscripten pthread
+    // プール枯渇デッドロック — mozc が変換裏で使う短命スレッドの生成を、プールが空の瞬間に
+    // 同期待ちすると Worker がイベントループへ戻れず永久に固まる) か worker error が出たら、
+    // terminate → 再スポーンして復旧する。保留中の変換はフォールバック (カナ巡回) に逃がすので
+    // 入力は失われない。辞書はブラウザ HTTP キャッシュから即再ロードされる。
+    // 「変換が突然効かなくなり FEP OFF/ON でも直らない」実機報告 (2026-07-08) の根治。
+    const MOZC_CONVERT_TIMEOUT_MS = 4000;
+    let mozcState = 'none';   // 'none' | 'loading' | 'ready' | 'failed'
+    let mozcWorker = null;
+    let mozcSeq = 0;
+    let mozcRestarts = 0;
+    const mozcPending = new Map();   // id -> resolve (watchdog が clearTimeout も担う)
+    function ensureMozcLoaded() {
+        if (mozcState !== 'none') return;
+        mozcState = 'loading';
+        showProgress('FEP: downloading Mozc dictionary (~19 MB, first time only)…', 0);
+        mozcWorker = new Worker('player/mozc-worker.js');
+        mozcWorker.onmessage = (ev) => {
+            const m = ev.data;
+            if (m.type === 'progress') {
+                showProgress('FEP: downloading Mozc dictionary…',
+                    m.total ? m.loaded / m.total : null, m.loaded);
+            } else if (m.type === 'ready') {
+                mozcState = 'ready';
+                hideProgress();
+                runStatusEl.textContent = 'FEP: Mozc ready (かな漢字変換が有効)';
+            } else if (m.type === 'error') {
+                mozcState = 'failed';
+                hideProgress();
+                runStatusEl.textContent = 'FEP: Mozc unavailable — カナ変換のみで動作';
+                console.warn('[fep] mozc load failed:', m.message);
+            } else if (m.type === 'result') {
+                const resolve = mozcPending.get(m.id);
+                if (resolve) { mozcPending.delete(m.id); resolve(m.segments); }
+            }
+        };
+        mozcWorker.onerror = (e) => {
+            console.warn('[fep] mozc worker error:', e.message || e);
+            if (mozcState === 'loading') {
+                mozcState = 'failed';
+                hideProgress();
+                runStatusEl.textContent = 'FEP: Mozc unavailable — カナ変換のみで動作';
+            } else if (mozcState === 'ready') {
+                restartMozcWorker('worker error: ' + (e.message || e));
+            }
+        };
+        mozcWorker.postMessage({ type: 'init' });
+    }
+    function restartMozcWorker(reason) {
+        mozcRestarts++;
+        console.warn(`[fep] mozc worker restart #${mozcRestarts}:`, reason);
+        runStatusEl.textContent = 'FEP: Mozc restarting…';
+        try { if (mozcWorker) mozcWorker.terminate(); } catch (_) {}
+        mozcWorker = null;
+        for (const resolve of mozcPending.values()) resolve(null);   // 保留分はフォールバックへ
+        mozcPending.clear();
+        mozcState = 'none';
+        ensureMozcLoaded();   // 再スポーン (辞書は HTTP キャッシュから)
+    }
+    function mozcConvert(kana, maxCands) {
+        return new Promise((resolve) => {
+            if (mozcState !== 'ready') { resolve(null); return; }   // fep.js がフォールバック
+            const id = ++mozcSeq;
+            const timer = setTimeout(() => {
+                if (mozcPending.delete(id)) {
+                    resolve(null);
+                    restartMozcWorker(`convert timeout (${MOZC_CONVERT_TIMEOUT_MS}ms)`);
+                }
+            }, MOZC_CONVERT_TIMEOUT_MS);
+            mozcPending.set(id, (segments) => { clearTimeout(timer); resolve(segments); });
+            mozcWorker.postMessage({ type: 'convert', id, kana, maxCands });
+        });
+    }
+
     // ---- HLE FEP (ホスト側日本語入力、未確定文字列をゲスト画面内へインライン表示) ----
     // fep.js の純状態機械を emu へ配線する。キーはアプリより上流 (下の keydown) で飲み、
     // 表示は C 側 dos_fep.c がテキスト VRAM に直接描く。確定は「復元 → SJIS 注入」の順。
-    // 属性スキームはスタイル名 → {yomi(未確定よみ), focus(注目=候補表示中)} の属性バイト。
+    // 属性スキームはスタイル名 → {yomi(未確定よみ), focus(注目文節), other(非注目文節)}。
     // 実 FEP の表示文法 (よみ=下線系 / 注目文節=反転) の配分違いを qbDebug.fepstyle で A/B する。
     // 値は仮置き — VZ 実画面での見比べで決める (fmgen A/B と同じ流儀)。
     const FEP_STYLES = {
-        wx:   { yomi: 0xE9, focus: 0xE5 },   // WX 風: よみ=白下線 / 注目=白反転 (下線多用)
-        atok: { yomi: 0xE5, focus: 0xC5 },   // ATOK 風: よみ=白反転 / 注目=黄反転 (反転主体)
+        wx:   { yomi: 0xE9, focus: 0xE5, other: 0xE9 },   // WX 風: 下線多用、注目=白反転
+        atok: { yomi: 0xE5, focus: 0xC5, other: 0xE1 },   // ATOK 風: 反転主体、非注目=素
     };
     let fepStyleName = 'wx';
     const fep = window.qbFepCreate ? window.qbFepCreate({
@@ -2173,7 +2274,23 @@ async function makeWorkerEmu() {
         },
         hide()       { emu.fepHide(); },
         commit(text) { emu.fepHide(); emu.injectText(encodeSjis(text)); },
+        convert(yomi) { return mozcConvert(yomi, 9); },   // Mozc 未ロード時は null → カナ巡回
     }) : null;
+
+    // FEP の ON/OFF を一元化: ボタン / Ctrl+Space / Ctrl+J / qbDebug.fep が全部ここを通る。
+    // 初回 ON で Mozc の遅延ロードを起動する (完了までの変換はフォールバックで動く)。
+    const fepToggleEl = document.getElementById('fep-toggle');
+    function setFepActive(on) {
+        if (!fep) return false;
+        const now = fep.setActive(on);
+        fepToggleEl.classList.toggle('on', now);
+        runStatusEl.textContent = now
+            ? 'FEP: ON — ローマ字入力 (Space=変換 / ←→=文節 / Enter=確定 / Esc=取消)'
+            : 'FEP: OFF';
+        if (now) ensureMozcLoaded();
+        return now;
+    }
+    fepToggleEl.addEventListener('click', () => { setFepActive(!fep.active); });
 
     const inField = (e) => e.target && (e.target.tagName === 'INPUT' ||
         e.target.tagName === 'TEXTAREA' || e.target.isContentEditable);
@@ -2192,12 +2309,14 @@ async function makeWorkerEmu() {
         if (!playerModalEl.hidden) { if (e.key === 'Escape') { e.preventDefault(); closePlayer(); } return; }
         // 設定パネルを開いている間も同様 (Esc で閉じる。ゲームは背後で続く = live 設定を聴き比べられる)
         if (!settingsModalEl.hidden) { if (e.key === 'Escape') { e.preventDefault(); settingsModalEl.hidden = true; } return; }
-        // HLE FEP: Ctrl+Space でトグル (実機の CTRL+XFER 相当。qbDebug.fep でも可)。
-        // ON 中は composition がキーを飲む (feed が true を返したキーはゲストへ送らない)。
-        if (fep && e.ctrlKey && !e.altKey && !e.metaKey && e.code === 'Space') {
+        // HLE FEP: Ctrl+Space または Ctrl+J でトグル (実機の CTRL+XFER 相当)。Ctrl+Space は
+        // ChromeOS が入力メソッド切替として OS レベルで食いページに届かないため、Ctrl+J を
+        // 併設 (ブラウザのダウンロード表示ショートカットだがページで横取り可能)。画面の
+        // 「あ」ボタンと qbDebug.fep も同じ setFepActive を通る。
+        if (fep && e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey &&
+            (e.code === 'Space' || e.code === 'KeyJ')) {
             e.preventDefault();
-            const on = fep.toggle();
-            runStatusEl.textContent = on ? 'FEP: ON — ローマ字入力 (Space=変換 / Enter=確定 / Esc=取消 / Ctrl+Space=OFF)' : 'FEP: OFF';
+            setFepActive(!fep.active);
             return;
         }
         if (fep && fep.feed(e)) { e.preventDefault(); return; }
@@ -2419,15 +2538,19 @@ async function makeWorkerEmu() {
         verbose: (on = 1) => { window.QB_VERBOSE = !!on;
             return `診断ログ ${on ? '前面表示 (console.log)' : '既定 (console.debug = Verbose 送り・captured)'} に切替`; },
         // HLE FEP (ホスト側日本語入力、未確定はゲスト画面内にインライン表示)。fep(1)=ON / fep(0)=OFF /
-        // fep()=トグル。Ctrl+Space と同じ。M1 はローマ字→ひらがな + Space でカナ巡回 (スタブ変換、
-        // Mozc-Wasm 差し替え予定)。Enter=確定 (SJIS 注入) / Esc=取消 / BS=編集。
+        // fep()=トグル。画面の「あ」ボタン・Ctrl+Space・Ctrl+J と同じ。変換は Mozc-Wasm (初回 ON で
+        // 辞書 ~19MB を遅延フェッチ、完了までカナ巡回フォールバック)。Space=変換・←→=文節移動・
+        // ↑↓/Space=候補・Enter=確定 (SJIS 注入)・Esc=取消・BS=編集。
         fep: (on) => fep
-            ? `FEP ${(on === undefined ? fep.toggle() : fep.setActive(on)) ? 'ON' : 'OFF'} (Space=変換/Enter=確定/Esc=取消)`
+            ? `FEP ${setFepActive(on === undefined ? !fep.active : on) ? 'ON' : 'OFF'} (Space=変換/←→=文節/Enter=確定/Esc=取消)`
             : 'fep.js 未ロード',
-        // FEP 表示スタイルの A/B。wx=よみ白下線・注目白反転 (既定) / atok=よみ白反転・注目黄反転。
-        // 次の表示更新 (キー 1 打) から反映。実画面で見比べて既定を決める (値は仮置き)。
+        // FEP 表示スタイルの A/B。wx=よみ下線・注目反転・非注目下線 (既定) / atok=よみ反転・注目黄反転・
+        // 非注目素。次の表示更新 (キー 1 打) から反映。実画面で見比べて既定を決める (値は仮置き)。
         fepstyle: (name) => { if (name && FEP_STYLES[name]) fepStyleName = name;
-            return `fepstyle=${fepStyleName} (wx=よみ下線/atok=よみ反転) — 次の表示更新から反映`; },
+            return `fepstyle=${fepStyleName} (wx=下線系/atok=反転系) — 次の表示更新から反映`; },
+        // Mozc worker の健全性診断。restarts が増えていたら watchdog がデッドロックを回収した証拠
+        // (変換が 4 秒無応答 → worker 再起動。体感は「一拍おいてカナ候補 → 次からまた漢字」)。
+        mozc: () => ({ state: mozcState, restarts: mozcRestarts, pending: mozcPending.size }),
         // FM 音源エンジンの A/B 切替。fmgen(1)=fmgen(既定) / fmgen(0)=opngen。
         // 次の Run (reset) から反映 → 同じ FM ゲームを再実行して聴き比べる。
         fmgen:  (on=1) => `usefmgen=${setFmgen(on ? 1 : 0)} (1=fmgen/0=opngen) — 次の Run から反映。同じゲームを再実行して聴き比べてください`,
@@ -2850,7 +2973,8 @@ async function makeWorkerEmu() {
 
         // 表示用の既定値 (getter の無い設定の初期表示に使う。native の実既定と一致させること)。
         const DEFAULTS = { fmgen: 1, beepgain: 3.83, chibioto: 1, midifx: 1, multiple: 20,
-                           lines30: 0, itfpost: 0, y2k: 1, mouse33: 'ms', verbose: 0, theme: 'dark' };
+                           lines30: 0, itfpost: 0, y2k: 1, mouse33: 'ms', verbose: 0, theme: 'dark',
+                           fepstyle: 'wx' };
         const get = (k) => (k in settings ? settings[k] : DEFAULTS[k]);
 
         const applyTheme = (t) => { document.documentElement.dataset.theme = (t === 'light') ? 'light' : ''; };
@@ -2876,6 +3000,7 @@ async function makeWorkerEmu() {
             verbose:  (v) => qd.verbose(v ? 1 : 0),
             theme:    (v) => applyTheme(v),
             pad:      (v) => applyPad(v),
+            fepstyle: (v) => qd.fepstyle(v),
         };
         const applyOne = (k, v) => { const f = APPLY[k]; return f ? Promise.resolve().then(() => f(v)).catch(() => {}) : Promise.resolve(); };
 
@@ -2907,6 +3032,7 @@ async function makeWorkerEmu() {
             el('set-mouse33').value = get('mouse33');
             el('set-verbose').checked = !!get('verbose');
             el('set-theme').checked = (get('theme') === 'light');
+            el('set-fepstyle').value = get('fepstyle');
             syncPadUI();
         }
 
@@ -2922,6 +3048,7 @@ async function makeWorkerEmu() {
         el('set-mouse33').addEventListener('change', (e) => change('mouse33', e.target.value));
         el('set-verbose').addEventListener('change', (e) => change('verbose', e.target.checked ? 1 : 0));
         el('set-theme').addEventListener('change', (e) => change('theme', e.target.checked ? 'light' : 'dark'));
+        el('set-fepstyle').addEventListener('change', (e) => change('fepstyle', e.target.value));
 
         // ---- Gamepad グループ (方向モード切替 + ボタン→キー割当 + 押下 live 表示) ----
         const rowsEl = el('pad-rows');

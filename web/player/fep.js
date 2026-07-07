@@ -63,7 +63,13 @@
         la:'ぁ', li:'ぃ', lu:'ぅ', le:'ぇ', lo:'ぉ',
         xya:'ゃ', xyu:'ゅ', xyo:'ょ', lya:'ゃ', lyu:'ゅ', lyo:'ょ',
         xtu:'っ', xtsu:'っ', ltu:'っ', ltsu:'っ', xwa:'ゎ', lwa:'ゎ',
-        '-':'ー', ',':'、', '.':'。', '[':'「', ']':'」',
+        '-':'ー', ',':'、', '.':'。', '[':'「', ']':'」', '?':'？', '!':'！', '/':'・',
+    };
+    // バッファが空のときに押された句読点・記号の即確定表 (実 IME の「句読点は即確定」)。
+    // 文中 (composing) は ROMAJI 経由で同じ全角になる。数字・その他記号は従来どおり
+    // ゲストへ透過 (VZ のコマンド操作等を邪魔しない)。
+    const DIRECT_COMMIT = {
+        '.':'。', ',':'、', '?':'？', '!':'！', '[':'「', ']':'」', '-':'ー', '/':'・',
     };
     // 「待ち」判定用: 全キーの真の接頭辞集合 + "nn" (n の特別待ち)
     const PREFIXES = new Set(['nn']);
@@ -108,33 +114,64 @@
         return out;
     }
 
-    // M1 スタブ変換: よみ → 候補列。カタカナを先頭に置く (初回変換で見た目が
-    // 変わり、属性遷移 yomi→focus と合わせて動作確認しやすい)。Mozc-Wasm は
-    // ここを差し替える (候補列を返す同発想の API になる予定)。
-    function convert(yomi) {
+    // フォールバック変換 (Mozc 未ロード/失敗時): よみ全体を 1 文節、候補 = カタカナ/ひらがな。
+    function fallbackConvert(yomi) {
         const kata = toKatakana(yomi);
-        return (kata !== yomi) ? [kata, yomi] : [yomi];
+        return [{ key: yomi, candidates: (kata !== yomi) ? [kata, yomi] : [yomi] }];
     }
 
     function createFep(cb) {
-        let active = false;   // FEP モード (トグルキー/qbDebug.fep)
+        // cb.convert(yomi) → Promise<[{key, candidates:[...]}] | null> (省略/null = フォールバック)。
+        // Mozc-Wasm (bridge.js の mozc-worker RPC) がここに注入される。
+        let active = false;   // FEP モード (トグルキー/ボタン/qbDebug.fep)
         let kana = '';        // 解決済みかな
         let pend = '';        // 未解決ローマ字
-        let cands = null;     // 候補列 (null = よみ入力中)
-        let candIdx = 0;
+        let segs = null;      // 変換中: [{key, candidates, idx}] (null = よみ入力中)
+        let focus = 0;        // 注目文節 index
+        let genId = 0;        // 変換の世代。編集/確定/取消で ++ → in-flight な結果を無効化
 
         const composing = () => (kana + pend).length > 0;
-        const clear = () => { kana = ''; pend = ''; cands = null; candIdx = 0; };
+        const clear = () => { kana = ''; pend = ''; segs = null; focus = 0; genId++; };
+        const backToYomi = () => { segs = null; focus = 0; genId++; };
 
         function render() {
-            if (cands)               cb.show([{ text: cands[candIdx], kind: 'focus' }]);
-            else if (composing())    cb.show([{ text: kana + pend, kind: 'yomi' }]);
-            else                     cb.hide();
+            if (segs) {
+                cb.show(segs.map((s, i) =>
+                    ({ text: s.candidates[s.idx], kind: (i === focus) ? 'focus' : 'other' })));
+            } else if (composing()) {
+                cb.show([{ text: kana + pend, kind: 'yomi' }]);
+            } else {
+                cb.hide();
+            }
         }
+
+        const joined = () => segs.map((s) => s.candidates[s.idx]).join('');
 
         function commit(text) {
             clear();
             cb.commit(text);   // 呼び元が hide → 注入の順で処理
+        }
+
+        // 変換開始 (Space 初回)。cb.convert は非同期 (Mozc worker RPC) なので、結果到着時に
+        // 世代とよみが変わっていないことを確認してから候補モードへ入る (途中で打鍵/取消して
+        // いたら結果は捨てる)。実機 FEP は同期だったが、変換は 2〜45ms なので体感差はない。
+        function startConvert() {
+            const r = resolve(kana, pend, true);
+            kana = r.kana; pend = '';
+            render();                       // flush 後のよみを表示したまま結果を待つ
+            const yomi = kana;
+            const gen = ++genId;
+            Promise.resolve(cb.convert ? cb.convert(yomi) : null).then((result) => {
+                if (gen !== genId || !composing() || kana !== yomi) return;   // 打鍵等で無効化済み
+                if (!result || !result.length) result = fallbackConvert(yomi);
+                segs = result.map((s) => ({
+                    key: s.key,
+                    candidates: (s.candidates && s.candidates.length) ? s.candidates : [s.key],
+                    idx: 0,
+                }));
+                focus = 0;
+                render();
+            }).catch(() => { /* 変換失敗 = よみ表示のまま (正直な失敗) */ });
         }
 
         // keydown 1 個を消費する。戻り値 true = FEP が飲んだ (ゲストへ送らない)。
@@ -146,19 +183,19 @@
 
             if (k === 'Enter') {
                 if (!composing()) return false;
-                commit(cands ? cands[candIdx] : resolve(kana, pend, true).kana);
+                commit(segs ? joined() : resolve(kana, pend, true).kana);
                 return true;
             }
             if (k === 'Escape') {
                 if (!composing()) return false;
-                if (cands) { cands = null; candIdx = 0; }   // 候補 → よみへ戻す
+                if (segs) backToYomi();     // 候補 → よみへ戻す
                 else clear();
                 render();
                 return true;
             }
             if (k === 'Backspace') {
                 if (!composing()) return false;
-                if (cands) { cands = null; candIdx = 0; }   // 候補 → よみへ戻す
+                if (segs) backToYomi();     // 候補 → よみへ戻す
                 else if (pend) pend = pend.slice(0, -1);
                 else kana = Array.from(kana).slice(0, -1).join('');
                 render();
@@ -166,30 +203,53 @@
             }
             if (k === ' ') {
                 if (!composing()) return false;             // 空なら Space はゲストへ
-                if (cands) candIdx = (candIdx + 1) % cands.length;   // 次候補
-                else {                                      // 変換 (よみを flush してから)
-                    const r = resolve(kana, pend, true);
-                    kana = r.kana; pend = '';
-                    cands = convert(kana); candIdx = 0;
+                if (segs) {                                 // 注目文節の次候補
+                    const s = segs[focus];
+                    s.idx = (s.idx + 1) % s.candidates.length;
+                    render();
+                } else {
+                    startConvert();
                 }
-                render();
                 return true;
             }
-            // 印字キー (1 文字): 空のときは英字だけが composition を開始 (数字・記号は
-            // ゲストへ透過 = VZ のコマンド操作を邪魔しない)。composing 中は全部バッファへ
-            // (記号は ROMAJI の -、。「」等に解決、未知はそのまま)。候補表示中の追加入力は
-            // 実 FEP と同じく現候補を確定してから次の入力を始める。
+            if (k === 'ArrowLeft' || k === 'ArrowRight') {
+                if (!composing()) return false;             // 空なら矢印はゲストへ
+                if (segs && segs.length > 1) {              // 注目文節の移動
+                    focus = (focus + (k === 'ArrowRight' ? 1 : segs.length - 1)) % segs.length;
+                    render();
+                }
+                return true;                                // よみ中も飲む (従来どおり)
+            }
+            if (k === 'ArrowUp' || k === 'ArrowDown') {     // 前候補/次候補 (実 FEP の ↑↓)
+                if (!composing()) return false;
+                if (segs) {
+                    const s = segs[focus];
+                    const d = (k === 'ArrowDown') ? 1 : s.candidates.length - 1;
+                    s.idx = (s.idx + d) % s.candidates.length;
+                    render();
+                }
+                return true;
+            }
+            // 印字キー (1 文字): 空のときは英字が composition を開始、句読点・記号は
+            // 即確定で全角に (DIRECT_COMMIT)、それ以外 (数字等) はゲストへ透過。
+            // composing 中は全部バッファへ (記号は ROMAJI の 、。？！「」等に解決、
+            // 未知はそのまま)。候補表示中の追加入力は実 FEP と同じく現候補列を確定して
+            // から次の入力を始める。
             if (k.length === 1 && k >= ' ' && k <= '~') {
                 const ch = k.toLowerCase();
-                if (!composing() && !/[a-z]/.test(ch)) return false;
-                if (cands) commit(cands[candIdx]);          // 候補中の追加入力 = 確定して継続
+                if (!composing() && !/[a-z]/.test(ch)) {
+                    if (DIRECT_COMMIT[ch]) { commit(DIRECT_COMMIT[ch]); return true; }
+                    return false;
+                }
+                if (segs) commit(joined());                 // 候補中の追加入力 = 確定して継続
                 pend += ch;
                 const r = resolve(kana, pend, false);
                 kana = r.kana; pend = r.pend;
+                genId++;                                    // in-flight な変換結果は捨てる
                 render();
                 return true;
             }
-            // その他 (矢印/Tab/F キー等): composing 中は飲む (実 FEP 同様)、空なら透過
+            // その他 (Tab/F キー等): composing 中は飲む (実 FEP 同様)、空なら透過
             return composing();
         }
 

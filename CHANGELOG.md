@@ -1,5 +1,97 @@
 # CHANGELOG
 
+## [HLE FEP M2 — Mozc-Wasm 統合 (本物のかな漢字変換・複数文節・UI 改善)] — 2026-07-08
+
+M1 のスタブ変換 (カナ巡回) を Mozc (Google 日本語入力 OSS) の実変換に差し替え。文節分割・
+候補選択・注目文節移動まで実 FEP の UX がゲスト画面内で動く。
+
+### Mozc-Wasm ビルド (spike 2026-07-08 成功 → 同日統合)
+
+- fcitx-contrib/fcitx5-mozc (BSD-3、mozc/abseil/protobuf を CMake で束ねる) を Emscripten で
+  ビルド。**Bazel はローカル不要** — 唯一 Bazel が要る辞書データ生成は同リポジトリ release の
+  `mozc.data` (18.9MB) を利用。**`-pthread` 必須** (mozc 上流が `__wasm__ &&
+  !__EMSCRIPTEN_PTHREADS__` を #error で弾く = wasm+pthreads を明示想定)。パッチ 2 つ:
+  同梱 protobuf.patch (C#/Java/Rust 生成器除去) + oss_data_manager.cc 除外 (48MB 埋め込み .inc を
+  焼かず実行時 `DataManager::CreateFromFile`)。正典レシピ = `~/development/mozc-wasm-build/README.md`。
+- 成果物: `mozc_qb.wasm` 2.6MB + `mozc_qb.js` 94KB + 辞書 19MB (すべて gitignore、deploy.sh が
+  同梱・欠落警告。docs/deploy.md に節追加)。ラッパー mozc_qb.cc = converter 層直叩き
+  (かな UTF-8 → 文節+候補 JSON)。session/composer 層は不使用 (composition はホスト側の担当)。
+- 実測: 変換 2〜45ms/クエリ。文節境界は Segmenter (品詞ペア判定)、候補は Viterbi + A* N-best —
+  形態素解析と同族のラティスデコード。
+
+### QuuBee 統合
+
+- **web/player/mozc-worker.js (新規)**: 専用 Worker で Mozc を隔離。FEP 初回 ON 時のみ辞書を
+  遅延 fetch (使わないユーザーは 1 バイトも取得しない = soundfont と同じ方針)。pthread pool の
+  再スポーンは mainScriptUrlOrBlob 明示。Pages の SPA フォールバック (200+HTML) は先頭バイト検査で弾く。
+- **fep.js 複数文節化**: segs [{key, candidates, idx}] + focus。Space=変換/次候補・←→=注目文節
+  移動・↑↓=候補前後・Enter=全文節結合で確定・Esc/BS=よみへ戻る。convert は cb 注入の async
+  (世代トークンで in-flight 無効化 — 変換待ち中の打鍵で古い結果を破棄)。Mozc 未ロード/失敗時は
+  カナ巡回フォールバックに自動縮退 (正直な失敗)。
+- **UI (実機フィードバック 2 点対応)**:
+  - FEP トグルボタン「あ」を入力バーに新設 (ON=緑)。**ChromeOS では Ctrl+Space が OS の入力
+    メソッド切替に食われてページに届かない**ため、ボタンを主経路に + Ctrl+J を併設
+    (Ctrl+Space も届く環境では従来どおり)。全経路 setFepActive に一元化。
+  - **進捗トースト #progress-toast 新設**: 大物アセット取得 (FEP 辞書 19MB / MIDI soundfont
+    32MB) をゲーム画面上のオーバーレイ (バー + %) で表示。run-status の 12px 文字では
+    見落とすという報告起点。MIDI 側も同トーストに配線。
+- FEP_STYLES に other (非注目文節) スロット追加: wx=下線 / atok=素 (仮置き・A/B 継続)。
+
+### 検証
+
+- tools/fep_mozc_test.js (新設) 18 チェック全 PASS: ローマ字 n 規則 (konnichiha/minna/nn) /
+  フォールバック巡回 / in-flight 破棄 / 文節移動・文節別候補・結合確定 /
+  **実 Mozc E2E: "kyouhaiitenkidesune" 打鍵 → 変換 → 確定 = 「今日はいい天気ですね」**
+  (アセット不在環境は Part B を skip)。
+- 既存回帰 全テストスイート green (fep_test の VZ VRAM 検証含む・C 側は M2 で無変更)。
+
+### Mozc worker の自己回復 (同日追記 — 実機報告「変換が突然効かなくなる」対応)
+
+- 症状: しばらく使うと Space で変換しなくなり、FEP OFF/ON でも回復しない (ブラウザ再起動で回復)。
+- 対策 2 層: ① PTHREAD_POOL_SIZE 4→8 (再リンク) ② **watchdog + 自動再起動** — 変換が 4 秒
+  無応答なら保留分をカナ巡回フォールバックへ逃がし、worker を terminate → 再スポーン (辞書は
+  HTTP キャッシュから即再ロード)。worker error (クラッシュ) も同経路で回収。
+  診断 = qbDebug.mozc() (state/restarts/pending)。watchdog は真因根治後も防御として残す。
+
+### 真因根治 (同日追記 2 — 「きのう がカタカナにしかならない」報告から ASAN で特定)
+
+- node 単体で決定論的に再現 (変換 2〜8 回目でヒープ破壊 → OOB/ハング/abort のどれか)。
+  ブラウザの「変換突然死」も「キノウしか出ない」も全部これの巻き添え (壊れた worker への変換が
+  全滅しフォールバックのカタカナが出ていた。watchdog は回収していたが破壊自体は続いていた)。
+- シロ判定 (実測で棄却): メモリ拡張 (growth 無効でも再現) / pthread スタック (1MB でも再現) /
+  日付リライタ (日付語ゼロでも再現) / ConversionRequest 寿命 (static 参照で健全) / Arena 実装。
+- **真因 = ラッパー TU の NDEBUG 欠落による ODR 違反** (ASAN が名指し):
+  `converter::Candidate` は NDEBUG 無しだと `std::string log` メンバが増えて sizeof が変わる
+  (candidate.h `#ifndef NDEBUG`)。ライブラリは Release (-DNDEBUG、188B)、ラッパー mozc_qb.cc は
+  素の -O2 (debug レイアウト ~200B) でコンパイルしていたため、ラッパー側にインライン展開される
+  Segments/Arena のデストラクタが存在しない log メンバをオフセット 188 の先に読み書きして
+  ヒープを黙って破壊していた。np2.h の NP2OSCFG 二重定義ハング (2026-06) と同族の ODR 事故。
+- 修正 = link_qb.sh に **-DNDEBUG** 1 個。修正前 = 必ず 2〜8 回目で再現 → 修正後 = **1000 連続
+  変換ノーエラー**。レシピ (mozc-wasm-build/README.md) に罠として太字で記録。
+- 教訓: 条件付きメンバを持つヘッダ (NDEBUG/デバッグフラグでレイアウトが変わる型) は、
+  ライブラリとラッパーのコンパイル条件を必ず一致させる。
+
+### 句読点の即確定 (同日追記 3 — 実機フィードバック)
+
+- 報告: 文中の「.」は 。 になるが、バッファが空のとき単独で打つと ASCII のピリオドが
+  ゲストへ確定入力される (「?」等も同様)。
+- 対応: 実 IME の「句読点は即確定」に合わせ、空バッファでの `. , ? ! [ ] - /` は
+  全角 (。、？！「」ー・) を即 SJIS 注入する DIRECT_COMMIT 表を新設。あわせて ？！・ を
+  ローマ字テーブルにも追加 (文中でも全角になる)。数字・その他記号は従来どおり透過
+  (VZ のコマンド操作を邪魔しない)。回帰 5 ケース追加 (fep_mozc_test 計 23 チェック)。
+
+### 設定パネルに FEP Style (同日追記 4)
+
+- Display グループに「FEP Style (FEP 表示)」select を追加: WX 風=下線 / ATOK 風=反転。
+  qbDebug.fepstyle と同経路 (setupSettings の APPLY 経由)、localStorage 永続化・起動時復元。
+  互換ノブではなく「当時どの FEP で打っていたか」の再体験の好み選択という位置づけ。
+
+### 設定モーダルのスクロール構造 (同日追記 5)
+
+- 従来は #settings-box 全体が overflow:auto でタイトル・× ボタン・フッタ (既定に戻す/閉じる)
+  まで巻き添えでスクロールしていた。box を flex column 化し、新設の #settings-body だけが
+  スクロール (ヘッダ/フッタ固定・フッタに区切り線)。項目が増えても操作ボタンが常に見える。
+
 ## [HLE FEP M1 — 未確定文字列のゲスト画面内インライン表示 (VZ 実地検証込み)] — 2026-07-07
 
 日本語入力の第 2 経路として HLE FEP を新設 (M1)。実 PC-98 の FEP (ATOK/VJE/WX...) と同じ

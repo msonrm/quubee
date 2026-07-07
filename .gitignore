@@ -60,3 +60,10 @@ Thumbs.db
 
 # debug/作業用スクリーンショット (ユーザ共有のため一時的に置く)
 /Screenshot*.png
+
+# Mozc-Wasm (HLE FEP のかな漢字変換エンジン、BSD-3)。~/development/mozc-wasm-build/ でビルド
+# (レシピは同ディレクトリ README.md)。辞書 mozc.data は fcitx-contrib/fcitx5-mozc release 由来。
+# ブラウザは FEP 初回 ON 時に遅延 fetch。deploy.sh が dist へ同梱する
+/web/assets/mozc_qb.js
+/web/assets/mozc_qb.wasm
+/web/assets/mozc.data

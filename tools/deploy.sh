@@ -25,6 +25,13 @@ mkdir -p "$DIST"
 cp -rL web/. "$DIST/"                                    # -L: symlink は実体化 (現状 web/ に無し)
 find "$DIST" -name '*.map' -delete
 
+# HLE FEP の Mozc-Wasm (mozc_qb.js/.wasm + 辞書 mozc.data ~19MB、gitignore)。無いまま deploy すると
+# 本番 FEP がカナ変換のみに縮退する (MIDI の soundfont と同じ罠)。ビルドは ~/development/mozc-wasm-build/README.md。
+# mozc.data は 25MiB 未満なので分割不要。
+for f in assets/mozc_qb.js assets/mozc_qb.wasm assets/mozc.data; do
+    [ -f "$DIST/$f" ] || echo "⚠ 警告: web/$f が無い — 本番 FEP のかな漢字変換が無効になります"
+done
+
 # 同梱バイナリ (font.bmp=修正BSD / soundfont.sf2 / PMD / リズム音色) の帰属・ライセンス全文を
 # 公開ビルドにも届ける。BSD のバイナリ再配布条項 (著作権表示を「頒布物に付属する材料」に再現する)
 # を、サイト自身が CREDITS.md + licenses/ を配ることで満たす。歓迎パネルの「CREDITS.md」リンクの実体。

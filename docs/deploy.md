@@ -70,6 +70,19 @@ deploy は git とは独立 (wrangler の直アップロード)。**git push し
   非 MIDI ユーザーはダウンロードしない。
 - 同様にリズム音源 (`web/assets/rhythm/2608_*.wav`) と `web/assets/font.bmp` も `web/` 配下にあること。
 
+## Mozc-Wasm (HLE FEP のかな漢字変換) — deploy 前に必ず確認
+
+- `web/assets/mozc_qb.js` (~94KB) / `mozc_qb.wasm` (~2.6MB) / `mozc.data` (辞書 ~19MB) は
+  **`.gitignore`**。ビルド正典は `~/development/mozc-wasm-build/README.md`
+  (fcitx-contrib/fcitx5-mozc、BSD-3。辞書は同リポジトリ release の `mozc.data`)。
+- ⚠ **これが無いまま deploy すると本番 FEP がカナ変換のみに縮退する** (mozc.data の fetch が
+  Pages の SPA フォールバック HTML を掴むが、先頭バイト検査で弾いて failed 扱いになる)。
+  `ls web/assets/mozc_qb.js web/assets/mozc_qb.wasm web/assets/mozc.data` で確認してから手順 4 へ。
+  deploy.sh も欠落時に警告を出す。
+- `mozc.data` は 25MiB 未満なので分割不要 (単一ファイルのまま)。FEP 初回 ON 時のみ遅延 fetch されるので、
+  FEP を使わないユーザーはダウンロードしない。
+- 実行には SharedArrayBuffer (COOP/COEP) が必要 — QuuBee は音声 Worker のため配信済み (`_headers`)。
+
 ## commit / push の注意
 
 - git のコミットメッセージは日本語可。末尾に co-author 行を付ける (この repo の慣例)。
