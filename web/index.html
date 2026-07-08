@@ -671,10 +671,14 @@ https://github.com/msonrm/quubee</pre>
             </div>
             <div class="set-row">
                 <div class="set-main">
-                    <div class="set-label">Chibi-oto<span class="ja">ちびおと</span><span class="next-run-badge">次の Run から / Next Run</span></div>
-                    <div class="set-desc">86 + ADPCM。FMP/PMD の PCM 声部を鳴らす<span class="en"> / 86 board + ADPCM for PCM voices</span></div>
+                    <div class="set-label">Sound Board<span class="ja">音源ボード</span><span class="next-run-badge">次の Run から / Next Run</span></div>
+                    <div class="set-desc">上ほど機能が乗る (上位は下位を含む)。Mate-X PCM は近代エンジンの PCM 再生に必要<span class="en"> / higher tiers include lower ones; Mate-X PCM needed for modern engines</span></div>
                 </div>
-                <div class="set-ctl"><input id="set-chibioto" type="checkbox"></div>
+                <div class="set-ctl"><select id="set-soundboard">
+                    <option value="matex">86 + ADPCM + Mate-X PCM</option>
+                    <option value="adpcm">86 + ADPCM (Chibi-oto)</option>
+                    <option value="86">86 FM only</option>
+                </select></div>
             </div>
             <div class="set-row">
                 <div class="set-main">

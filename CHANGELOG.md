@@ -1,5 +1,34 @@
 # CHANGELOG
 
+## [Mate-X PCM (CS4231) 検出対応 — DOS/4GW 近代エンジンで「No supported sound card found.」を根治] — 2026-07-09
+
+Awe Morris 氏の Suika3 (ビジュアルノベルエンジン) の PC-98 移植版 (Open Watcom + DOS/4GW) が
+「No supported sound card found.」で起動できない件を調査・修正。DOS/4GW は既に起動しており (XMS/DPMI
+経路は健在、EMS は不要)、詰まりは純粋にサウンドカード検出の 1 点だった。
+
+- **真因**: このエンジンは FM 音源 (OPNA/86 ボード) を一切検出せず、PCM 系 (SB16 / **Mate-X PCM =
+  PC-9821 内蔵 CS4231**、I/O 0xF40 / CIRRUS) だけを探す。QuuBee 既定の `SOUND_SW` (86+ADPCM=0x14) は
+  Mate-X PCM を積んでいないので 0xF40 が未接続 → 全検出失敗。逆アセンブルで検出アルゴリズム (0xF40 の
+  bits[5:3]=IRQ・[2:0]=DMA を書き戻して再読みで検証) を確認し、NP2kai の cs4231io の `cs4231.adrs`
+  レジスタ (read=write-back) と完全一致することを特定。
+- **修正**: `np2kai_set_wss` を追加 (native/bridge.{c,h} + CMakeLists export)。ON で
+  `SOUNDID_PC_9801_86_WSS (0x64)` = 86 ボード(ADPCM 込み) + Mate-X PCM。0x64 は fmboard_reset で
+  board86_reset(pConfig, TRUE) を呼ぶので 86/ADPCM 側は 0x14 (ちびおと) と発音同一の上位互換
+  (headless A/B: FM .opi 15005/15005・ADPCM .ovi 27723/27723 で完全一致=回帰なし)。bridge.js
+  `forceWss=true` で既定 ON。cs4231io_bind→sound_streamregist で PCM も音声ミキサに乗る。
+- **設定 UI 統合**: 当初「Chibi-oto」「Mate-X PCM」の 2 チェックボックスにしたが、0x64 が ADPCM を
+  内包するため Chibi-oto トグルが効かなく見える重複が判明。**1 個の「Sound Board」段階選択**
+  (86 FM only=0x04 / 86+ADPCM=0x14 / 86+ADPCM+Mate-X PCM=0x64・既定) に統合。SOUNDID の階層と一致し
+  曖昧さゼロ。旧 localStorage キー (chibioto/wss) は soundboard へ自動移行。
+- **検証**: headless で matex(0x64) → suika3 が「Mate-X PCM: found a card. / Sound enabled.」検出成功
+  (従来 0x14 では「No supported sound card found.」を再現)。touhou_test 4/4・fmp_test も green。
+  ブラウザ実機で起動・認識・音楽再生をユーザー確認済。
+- **既知の限界 (性能)**: Suika3 の PCM 音声 (8000Hz) が「1 秒弱を繰り返しつつ少しずつ進む」形で途切れる。
+  計測で **デコード律速の性能限界**と確定 (CPU 倍率 A/B: multiple 20→60 で反復 r=0.78→0.30・スイートは
+  40〜60、fill レート/プリフェッチ調整はいずれも無効=クリーン否定)。この DOS/4GW 近代エンジンは Pentium 級
+  PC-9821 前提で、Chromebook 上のエミュレーションでは実時間デコードに CPU が足りない。バグではなく
+  エミュレータ性能の壁。倍率を上げると改善するがブラウザ処理能力が上限。→ 別タスク (エミュ高速化) 送り。
+
 ## [HLE FEP — 新配列 (keymap-format) 統合: タップ正規化 + labo エンジン同梱 + 全6配列 + 設定 UI] — 2026-07-08
 
 labo (logical-layout-labo) の InputEngine を単体ビルド成果物として同梱し、HLE FEP のかな入力前段に

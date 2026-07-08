@@ -633,6 +633,18 @@ int np2kai_set_chibioto(int on) {
 	return np2cfg.SOUND_SW;
 }
 
+/* 「Mate-X PCM」= PC-9821 内蔵 PCM (CS4231/WSS) の有効化。on で SOUNDID_PC_9801_86_WSS (0x64) =
+ * 86 ボード + Mate-X PCM。0x64 は fmboard_reset で board86_reset(pConfig, TRUE) を呼ぶので 86 側は
+ * ちびおと (0x14) と同一の ADPCM 付き経路 = FM/ADPCM は発音同一で、CS4231 (I/O 0xF40) と PCM
+ * ストリーム (cs4231io_bind → sound_streamregist) が足されるだけの上位互換。off は素の 86 (0x04)。
+ * Watcom+DOS/4GW の近代エンジン (Suika3 等) は FM を見ず SB16/Mate-X PCM だけ検出するので、これが
+ * 無いと「No supported sound card found.」になる。SOUND_SW は pccore_reset → fmboard_reset で
+ * 読まれるので次 Run から反映。qbDebug.wss(0|1) の実体。JS 側 forceWss で既定 ON。 */
+int np2kai_set_wss(int on) {
+	np2cfg.SOUND_SW = on ? SOUNDID_PC_9801_86_WSS : SOUNDID_PC_9801_86;
+	return np2cfg.SOUND_SW;
+}
+
 /* ブート時の ITF (BIOS POST) ROM 実行のトグル。on=1 で POST を復活 (メモリカウント+起動ピポ音を
  * 出す、実機ノスタルジー用)、on=0 で既定どおりスキップ。既定 = 0 (create 時に np2cfg.ITF_WORK=0)。
  * np2cfg.ITF_WORK は reset 毎の bios_initialize → bios_itfcall で読まれるので、設定後の次 Run (reset)

@@ -254,6 +254,7 @@ async function makeWorkerEmu() {
         async reset()                { await call({ type: 'reset' }); },
         async setPmdIrq(v)           { return (await call({ type: 'call', fn: 'np2kai_set_pmd_irq',  ret: 'number', argTypes: ['number'], args: [v] })).r; },
         async setChibiOto(v)         { return (await call({ type: 'call', fn: 'np2kai_set_chibioto', ret: 'number', argTypes: ['number'], args: [v] })).r; },
+        async setWss(v)              { return (await call({ type: 'call', fn: 'np2kai_set_wss',      ret: 'number', argTypes: ['number'], args: [v] })).r; },
         async setBeepMute(v)         { return (await call({ type: 'call', fn: 'np2kai_set_beep_mute', ret: 'number', argTypes: ['number'], args: [v] })).r; },
         async setBeepGain(pct)       { return (await call({ type: 'call', fn: 'np2kai_set_beep_gain', ret: 'number', argTypes: ['number'], args: [pct] })).r; },
         async setClockMultiple(m)    { return (await call({ type: 'call', fn: 'np2kai_set_clock_multiple', ret: 'number', argTypes: ['number'], args: [m] })).r; },
@@ -1266,6 +1267,7 @@ async function makeWorkerEmu() {
     // 既定 IRQ を前提にするので off=既定でないと演奏が壊れる)。snd86opt は reset(board bind) 前に設定。
     const setPmdIrq     = M.cwrap('np2kai_set_pmd_irq',     'number', ['number']);
     const setChibiOto   = M.cwrap('np2kai_set_chibioto',    'number', ['number']);
+    const setWss        = M.cwrap('np2kai_set_wss',         'number', ['number']);
     // 86 ボード IRQ の上書きトグル。null=既定 (全ブート IRQ12)、0=既定 IRQ 強制、1=IRQ12 強制。
     // 既定は下の loadLoaderDisk で IRQ12。将来 IRQ12 非対応ドライバが出たら qbDebug.snd86irq(0) で逃げる。
     let forcePmdIrq = null;
@@ -1275,6 +1277,13 @@ async function makeWorkerEmu() {
     // 足すだけ = FM のみ曲は発音同一。ADPCM 入り (FMP .ovi / PMD .PPC) は追加設定なしで鳴る。
     // 非 ADPCM タイトルで万一の副作用 (拡張 status/レジスタ読みの差) が出たら qbDebug.chibioto(0) で素の 86 に戻せる。
     let forceChibi = true;
+    // 「Mate-X PCM」(PC-9821 内蔵 PCM=CS4231=SOUND_SW 0x64) の有効化トグル。**既定 true (= 全ブート ON)**。
+    // 0x64 は 86 側が board86_reset(pConfig, TRUE) = ちびおと (0x14) と同一の ADPCM 付き経路の上位互換で、
+    // FM/ADPCM は発音同一・CS4231 (I/O 0xF40) と PCM ストリームが足されるだけ。これで Watcom+DOS/4GW の
+    // 近代エンジン (Suika3 等、FM を見ず SB16/Mate-X PCM だけ検出) が「No supported sound card found.」に
+    // ならず鳴る。forceWss=true の間は下の毎 Run 適用で chibioto より優先 (0x64 が 0x14 を包含するため)。
+    // 万一 Mate-X PCM の出現でFM系ゲームが不利な音源を選ぶ等あれば qbDebug.wss(0) で素の 86(+ADPCM) に戻せる。
+    let forceWss = true;
     let suppressBootBeep = false;   // 次の loader ブートが音楽セッションか (= beep 消音 + IRQ12 + エンジン非表示)
     let hideEngineFiles  = false;   // 一覧から PMD86.COM/PMP.COM を隠すか (音楽セッション中だけ true)
     // np2kai_dos_get_exit(int* code) — JS では HEAP に書き込み番地を渡す
@@ -1319,6 +1328,7 @@ async function makeWorkerEmu() {
         async reset() { reset(handle); },
         async setPmdIrq(v) { return setPmdIrq(v); },
         async setChibiOto(v) { return setChibiOto(v); },
+        async setWss(v) { return setWss(v); },
         async setBeepMute(v) { return setBeepMute(v); },
         async setBeepGain(pct) { return setBeepGain(pct); },
         async setClockMultiple(m) { return setMul(m); },
@@ -1527,9 +1537,13 @@ async function makeWorkerEmu() {
         // snd86opt は board bind (reset) 時に読まれるので reset の前に設定する。
         // forcePmdIrq が non-null なら上書き (qbDebug.snd86irq / 将来 IRQ12 非対応ドライバ用)。
         await emu.setPmdIrq(forcePmdIrq !== null ? forcePmdIrq : 1);
-        // 「ちびおと」(86+ADPCM=SOUND_SW 0x14) を毎 Run の reset 前に適用。forceChibi 既定 true (全ブート ON)。
-        // FMP .ovi / PMD .PPC 等 ADPCM 声部が追加設定なしで鳴る。qbDebug.chibioto(0) で素の 86 に戻せる。
-        await emu.setChibiOto(forceChibi ? 1 : 0);
+        // 音源ボード (SOUND_SW) を毎 Run の reset 前に適用。両者とも SOUND_SW を書くので排他解決:
+        //   forceWss (既定 ON) → 0x64 = 86(ADPCM 込み) + Mate-X PCM。0x64 は 0x14 (ちびおと) を包含するので
+        //     FMP .ovi / PMD .PPC の ADPCM 声部もそのまま鳴り、さらに DOS/4GW 近代エンジンの CS4231 も生える。
+        //   forceWss OFF → 従来どおり「ちびおと」(forceChibi: 0x14 / 0x04)。
+        // qbDebug.wss(0) で素の 86(+ADPCM) に、qbDebug.chibioto(0) で更に素の 86 に戻せる。
+        if (forceWss) await emu.setWss(1);
+        else          await emu.setChibiOto(forceChibi ? 1 : 0);
         await emu.reset();
         if (fep) fep.reset();   // FEP の未確定バッファを破棄 (C 側表示状態は np2kai_reset が破棄済み)
         // 起動音 (ピポ) は音楽セッションのブートでだけ消す。ゲーム起動は当時どおり鳴らす
@@ -2691,6 +2705,21 @@ async function makeWorkerEmu() {
         // chibioto(1)=ON で FMP の .ovi / PMD の .PPC 等 ADPCM(PCM) 声部のある曲が鳴る。chibioto(0)/()=既定 OFF。
         // 設定後に対象を Run (reset) して反映。FM のみの曲には無影響なので付けっぱなしでも実害は小さい。
         chibioto: (on = 1) => { forceChibi = !!on; return `forceChibi=${forceChibi} (既定 ON。1=86+ADPCM/0=素の86) — 次の Run から反映`; },
+        // 「Mate-X PCM」(PC-9821 内蔵 PCM=CS4231=SOUND_SW 0x64) のトグル。既定 ON。0x64 は 86(ADPCM 込み)+
+        // Mate-X PCM の上位互換なので、ON の間は FM/ADPCM は従来どおり鳴り、さらに Watcom+DOS/4GW の近代
+        // エンジン (Suika3 等、FM 非対応で SB16/Mate-X PCM だけ検出) が鳴るようになる。wss(0)=素の 86(+ADPCM=
+        // ちびおと) に戻す。設定後に対象を Run (reset) して反映。
+        wss: (on = 1) => { forceWss = !!on; return `forceWss=${forceWss} (既定 ON。1=86+ADPCM+Mate-X PCM(0x64)/0=ちびおと側) — 次の Run から反映`; },
+        // 音源ボードの段階選択 (設定パネルの Sound Board の実体)。'matex'(0x64=86+ADPCM+Mate-X PCM,既定) /
+        // 'adpcm'(0x14=86+ADPCM=ちびおと) / '86'(0x04=素の86)。上位は下位を含む階層なので chibioto/wss の
+        // 重複 (Mate-X PCM が ADPCM を内包し Chibi-oto が効かなく見える) を 1 コントロールで解消。次の Run から反映。
+        soundboard: (v) => {
+            if (v === 'matex' || v === 'adpcm' || v === '86') {
+                forceWss  = (v === 'matex');
+                forceChibi = (v !== '86');
+            }
+            return `soundboard=${forceWss ? 'matex(0x64)' : forceChibi ? 'adpcm(0x14)' : '86(0x04)'} — 次の Run から反映`;
+        },
         // ブート時の ITF (BIOS POST) 表示。既定はスキップ (メモリカウント+ピポ音なし=即プレイ)。
         // itfpost(1)=実機どおり POST を出す (ノスタルジー用)、itfpost(0)=既定どおりスキップ。
         // 設定後にゲーム/音楽を Run (reset) して反映。
@@ -3049,10 +3078,16 @@ async function makeWorkerEmu() {
         const SETTINGS_KEY = 'quubee_settings_v1';
         const loadSettings = () => { try { const s = JSON.parse(localStorage.getItem(SETTINGS_KEY)); return (s && typeof s === 'object') ? s : {}; } catch (_) { return {}; } };
         let settings = loadSettings();
+        // 旧スキーマ (chibioto/wss の 2 トグル) → 新スキーマ (soundboard の段階選択) へ移行。
+        // 重複トグル (Mate-X PCM が ADPCM を内包し Chibi-oto が効かなく見えた) を 1 コントロールに統合した経緯。
+        if (settings.soundboard === undefined && (settings.wss !== undefined || settings.chibioto !== undefined)) {
+            settings.soundboard = settings.wss !== 0 ? 'matex' : (settings.chibioto !== 0 ? 'adpcm' : '86');
+        }
+        delete settings.wss; delete settings.chibioto;
         const saveSettings = () => { try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch (_) {} };
 
         // 表示用の既定値 (getter の無い設定の初期表示に使う。native の実既定と一致させること)。
-        const DEFAULTS = { fmgen: 1, beepgain: 3.83, chibioto: 1, midifx: 1, multiple: 20,
+        const DEFAULTS = { fmgen: 1, beepgain: 3.83, soundboard: 'matex', midifx: 1, multiple: 20,
                            lines30: 0, itfpost: 0, y2k: 1, mouse33: 'ms', verbose: 0, theme: 'dark',
                            fepstyle: 'wx', kanalayout: 'builtin', kanaregion: 'us' };
         const get = (k) => (k in settings ? settings[k] : DEFAULTS[k]);
@@ -3077,7 +3112,7 @@ async function makeWorkerEmu() {
             vol:      (v) => qd.vol(v),
             fmgen:    (v) => qd.fmgen(v ? 1 : 0),
             beepgain: (v) => qd.beepgain(v),
-            chibioto: (v) => qd.chibioto(v ? 1 : 0),
+            soundboard: (v) => qd.soundboard(v),
             midifx:   (v) => qd.midifx(v ? 1 : 0),
             multiple: (v) => qd.multiple(v | 0),
             lines30:  (v) => qd.lines30(v ? 1 : 0),
@@ -3112,7 +3147,7 @@ async function makeWorkerEmu() {
             for (const p of VOL_PARTS) { const v = (vol && vol[p] != null) ? (vol[p] | 0) : 128; el('set-vol-' + p).value = v; el('val-vol-' + p).textContent = v; }
             el('set-fmgen').value = String(get('fmgen') ? 1 : 0);
             const bg = Number(get('beepgain')); el('set-beepgain').value = Math.round(bg * 100); el('val-beepgain').textContent = bg.toFixed(2) + 'x';
-            el('set-chibioto').checked = !!get('chibioto');
+            el('set-soundboard').value = get('soundboard');
             el('set-midifx').checked = !!get('midifx');
             const mul = get('multiple') | 0; el('set-multiple').value = mul; el('val-multiple').textContent = mulLabel(mul);
             el('set-lines30').checked = !!get('lines30');
@@ -3130,7 +3165,7 @@ async function makeWorkerEmu() {
         for (const p of VOL_PARTS) el('set-vol-' + p).addEventListener('input', volChange);
         el('set-fmgen').addEventListener('change', (e) => change('fmgen', e.target.value === '1' ? 1 : 0));
         el('set-beepgain').addEventListener('input', (e) => { const x = (e.target.value | 0) / 100; el('val-beepgain').textContent = x.toFixed(2) + 'x'; change('beepgain', x); });
-        el('set-chibioto').addEventListener('change', (e) => change('chibioto', e.target.checked ? 1 : 0));
+        el('set-soundboard').addEventListener('change', (e) => change('soundboard', e.target.value));
         el('set-midifx').addEventListener('change', (e) => change('midifx', e.target.checked ? 1 : 0));
         el('set-multiple').addEventListener('input', (e) => { const m = e.target.value | 0; el('val-multiple').textContent = mulLabel(m); change('multiple', m); });
         el('set-lines30').addEventListener('change', (e) => change('lines30', e.target.checked ? 1 : 0));

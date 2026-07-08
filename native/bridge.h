@@ -156,6 +156,14 @@ int np2kai_set_pmd_irq(int on);
 __attribute__((visibility("default")))
 int np2kai_set_chibioto(int on);
 
+/* 「Mate-X PCM」= PC-9821 内蔵 PCM (CS4231/WSS) の有効化。on で SOUND_SW を
+ * SOUNDID_PC_9801_86_WSS (0x64) = 86 ボード(ADPCM 込み) + Mate-X PCM に、off で素の 86 (0x04) に。
+ * 0x64 の 86 側は board86_reset(pConfig, TRUE) で 0x14 (ちびおと) と同一の ADPCM 付き経路なので
+ * 上位互換。DOS/4GW 系の近代エンジン (Suika3 等) が探す I/O 0xF40 の CS4231 を生やす。既定 ON
+ * (JS 側 forceWss)。next Run (reset) から反映。qbDebug.wss(0|1) の実体。 */
+__attribute__((visibility("default")))
+int np2kai_set_wss(int on);
+
 /* ブート時 ITF (BIOS POST) ROM のトグル。on=1 で POST (メモリカウント+ピポ音) を復活、on=0 で
  * 既定どおりスキップ。次 Run (reset) から反映。qbDebug.itfpost(0|1) の実体。 */
 __attribute__((visibility("default")))
