@@ -1,0 +1,174 @@
+[
+  {
+    "id": "json:azik_jis",
+    "file": "azik_jis.json",
+    "name": "AZIK(JIS)",
+    "keyboardLayout": "jis",
+    "basedOn": [],
+    "tags": [
+      "ローマ字",
+      "JIS配列"
+    ],
+    "description": "AZIK 拡張ローマ字入力（JIS キーボード）",
+    "author": "木村清",
+    "addedAt": "2026-03-21"
+  },
+  {
+    "id": "json:azik_us",
+    "file": "azik_us.json",
+    "name": "AZIK(US)",
+    "keyboardLayout": "us",
+    "basedOn": [],
+    "tags": [
+      "ローマ字",
+      "US配列"
+    ],
+    "description": "AZIK 拡張ローマ字入力（US キーボード）",
+    "author": "木村清",
+    "addedAt": "2026-03-21"
+  },
+  {
+    "id": "json:naginata_jis",
+    "file": "naginata_jis.json",
+    "name": "薙刀式(JIS)",
+    "keyboardLayout": "jis",
+    "basedOn": [],
+    "tags": [
+      "かな配列",
+      "同時打鍵",
+      "JIS配列"
+    ],
+    "description": "薙刀式同時打鍵入力（JIS キーボード）",
+    "author": "大岡俊彦",
+    "addedAt": "2026-03-21"
+  },
+  {
+    "id": "json:naginata_us",
+    "file": "naginata_us.json",
+    "name": "薙刀式(US)",
+    "keyboardLayout": "us",
+    "basedOn": [],
+    "tags": [
+      "かな配列",
+      "同時打鍵",
+      "US配列"
+    ],
+    "description": "薙刀式同時打鍵入力（US キーボード）",
+    "author": "大岡俊彦",
+    "addedAt": "2026-03-21"
+  },
+  {
+    "id": "json:nicola_jis",
+    "file": "nicola_jis.json",
+    "name": "NICOLA(JIS)",
+    "keyboardLayout": "jis",
+    "basedOn": [],
+    "tags": [
+      "かな配列",
+      "同時打鍵",
+      "親指シフト",
+      "JIS配列"
+    ],
+    "description": "NICOLA 親指シフト入力（JIS キーボード）",
+    "author": "日本語入力コンソーシアム",
+    "addedAt": "2026-03-21"
+  },
+  {
+    "id": "json:nicola_us",
+    "file": "nicola_us.json",
+    "name": "NICOLA(US)",
+    "keyboardLayout": "us",
+    "basedOn": [],
+    "tags": [
+      "かな配列",
+      "同時打鍵",
+      "親指シフト",
+      "US配列"
+    ],
+    "description": "NICOLA 親指シフト入力（US キーボード）",
+    "author": "日本語入力コンソーシアム",
+    "addedAt": "2026-03-21"
+  },
+  {
+    "id": "json:romaji_colemak_jis",
+    "file": "romaji_colemak_jis.json",
+    "name": "ローマ字(Colemak JIS)",
+    "keyboardLayout": "jis",
+    "basedOn": [],
+    "tags": [
+      "ローマ字",
+      "JIS配列"
+    ],
+    "description": "Colemak 配列でのローマ字入力（JIS キーボード）。iPadOS が Colemak をサポートしないため、アプリ側で QWERTY→Colemak キーリマップを行う。",
+    "author": "Shai Coleman",
+    "addedAt": "2026-03-21"
+  },
+  {
+    "id": "json:romaji_colemak_us",
+    "file": "romaji_colemak_us.json",
+    "name": "ローマ字(Colemak US)",
+    "keyboardLayout": "us",
+    "basedOn": [],
+    "tags": [
+      "ローマ字",
+      "US配列"
+    ],
+    "description": "Colemak 配列でのローマ字入力（US キーボード）。iPadOS が Colemak をサポートしないため、アプリ側で QWERTY→Colemak キーリマップを行う。",
+    "author": "Shai Coleman",
+    "addedAt": "2026-03-21"
+  },
+  {
+    "id": "json:romaji_jis",
+    "file": "romaji_jis.json",
+    "name": "ローマ字(QWERTY JIS)",
+    "keyboardLayout": "jis",
+    "basedOn": [],
+    "tags": [
+      "ローマ字",
+      "JIS配列"
+    ],
+    "description": "標準ローマ字入力（JIS キーボード）",
+    "addedAt": "2026-03-25"
+  },
+  {
+    "id": "json:romaji_us",
+    "file": "romaji_us.json",
+    "name": "ローマ字(QWERTY US)",
+    "keyboardLayout": "us",
+    "basedOn": [],
+    "tags": [
+      "ローマ字",
+      "US配列"
+    ],
+    "description": "標準ローマ字入力（US キーボード）",
+    "addedAt": "2026-03-25"
+  },
+  {
+    "id": "json:tsuki2-263_jis",
+    "file": "tsuki2-263_jis.json",
+    "name": "月配列2-263(JIS)",
+    "keyboardLayout": "jis",
+    "basedOn": [],
+    "tags": [
+      "かな配列",
+      "前置シフト",
+      "JIS配列"
+    ],
+    "description": "月配列2-263 前置シフト方式（JIS キーボード）",
+    "addedAt": "2026-03-21"
+  },
+  {
+    "id": "json:tsuki2-263_us",
+    "file": "tsuki2-263_us.json",
+    "name": "月配列2-263(US)",
+    "keyboardLayout": "us",
+    "basedOn": [],
+    "tags": [
+      "かな配列",
+      "前置シフト",
+      "US配列"
+    ],
+    "description": "月配列2-263 前置シフト方式（US キーボード）",
+    "addedAt": "2026-03-21"
+  }
+]

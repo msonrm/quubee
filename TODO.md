@@ -10,21 +10,22 @@
 Mozc ビルドレシピ = `~/development/mozc-wasm-build/README.md` (**ラッパー -DNDEBUG 必須の罠**)。
 回帰 = `tools/fep_test.js` (VZ 実地) + `tools/fep_mozc_test.js` (状態機械 + 実 Mozc E2E)。
 
-**進行中: 新配列 (薙刀式/NICOLA/月配列…) 統合 — labo と分業**
-- labo 側 (msonrm/logical-layout-labo、ユーザーが別セッションで並行作業中): TS 製 InputEngine の
-  単体 UMD ビルド出口 + chord golden 増強 + 仕様確認 5 問への回答。
-  依頼書 = **docs/keymap_engine_handoff.md** (契約の正典)
-- QuuBee 側の先行タスク (labo の回答に依存しない):
-  **キー入力タップの正規化** — window keydown/keyup を 1 箇所で {code, key, down, repeat,
-  timestamp} に正規化し、消費者ポリシーを明文化して配る (FEP 印字系 = リピート許可 /
-  chord エンジン = down/up のみ / ゲスト = 現状維持)。現状は fep に keydown しか届かず
-  (keyup 配線なし)、OS リピートが素通し、ゲストは pressed Set でリピート遮断。
-  入口 = web/player/bridge.js の window keydown/keyup リスナー (FEP フック・pressed Set・
-  PC98_KEYMAP が絡む一帯)
-- 統合フェーズ (labo 成果物が来たら): エンジン vendoring (web/assets/ に同梱) + アダプタ
-  (EngineState → fep.js composition/Mozc/注入) + 編集系アクション二重経路 (composing 中 =
-  バッファ操作 / 空 = PC-98 実キー注入 — 薙刀式のカーソル/BS/言語切替) + 設定 UI (配列×JIS/US)
-  + labo golden 流用の fep_layout_test
+**新配列 (薙刀式/NICOLA/月配列…) 統合 — 実装ほぼ完了 (2026-07-08、labo と分業)**
+labo (msonrm/logical-layout-labo) が単体 UMD ビルド出口 + chord golden 増強 + 仕様回答 5 問を完遂
+(依頼書 docs/keymap_engine_handoff.md / 回答 = labo の docs/keymap-engine-embedding.md)。QuuBee 側:
+- ✓ **#9 タップ正規化** (bridge.js): window keydown/keyup を {down,code,key,repeat,timestamp,修飾} に
+  正規化・消費者ポリシー明文化 (FEP=リピート許可 / chord=down/up・repeat 破棄 / ゲスト=初回 down)。
+  fep へ keyup 供給 (feedUp)。**SandS の単打 convert は keyup 駆動で必須**。
+- ✓ **エンジン同梱** (web/assets/keymap-engine.js + keymaps/、KeymapEngine v1.0.0 MIT、CREDITS 記録)。
+  fork せず 1 ファイル差し替えモデル。受け入れ検査 tools/keymap_engine_test.js (16/16)。
+- ✓ **アダプタ** (fep.js engine 経路): Phase1 (キー→かな) を engine へ委譲・Phase2 (Mozc 候補) は
+  従来流用。確定かな→fep→Mozc の二段構え。SandS=keyup+窓満了で解決。OS リピート破棄。内蔵ローマ字ゼロ回帰。
+- ✓ **全 6 配列** (薙刀式/NICOLA/月2-263/AZIK/Colemak/ローマ字 × JIS/US) がアダプタ経由で駆動
+  (tools/fep_layout_test.js 17/17)。**薙刀式はブラウザ実機確認済** (ユーザー、2026-07-08)。
+- ✓ **設定 UI**: Display グループに Kana Layout × Keyboard(JIS/US)、localStorage 永続、qbDebug.layout 経由。
+- ☐ **残 (別タスク・ユーザー判断で後回し)**: 薙刀式の編集系二重経路 (T/Y カーソル・U/BS)。web エンジンが
+  KeyAction を surface せず・カーソル模型無しのため、labo フック追加 or QuuBee 側 specialActions 翻訳が要る。
+- ☐ **ブラウザ実機確認 (残)**: 設定 UI / NICOLA・月・AZIK・Colemak / ステータス即時反映。確認後にデプロイ。
 
 **FEP の残キュー (急がない)**: 候補一覧窓 (退避は複数行対応済みで拡張容易) / 文節伸縮
 Shift+←→ (ResizeSegment、ラッパー API 追加要) / FEP 流派 API (INT 2Fh / MS$KANJI) の需要

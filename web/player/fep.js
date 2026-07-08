@@ -71,6 +71,13 @@
     const DIRECT_COMMIT = {
         '.':'。', ',':'、', '?':'？', '!':'！', '[':'「', ']':'」', '-':'ー', '/':'・',
     };
+    // engine (新配列) 経路で「編集・カーソル移動・確定の実キー」を二重経路にするための集合。
+    // composing 中 = engine のバッファ操作 / composing 空 = ゲストへ実キー透過 (PC-98 カーソル/改行)。
+    // Space は naginata で入力キー (SandS) なので **含めない**。
+    const HOST_NAV_KEYS = new Set([
+        'Backspace', 'Delete', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown',
+        'Home', 'End', 'PageUp', 'PageDown', 'Enter', 'Tab', 'Escape',
+    ]);
     // 「待ち」判定用: 全キーの真の接頭辞集合 + "nn" (n の特別待ち)
     const PREFIXES = new Set(['nn']);
     for (const k of Object.keys(ROMAJI)) {
@@ -174,10 +181,83 @@
             }).catch(() => { /* 変換失敗 = よみ表示のまま (正直な失敗) */ });
         }
 
+        // ---- 新配列 (keymap-format) エンジン経路 ------------------------------------
+        // bridge が setEngine で KeymapEngine の InputEngine を注入すると、Phase 1 (物理キー→かな)
+        // をエンジンへ委譲する。Phase 2 (Mozc 候補) は内蔵経路と同じ segs 機構をそのまま使う。
+        // エンジンは「キー→かな」だけを担い、確定かな (takeConfirmedText) を fep が Mozc へ流す。
+        // SandS (naginata の space=シフト / 単打=convert) は keyup と窓満了 (onStateChange) で決まる
+        // ので engineUp と pumpEngine の両方から状態を汲む。OS リピートは chord を壊すため破棄。
+        let engine = null;         // InputEngine | null (null = 内蔵ローマ字リゾルバ)
+        let engineKeyOf = null;    // (tap) => KeyEvent | null (KeymapEngine.keyEventFromBrowser)
+
+        // エンジンの現状態を fep 表示/変換へ反映。onStateChange (chord 窓満了) と各打鍵後に呼ぶ。
+        function pumpEngine() {
+            if (!engine || segs) return;                 // Phase 2 中は反映しない
+            const confirmed = engine.takeConfirmedText();
+            if (confirmed) {
+                if (engine.getState().inputMode === 'english') {
+                    cb.commit(confirmed);                // 英字モードの確定は Mozc を通さず直接注入
+                    return;
+                }
+                kana += confirmed; pend = '';            // 確定かな → fep の変換前バッファへ
+                startConvert();                          // → Mozc → segs (Phase 2)
+                return;
+            }
+            const st = engine.getState();
+            if (st.isComposing) {
+                cb.show([{ text: st.composingKana + st.pendingDisplay, kind: 'yomi' }]);
+            } else if (!(kana || pend)) {
+                cb.hide();
+            }
+        }
+
+        // Phase 2 (Mozc 候補表示中) のキー操作。内蔵経路の segs 分岐と同義。engine 経路は取消を
+        // 全クリアに倒す (よみを engine と共有しないため、部分取消の中間状態を作らない)。
+        function navCandidates(tap) {
+            const k = tap.key;
+            if (k === 'Enter')     { commit(joined()); return true; }
+            if (k === 'Escape' || k === 'Backspace') { clear(); engine.reset(); cb.hide(); return true; }
+            if (k === ' ')         { const s = segs[focus]; s.idx = (s.idx + 1) % s.candidates.length; render(); return true; }
+            if (k === 'ArrowLeft' || k === 'ArrowRight') {
+                if (segs.length > 1) focus = (focus + (k === 'ArrowRight' ? 1 : segs.length - 1)) % segs.length;
+                render(); return true;
+            }
+            if (k === 'ArrowUp' || k === 'ArrowDown') {
+                const s = segs[focus]; s.idx = (s.idx + (k === 'ArrowDown' ? 1 : s.candidates.length - 1)) % s.candidates.length;
+                render(); return true;
+            }
+            commit(joined());          // その他キー = 現候補を確定してから…
+            return engineDown(tap);    // …その打鍵で新しい合成を始める
+        }
+
+        // engine 経路の keydown。true = 飲んだ (ゲストへ送らない・bridge が preventDefault)。
+        function engineDown(tap) {
+            if (segs) return navCandidates(tap);                        // Phase 2
+            if (tap.ctrlKey || tap.altKey || tap.metaKey) return false; // Ctrl 等コンボは透過
+            if (tap.repeat) return true;                               // OS リピート破棄 (chord/SandS 保護)
+            const composingNow = engine.getState().isComposing;
+            // 編集/移動/確定の実キーは二重経路: composing 空ならゲストへ実キー (PC-98 カーソル/改行)。
+            if (!composingNow && HOST_NAV_KEYS.has(tap.code)) return false;
+            const kev = engineKeyOf ? engineKeyOf(tap) : null;
+            if (!kev) return false;                                    // HID 変換表外 → ゲストへ透過
+            engine.processKey(kev);
+            pumpEngine();
+            return true;
+        }
+
+        // engine 経路の keyup。SandS の単打 convert はここ (processKeyUp) で発火する。
+        function engineUp(tap) {
+            if (tap.ctrlKey || tap.altKey || tap.metaKey) return false;
+            const kev = engineKeyOf ? engineKeyOf(tap) : null;
+            if (kev) { engine.processKeyUp(kev); pumpEngine(); }
+            return false;   // keyup は消費表明不要 (飲んだ keydown はゲストの pressed に未登録)
+        }
+
         // keydown 1 個を消費する。戻り値 true = FEP が飲んだ (ゲストへ送らない)。
         // e は KeyboardEvent 互換 ({key, ctrlKey, altKey, metaKey} を読む)。
         function feed(e) {
             if (!active) return false;
+            if (engine) return engineDown(e);                       // 新配列: Phase 1 を engine へ委譲
             if (e.ctrlKey || e.altKey || e.metaKey) return false;   // 修飾コンボは常に透過
             const k = e.key;
 
@@ -263,7 +343,19 @@
             },
             toggle() { return this.setActive(!active); },
             feed,
-            reset() { clear(); },   // 表示は呼び元が消す (リセット時等)
+            // keyup を消費する。engine (新配列) 経路では processKeyUp へ配線し、SandS の単打 convert が
+            // ここで発火する (keyup 必須 — docs/keymap-engine-embedding §5.1)。内蔵ローマ字経路は
+            // keyup を使わないので false。
+            feedUp(e) { return engine ? engineUp(e) : false; },
+            // 新配列エンジンを注入 (bridge が InputEngine と keyEventFromBrowser を渡す)。null = 内蔵。
+            setEngine(eng, keyOf) {
+                if (engine && engine !== eng) { try { engine.reset(); } catch (_) {} }
+                clear(); cb.hide();
+                engine = eng || null;
+                engineKeyOf = keyOf || null;
+            },
+            pumpEngine,             // engine.onStateChange (chord 窓満了) から呼ぶ
+            reset() { clear(); if (engine) { try { engine.reset(); } catch (_) {} } },
         };
     }
 

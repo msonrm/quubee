@@ -213,6 +213,24 @@ PC-98 のフリーソフト/同人 CG 文化で標準的に使われた 2 大画
 
 ---
 
+## キー配列エンジン — `web/assets/keymap-engine.js` + `web/assets/keymaps/*.json`
+
+新配列 (薙刀式 / NICOLA / 月配列 2-263 / AZIK / Colemak ローマ字 / 標準ローマ字、JIS/US 分離) の
+物理キー入力 → かな解決を担う **KeymapEngine**。HLE FEP のかな入力前段として組み込む
+(かな漢字変換は従来どおりホスト側 Mozc-Wasm が担当)。
+
+- **出所**: `msonrm/logical-layout-labo` (Copyright © 2026 Narumi Masao、**MIT**)。同 web ワークスペースの
+  `web/src/engine` を rolldown で 1 ファイルに UMD バンドルした単体成果物 (`npm run build:engine` の出力
+  `web/public/engine/keymap-engine.js`)。**QuuBee は fork せず成果物 1 ファイルを vendoring** する
+  (mozc.data と同じ「差し替えで取り込む」方針)。エンジンの正しさの正典は labo の golden テスト。
+- **取り込みバージョン**: `KeymapEngine.version` = **1.0.0** / labo commit **f350dc9** / keymap-format **1.0**。
+  更新時は labo で `npm run build:engine` → `web/public/engine/keymap-engine.js` と `web/public/keymaps/*.json`
+  を本ディレクトリへコピーし、本項の version/commit を更新する。受け入れ検査 = `tools/keymap_engine_test.js`。
+- 依存: React/DOM/Next 非依存の純ロジック (ブラウザ `<script>` / Worker `importScripts` / node `require` 対応)。
+- 帰属: keymap-format / InputEngine © 2026 Narumi Masao (MIT)。QuuBee は改変せず同梱のみ。
+
+---
+
 ## QuuBee 自身
 
 QuuBee のブリッジ層・フロントエンド・ツール群（`native/` の `qb_*`/`bridge`/`dos_*`、`web/player/`、

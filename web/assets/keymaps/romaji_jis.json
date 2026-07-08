@@ -1,0 +1,16 @@
+{
+  "formatVersion": "1.0",
+  "name": "ローマ字(QWERTY JIS)",
+  "description": "標準ローマ字入力（JIS キーボード）",
+  "keyboardLayout": "jis",
+  "targetScript": "hiragana",
+  "behavior": {
+    "type": "sequential"
+  },
+  "inputBase": "romaji",
+  "modeKeys": {
+    "lang2": "switchToEnglish",
+    "lang1": "switchToJapanese",
+    "ctrl+space": "toggleInputMode"
+  }
+}

@@ -1,5 +1,32 @@
 # CHANGELOG
 
+## [HLE FEP — 新配列 (keymap-format) 統合: タップ正規化 + labo エンジン同梱 + 全6配列 + 設定 UI] — 2026-07-08
+
+labo (logical-layout-labo) の InputEngine を単体ビルド成果物として同梱し、HLE FEP のかな入力前段に
+統合。薙刀式 (SandS 同時打鍵) を先行実装し、全 6 配列 (薙刀式/NICOLA/月2-263/AZIK/Colemak/ローマ字、
+JIS/US 分離) へ横展開。かな漢字変換は従来どおり Mozc-Wasm。
+
+- **#9 タップ正規化** (web/player/bridge.js): window keydown/keyup を 1 か所で
+  `{down, code, key, repeat, timestamp, 修飾, event}` に正規化し、消費者ポリシーを明文化。
+  FEP 印字系 = リピート許可 / chord = down/up のみ・repeat 破棄 / ゲスト = 初回 down のみ。
+  fep へ keyup を新規供給 (`feedUp` seam)。**SandS の単打 convert は keyup 駆動なので keyup 必須**。
+- **エンジン同梱** (web/assets/keymap-engine.js + keymaps/*.json): labo の UMD 単体ビルド
+  (`KeymapEngine` v1.0.0、MIT、SHA f350dc9) を fork せず 1 ファイル vendoring (mozc.data と同じ
+  差し替えモデル)。出所・差し替え手順は CREDITS.md。受け入れ検査 = tools/keymap_engine_test.js (16/16)。
+- **アダプタ** (web/player/fep.js engine 経路): Phase 1 (キー→かな) を engine へ委譲、Phase 2
+  (Mozc 候補) は従来の segs 機構を流用。確定かな (`takeConfirmedText`) を fep→Mozc へ流す二段構え。
+  SandS は keyup + 窓満了 (`onStateChange`) で決まるので `engineUp`/`pumpEngine` の両方から汲む。
+  OS リピートは chord を壊すため破棄。編集系は二重経路 (composing 中=engine / 空=ゲスト実キー)。
+  **内蔵ローマ字経路はゼロ回帰** (fep_test/fep_mozc_test 変わらず green)。
+- **設定 UI**: Settings の Display グループに Kana Layout (6 配列) × Keyboard (JIS/US)。localStorage
+  永続、適用は `qbDebug.layout` 経由。FEP ON 中の配列変更はステータス行 `FEP: ON [配列名]` へ即反映。
+- **検証**: tools/fep_layout_test.js (薙刀式 SandS end-to-end + 全 6 配列、17/17)。
+  **薙刀式のブラウザ実機動作をユーザー確認済** (F→か、Space 単打で変換、Space+E レイヤ)。
+  設定 UI・他 5 配列・ステータス即時反映はブラウザ確認待ち。
+- **残 (別タスク・ユーザー判断で後回し)**: 薙刀式の編集系二重経路 (T/Y カーソル・U/BS)。web エンジンが
+  KeyAction を surface せず・カーソル模型を持たないため、labo フック追加か QuuBee 側 specialActions
+  翻訳が要る (詳細は下記メモ / project_fep_hle.md)。
+
 ## [HLE FEP — 未確定表示の行末折り返し (SNS 公開後の実機報告)] — 2026-07-08
 
 - 報告: 長い未確定文字列が画面右端で見えなくなり、確定して初めて全文が見える

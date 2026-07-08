@@ -719,6 +719,27 @@ https://github.com/msonrm/quubee</pre>
                 </div>
                 <div class="set-ctl"><select id="set-fepstyle"><option value="wx">WX</option><option value="atok">ATOK</option></select></div>
             </div>
+            <div class="set-row">
+                <div class="set-main">
+                    <div class="set-label">Kana Layout<span class="ja">かな配列</span></div>
+                    <div class="set-desc">日本語入力のかな配列。Romaji=内蔵。他は薙刀式/NICOLA/月/AZIK/Colemak<span class="en"> / Kana input layout for FEP</span></div>
+                </div>
+                <div class="set-ctl"><select id="set-kanalayout">
+                    <option value="builtin">Romaji</option>
+                    <option value="naginata">Naginata 薙刀式</option>
+                    <option value="nicola">NICOLA 親指</option>
+                    <option value="tsuki2-263">Tsuki 月2-263</option>
+                    <option value="azik">AZIK</option>
+                    <option value="romaji_colemak">Romaji (Colemak)</option>
+                </select></div>
+            </div>
+            <div class="set-row">
+                <div class="set-main">
+                    <div class="set-label">Keyboard<span class="ja">キーボード</span></div>
+                    <div class="set-desc">新配列の刻印基準 (Romaji 内蔵には非適用)<span class="en"> / Physical keyboard for kana layouts</span></div>
+                </div>
+                <div class="set-ctl"><select id="set-kanaregion"><option value="us">US</option><option value="jis">JIS</option></select></div>
+            </div>
         </div>
 
         <div class="settings-group">
@@ -786,6 +807,7 @@ https://github.com/msonrm/quubee</pre>
 <script src="player/magimage.js"></script>
 <script src="player/piimage.js"></script>
 <script src="player/pmdmeta.js"></script>
+<script src="assets/keymap-engine.js"></script>
 <script src="player/fep.js"></script>
 <script src="player/bridge.js"></script>
 </body>

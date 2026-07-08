@@ -2156,6 +2156,38 @@ async function makeWorkerEmu() {
         pressed.clear();
     }
 
+    // ---- キー入力タップの正規化 (2026-07-08、新配列 keymap-format 統合の前段) ----
+    // window の keydown/keyup を 1 か所でこの「タップ」に畳んでから各消費者へ配る。生イベントを
+    // 直に配ると消費者ごとに違うリピート方針が暗黙になりがちなので、方針をここへ集約して明文化する。
+    // タップは KeyboardEvent 互換のフィールド名を踏襲する ({key, code, ctrlKey, ...})。理由:
+    //   - fep.feed は {key, ctrlKey, altKey, metaKey} を読む (無改修でタップを渡せる)
+    //   - 将来の chord エンジン (labo KeymapEngine) の keyEventFromBrowser は {code, key, shiftKey,
+    //     ctrlKey, altKey, metaKey} を読む (無改修でタップを渡せる)
+    // これに統合フィールド down (keydown/keyup の別) と repeat/timestamp を足したもの。
+    //
+    // 消費者ポリシー (リピートの扱いが分水嶺):
+    //   - FEP 印字系 (fep.feed):   repeat 許可。長押しで「よみ削除/カーソル移動」が連射されるのは
+    //                              実 FEP と同じ体感。現状の暗黙挙動 (fep.feed が pressed 判定より
+    //                              上流にある = リピートが届く) をポリシーとして明示化したもの。
+    //   - chord エンジン (将来):   down/up のみ・repeat===true は無視。素通しすると processKey が
+    //                              再入して同時打鍵バッファを壊す (labo docs/keymap-engine-embedding
+    //                              §5.1)。タップは code/修飾を持つので keyEventFromBrowser(tap) が
+    //                              そのまま組める。keyup は fep.feedUp 経由で供給する (下記)。
+    //   - ゲスト (PC98_KEYMAP):    初回 down のみ (pressed Set で二重 down を落とす)。リピートは
+    //                              PC-98 側のタイプマチックに委ねる (実機同様)。
+    // timestamp: 現状どの消費者も未使用 (エンジンは内部 setTimeout で時間判定する — labo §5.1)。
+    //            合意済みのタップ形なので載せておく (将来の解析/ログ用)。
+    function normTap(e, down) {
+        return {
+            down,                         // true=keydown / false=keyup (生イベントに無い統合フィールド)
+            code: e.code, key: e.key,     // code=物理キー (chord/PC98_KEYMAP) / key=生成文字 (fep 印字)
+            repeat: !!e.repeat,           // OS オートリピート由来か (down のときだけ意味を持つ)
+            timestamp: e.timeStamp,
+            ctrlKey: e.ctrlKey, shiftKey: e.shiftKey, altKey: e.altKey, metaKey: e.metaKey,
+            event: e,                     // preventDefault / target が要る消費者用の逃げ道
+        };
+    }
+
     // ---- 進捗トースト (大物アセット取得の可視化) ----
     // FEP 辞書 (~19MB) / MIDI soundfont (~32MB) の初回フェッチをゲーム画面上のオーバーレイで
     // 表示する。run-status の 12px 文字では見落とすという実機フィードバック (2026-07-08) 起点。
@@ -2280,17 +2312,50 @@ async function makeWorkerEmu() {
     // FEP の ON/OFF を一元化: ボタン / Ctrl+Space / Ctrl+J / qbDebug.fep が全部ここを通る。
     // 初回 ON で Mozc の遅延ロードを起動する (完了までの変換はフォールバックで動く)。
     const fepToggleEl = document.getElementById('fep-toggle');
+    // FEP ステータス行の文言 (ON 時は現配列名込み)。トグルと配列変更の両方から使う。
+    function fepStatusText() {
+        return (fep && fep.active)
+            ? `FEP: ON [${fepLayoutName}] — Space=変換 / ←→=文節 / Enter=確定 / Esc=取消`
+            : 'FEP: OFF';
+    }
+    // 配列変更を即ステータスへ反映 (FEP ON のときだけ。OFF 中は共有ステータス行を汚さない)。
+    function refreshFepStatus() { if (fep && fep.active) runStatusEl.textContent = fepStatusText(); }
     function setFepActive(on) {
         if (!fep) return false;
         const now = fep.setActive(on);
         fepToggleEl.classList.toggle('on', now);
-        runStatusEl.textContent = now
-            ? 'FEP: ON — ローマ字入力 (Space=変換 / ←→=文節 / Enter=確定 / Esc=取消)'
-            : 'FEP: OFF';
+        runStatusEl.textContent = fepStatusText();
         if (now) ensureMozcLoaded();
         return now;
     }
     fepToggleEl.addEventListener('click', () => { setFepActive(!fep.active); });
+
+    // ---- 新配列 (keymap-format) エンジンの装着 ----
+    // labo の KeymapEngine (web/assets/keymap-engine.js、<script> で window.KeymapEngine) を
+    // fep に注入する。null / 'romaji' で内蔵ローマ字リゾルバへ戻す。エンジンは「キー→かな」だけを
+    // 担い、確定かなは従来どおり fep→Mozc へ流れる (二段構え)。chord (naginata/nicola) の窓満了は
+    // engine.onStateChange → fep.pumpEngine で汲む。定義 JSON は web/assets/keymaps/<name>.json。
+    let fepLayoutName = 'romaji';   // 既定 = 内蔵ローマ字 (ゼロ回帰)
+    async function setFepLayout(name) {
+        if (!fep) return 'no-fep';
+        const KE = window.KeymapEngine;
+        if (!name || name === 'romaji' || name === 'builtin') {
+            fep.setEngine(null, null); fepLayoutName = 'romaji'; refreshFepStatus();
+            return 'layout=romaji (内蔵リゾルバ)';
+        }
+        if (!KE) return 'KeymapEngine 未ロード (assets/keymap-engine.js)';
+        try {
+            const raw = await (await fetch(`assets/keymaps/${name}.json`)).json();
+            const eng = new KE.InputEngine(KE.decodeKeymap(raw));
+            eng.onStateChange = () => { if (fep) fep.pumpEngine(); };
+            fep.setEngine(eng, (tap) => KE.keyEventFromBrowser(tap));
+            fepLayoutName = name; refreshFepStatus();
+            return `layout=${name} (chord=${eng.isChord}) engine=${KE.version}`;
+        } catch (e) {
+            fep.setEngine(null, null); fepLayoutName = 'romaji'; refreshFepStatus();
+            return `layout ロード失敗 (${name}): ${e.message} — 内蔵へフォールバック`;
+        }
+    }
 
     const inField = (e) => e.target && (e.target.tagName === 'INPUT' ||
         e.target.tagName === 'TEXTAREA' || e.target.isContentEditable);
@@ -2319,7 +2384,11 @@ async function makeWorkerEmu() {
             setFepActive(!fep.active);
             return;
         }
-        if (fep && fep.feed(e)) { e.preventDefault(); return; }
+        // ここから下はキー入力タップに正規化して各消費者へ配る (方針は上の normTap 参照)。
+        const tap = normTap(e, true);
+        // FEP 印字系: repeat 許可 (長押しでよみ削除/カーソル連射 = 実 FEP 同等)。fep はここより
+        // 上流なので、下の pressed によるリピート遮断を受けない = 意図的にリピートが届く。
+        if (fep && fep.feed(tap)) { e.preventDefault(); return; }
         // Ctrl/Meta/Alt + 他キーのブラウザショートカット (Ctrl+R / Ctrl+W / Ctrl+Shift+I 等)
         // は横取りしない。ただし CTRL キー単体は PC-98 の CTRL(0x74) としてゲームに送る
         // (発射/ダッシュに CTRL を使うゲーム向け)。これを通さないと PC98_KEYMAP の
@@ -2331,12 +2400,14 @@ async function makeWorkerEmu() {
         // keyup 側は pressed セット基準なので押しっぱなしにはならない。
         const isCtrlC = (e.code === 'KeyC' && e.ctrlKey && !e.metaKey && !e.altKey);
         if (!isCtrlKey && !isCtrlC && (e.ctrlKey || e.metaKey || e.altKey)) return;
-        const code = PC98_KEYMAP[e.code];
+        const code = PC98_KEYMAP[tap.code];
         if (code === undefined) return;
         // 透過時 (BS/DEL は KEY_PREVENT_DEFAULT 外) も欄の既定動作を抑止してゲストへ回す
-        if (passThru || isCtrlC || KEY_PREVENT_DEFAULT.has(e.code)) e.preventDefault();
-        if (pressed.has(e.code)) return;     // OS のオートリピートは無視
-        pressed.add(e.code);
+        if (passThru || isCtrlC || KEY_PREVENT_DEFAULT.has(tap.code)) e.preventDefault();
+        // ゲスト: 初回 down のみ。OS オートリピート (tap.repeat===true) は pressed により
+        // ここで落ち、リピートは PC-98 側のタイプマチックに委ねる (実機同様)。
+        if (pressed.has(tap.code)) return;
+        pressed.add(tap.code);
         emu.keyDown(code);
     });
 
@@ -2347,11 +2418,16 @@ async function makeWorkerEmu() {
         if (!viewerModalEl.hidden) return;   // ビューア表示中はゲームへ送らない
         if (!playerModalEl.hidden) return;   // 音楽ポップアップ表示中も同様
         if (!settingsModalEl.hidden) return; // 設定パネル表示中も同様
-        const code = PC98_KEYMAP[e.code];
+        const tap = normTap(e, false);
+        // FEP/chord へ keyup を供給する (chord のシフトホールド/ロールオーバー判定の前提)。
+        // 現行の逐次かな入力は keyup を使わないので feedUp は false を返し、ゲスト処理へ素通しする。
+        // labo エンジン統合後は fep が消費した keyup をここで飲む (true → ゲストへ送らない)。
+        if (fep && fep.feedUp(tap)) return;
+        const code = PC98_KEYMAP[tap.code];
         if (code === undefined) return;
-        if (KEY_PREVENT_DEFAULT.has(e.code)) e.preventDefault();
-        if (!pressed.has(e.code)) return;
-        pressed.delete(e.code);
+        if (KEY_PREVENT_DEFAULT.has(tap.code)) e.preventDefault();
+        if (!pressed.has(tap.code)) return;
+        pressed.delete(tap.code);
         emu.keyUp(code);
     });
 
@@ -2548,6 +2624,10 @@ async function makeWorkerEmu() {
         // 非注目素。次の表示更新 (キー 1 打) から反映。実画面で見比べて既定を決める (値は仮置き)。
         fepstyle: (name) => { if (name && FEP_STYLES[name]) fepStyleName = name;
             return `fepstyle=${fepStyleName} (wx=下線系/atok=反転系) — 次の表示更新から反映`; },
+        // 新配列 (keymap-format) の選択。layout('naginata_us') 等で切替、layout('romaji') で内蔵へ戻す。
+        // 定義 = web/assets/keymaps/<name>.json (naginata/nicola/tsuki2-263/azik/romaji_colemak/romaji ×
+        // _jis/_us)。エンジンは labo の KeymapEngine。FEP を ON にして打つと反映される。Promise を返す。
+        layout: (name) => setFepLayout(name),
         // Mozc worker の健全性診断。restarts が増えていたら watchdog がデッドロックを回収した証拠
         // (変換が 4 秒無応答 → worker 再起動。体感は「一拍おいてカナ候補 → 次からまた漢字」)。
         mozc: () => ({ state: mozcState, restarts: mozcRestarts, pending: mozcPending.size }),
@@ -2974,10 +3054,17 @@ async function makeWorkerEmu() {
         // 表示用の既定値 (getter の無い設定の初期表示に使う。native の実既定と一致させること)。
         const DEFAULTS = { fmgen: 1, beepgain: 3.83, chibioto: 1, midifx: 1, multiple: 20,
                            lines30: 0, itfpost: 0, y2k: 1, mouse33: 'ms', verbose: 0, theme: 'dark',
-                           fepstyle: 'wx' };
+                           fepstyle: 'wx', kanalayout: 'builtin', kanaregion: 'us' };
         const get = (k) => (k in settings ? settings[k] : DEFAULTS[k]);
 
         const applyTheme = (t) => { document.documentElement.dataset.theme = (t === 'light') ? 'light' : ''; };
+        // かな配列 (base) × キーボード (jis/us) → 配列名を組み立てて FEP へ適用。base='builtin' は
+        // 内蔵ローマ字リゾルバ (region 非適用)。適用は qbDebug.layout 経由 (パネル規約: qbDebug.* 経由)。
+        const applyKanaLayout = () => {
+            const base = get('kanalayout');
+            const name = (!base || base === 'builtin') ? 'romaji' : `${base}_${get('kanaregion')}`;
+            return qd.layout(name);
+        };
         // Gamepad 割当の適用 (localStorage → padDir/padBtnMap)。pollGamepads がこれを live 参照する。
         const applyPad = (p) => {
             if (!p || typeof p !== 'object') return;
@@ -3001,6 +3088,8 @@ async function makeWorkerEmu() {
             theme:    (v) => applyTheme(v),
             pad:      (v) => applyPad(v),
             fepstyle: (v) => qd.fepstyle(v),
+            kanalayout: () => applyKanaLayout(),   // base/region の両方が applyKanaLayout を呼ぶ
+            kanaregion: () => applyKanaLayout(),
         };
         const applyOne = (k, v) => { const f = APPLY[k]; return f ? Promise.resolve().then(() => f(v)).catch(() => {}) : Promise.resolve(); };
 
@@ -3033,6 +3122,8 @@ async function makeWorkerEmu() {
             el('set-verbose').checked = !!get('verbose');
             el('set-theme').checked = (get('theme') === 'light');
             el('set-fepstyle').value = get('fepstyle');
+            el('set-kanalayout').value = get('kanalayout');
+            el('set-kanaregion').value = get('kanaregion');
             syncPadUI();
         }
 
@@ -3049,6 +3140,8 @@ async function makeWorkerEmu() {
         el('set-verbose').addEventListener('change', (e) => change('verbose', e.target.checked ? 1 : 0));
         el('set-theme').addEventListener('change', (e) => change('theme', e.target.checked ? 'light' : 'dark'));
         el('set-fepstyle').addEventListener('change', (e) => change('fepstyle', e.target.value));
+        el('set-kanalayout').addEventListener('change', (e) => change('kanalayout', e.target.value));
+        el('set-kanaregion').addEventListener('change', (e) => change('kanaregion', e.target.value));
 
         // ---- Gamepad グループ (方向モード切替 + ボタン→キー割当 + 押下 live 表示) ----
         const rowsEl = el('pad-rows');
