@@ -171,6 +171,57 @@ function sjisKu(sh, sl) {
     fepHide();
     ok(diffCells(base, snapshot()).length === 0, 'hide で完全復元 (base と 0 差分)');
 
+    // ---- ③b 折り返し: 行末を越える長さは次行へ (M2 追補、実 FEP と同じ) ----
+    {
+        // "あ" ×50 = 100 セル。caret (row1 col0) から row1 全体 + row2 の 20 セルへ折り返す
+        const many = [];
+        for (let i = 0; i < 50; i++) many.push(0x82, 0xA0);
+        const n = fepShow(Uint8Array.from(many), 0xE9);
+        ok(n === 100, `wrap: 50 全角 = 100 セル (got ${n})`);
+        const sw = snapshot();
+        const dw = diffCells(base, sw);
+        ok(dw.length === 100 && dw[0] + 99 === dw[99],
+           `wrap: 線形 100 セル連続 = 2 行にまたがる (${dw[0]}..${dw[dw.length - 1]})`);
+        ok(Math.floor(dw[99] / COLS) === Math.floor(dw[0] / COLS) + 1, 'wrap: 2 行目に到達');
+        fepHide();
+        ok(diffCells(base, snapshot()).length === 0, 'wrap: hide で複数行とも完全復元');
+    }
+    // ---- ③c 行末またぎ全角: 79 桁目に残った全角は空白パディングして次行頭へ ----
+    {
+        const bytes = [];
+        for (let i = 0; i < 79; i++) bytes.push(0x61);   // 'a' ×79 → caret 行の残り 1 桁
+        bytes.push(0x82, 0xA9);                          // か → またぐので pad + 次行頭
+        const n = fepShow(Uint8Array.from(bytes), 0xE9);
+        ok(n === 82, `straddle: 79 ANK + pad + 全角 = 82 セル (got ${n})`);
+        const ss = snapshot();
+        const ds = diffCells(base, ss);
+        const padCell = ds[79];   // 80 番目の変化セル = 行末のパディング空白
+        ok(ss.code[padCell * 2] === 0x20 && ss.attr[padCell * 2] === 0xE9,
+           'straddle: パディングが同属性の空白');
+        ok(ss.code[ds[80] * 2] === KA[0] && (ds[80] % COLS) === 0,
+           'straddle: 全角が次行頭から始まる');
+        fepHide();
+        ok(diffCells(base, snapshot()).length === 0, 'straddle: hide で完全復元');
+    }
+    // ---- ③d 末尾優先: 画面末尾を越える超長文は先頭を削って末尾を表示 ----
+    {
+        const huge = [];
+        for (let i = 0; i < 1200; i++) huge.push(0x82, 0xA0);   // あ ×1199 + 最後に か
+        huge[huge.length - 2] = 0x82; huge[huge.length - 1] = 0xA9;
+        const rows = 25;
+        const n = fepShow(Uint8Array.from(huge), 0xE9);
+        const sT = snapshot();
+        const dT = diffCells(base, sT);
+        ok(n <= rows * COLS - 80 && n === dT.length,
+           `tail: 画面内に収まるセル数に切り詰め (got ${n})`);
+        const lastCell = dT[dT.length - 1];
+        ok(lastCell === rows * COLS - 1, `tail: 画面最終セルまで使用 (got ${lastCell})`);
+        ok(sT.code[(lastCell - 1) * 2] === KA[0] && sT.code[lastCell * 2] === KA[0],
+           'tail: 末尾の「か」が見えている (先頭が削られた)');
+        fepHide();
+        ok(diffCells(base, snapshot()).length === 0, 'tail: hide で完全復元');
+    }
+
     // ---- ④ 所有権: 表示中にアプリが overlay セルを上書き → hide はそのセルに触らない ----
     fepShow(Uint8Array.from([0x82, 0xA9, 0x61]), 0xE9);
     const d4 = diffCells(base, snapshot());
