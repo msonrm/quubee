@@ -1,5 +1,37 @@
 # QB 作業状況
 
+## 🈁 HLE FEP — M2 完了・次は新配列 (keymap-format) 統合 (2026-07-07〜08)
+
+**完了 (全部デプロイ済み・SNS 告知済み)**: M1 = 未確定文字列のゲスト画面内インライン表示
+(GDC カーソル基準・セル所有権検証復元・VZ 実地 29 チェック)。M2 = Mozc-Wasm 統合 (辞書 19MB
+遅延 fetch・専用 Worker・watchdog 自己回復・複数文節・句読点即確定・行末折り返し・
+タイムゾーン注入・「あ」ボタン + Ctrl+J・進捗トースト・設定 FEP Style)。
+経緯の詳細 = CHANGELOG 2026-07-07/08、知見の正典 = memory/project_fep_hle.md、
+Mozc ビルドレシピ = `~/development/mozc-wasm-build/README.md` (**ラッパー -DNDEBUG 必須の罠**)。
+回帰 = `tools/fep_test.js` (VZ 実地) + `tools/fep_mozc_test.js` (状態機械 + 実 Mozc E2E)。
+
+**進行中: 新配列 (薙刀式/NICOLA/月配列…) 統合 — labo と分業**
+- labo 側 (msonrm/logical-layout-labo、ユーザーが別セッションで並行作業中): TS 製 InputEngine の
+  単体 UMD ビルド出口 + chord golden 増強 + 仕様確認 5 問への回答。
+  依頼書 = **docs/keymap_engine_handoff.md** (契約の正典)
+- QuuBee 側の先行タスク (labo の回答に依存しない):
+  **キー入力タップの正規化** — window keydown/keyup を 1 箇所で {code, key, down, repeat,
+  timestamp} に正規化し、消費者ポリシーを明文化して配る (FEP 印字系 = リピート許可 /
+  chord エンジン = down/up のみ / ゲスト = 現状維持)。現状は fep に keydown しか届かず
+  (keyup 配線なし)、OS リピートが素通し、ゲストは pressed Set でリピート遮断。
+  入口 = web/player/bridge.js の window keydown/keyup リスナー (FEP フック・pressed Set・
+  PC98_KEYMAP が絡む一帯)
+- 統合フェーズ (labo 成果物が来たら): エンジン vendoring (web/assets/ に同梱) + アダプタ
+  (EngineState → fep.js composition/Mozc/注入) + 編集系アクション二重経路 (composing 中 =
+  バッファ操作 / 空 = PC-98 実キー注入 — 薙刀式のカーソル/BS/言語切替) + 設定 UI (配列×JIS/US)
+  + labo golden 流用の fep_layout_test
+
+**FEP の残キュー (急がない)**: 候補一覧窓 (退避は複数行対応済みで拡張容易) / 文節伸縮
+Shift+←→ (ResizeSegment、ラッパー API 追加要) / FEP 流派 API (INT 2Fh / MS$KANJI) の需要
+実測 probe / スタイル属性値の本決め (wx/atok 仮置きのまま、ユーザー「いまは色はこれでいい」) /
+カタカナ語→英語変換 (実測で辞書未収録と確認済み。やるならユーザー辞書 or JS 側候補追記、
+鍵は対訳データのライセンス — ユーザー「いまは不要」)
+
 ## 📝 NP2kai へ PR 素案: LIO GCIRCLE 円弧+楕円 (2026-07-04 実装・デプロイ済) — 次セッションで整える
 
 QuuBee 側は実装・回帰・デプロイ済 (patch `tools/np2kai_patches/05_lio_gcircle_arc.patch` /
