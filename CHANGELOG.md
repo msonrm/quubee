@@ -1,5 +1,28 @@
 # CHANGELOG
 
+## [起動 .bat の完走を UI に伝える (batch_done) — 「running のまま」を解消] — 2026-07-09
+
+**症状**: プログラムが正常終了 (exit 0) しても、UI が `run.bat (…): running` のまま固まる
+(Suika3 のデモが 2 場面で終わっても running のままだった)。
+
+**真因はバグではなく仕様の帰結**: `tools/dos_loader/shell.asm` の `.done` は、文列を消化し尽くしても
+**AH=4Ch を出さず `sti; hlt` の `.idle` で回り続ける**。4Ch 後の HLE アイドルは IF=0 になり、常駐音源
+ドライバ (PMD86 等) の ISR が二度と配送されず曲が最初の 1 音で止まるため — 実測で確定済の設計。
+その結果 `np2kai_dos_get_exit` は永遠に立たず、それだけを見ていた UI は「running」から抜けられない。
+
+**修正**: ホスト側の文インタプリタだけが「列が尽きた」瞬間 (`qb_dos_batch_next_hook` が `AX=0` を
+返す地点) を知っている。そこに `g_batch_done` を立てて `np2kai_dos_batch_done()` で公開し、
+`pollDosExit` が拾って**表示だけ**「finished」へ切り替える (Run を再有効化。**マシンは止めない** ので
+常駐 TSR の演奏は続き、Stop ボタンも出したままにする)。音楽セッション中は hook が `AX=2` の待機を
+返し続けるので旗は立たない。旗は `qb_dos_reset_state` (= stage 毎の新セッション) でクリア。
+
+- C: `native/dos_loader.{c,h}` (`g_batch_done` / `qb_dos_batch_done`)、`native/bridge.{c,h}` +
+  CMakeLists export (`np2kai_dos_batch_done`)。
+- JS: `web/player/bridge.js` — emu ファサードに `batchDone()` (ローカル/worker 両方)、
+  `pollDosExit(onExit, onBatchDone)` に完走コールバックを追加。
+- 回帰: `tools/batch_done_test.js` (stage 直後=0 / 子 COM 終了後=1 / get_exit は立たない /
+  再 stage で 0)。batch_test 21 / batscript_test 55 / exec_psp_test / xms_test 全 green。
+
 ## [XMS の 15〜16MB ホール対応 — DOS エクステンダの「Out of memory」を根治 / 音の途切れの真因を特定] — 2026-07-09
 
 Suika3 (Awe Morris 氏、zlib) が数枚目の画像で `Out of memory. Cannot load an image "..."` で落ちる件を根治。

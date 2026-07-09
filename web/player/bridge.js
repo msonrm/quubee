@@ -266,6 +266,7 @@ async function makeWorkerEmu() {
         async stageMusic()           { return (await call({ type: 'stageMusic' })).r; },
         async musicPlay(song)        { return (await call({ type: 'musicPlay', song })).r; },
         async getExit()              { return await call({ type: 'getExit' }); },
+        async batchDone()            { return !!(await call({ type: 'call', fn: 'np2kai_dos_batch_done', ret: 'number', argTypes: [], args: [] })).r; },
         keyDown(code)        { worker.postMessage({ type: 'key', down: 1, code }); },
         keyUp(code)          { worker.postMessage({ type: 'key', down: 0, code }); },
         injectText(bytes)    { worker.postMessage({ type: 'injectText', bytes }); },   // SJIS バイト列 (ホスト IME)
@@ -1294,6 +1295,8 @@ async function makeWorkerEmu() {
     let hideEngineFiles  = false;   // 一覧から PMD86.COM/PMP.COM を隠すか (音楽セッション中だけ true)
     // np2kai_dos_get_exit(int* code) — JS では HEAP に書き込み番地を渡す
     const dosGetExitFn = M.cwrap('np2kai_dos_get_exit', 'number', ['number']);
+    // 起動 .bat の完走判定。シェルは常駐 TSR のため 4Ch を出さずアイドルするので get_exit は立たない。
+    const dosBatchDoneFn = M.cwrap('np2kai_dos_batch_done', 'number', []);
 
     // ---- emu ファサード (継ぎ目): closure はエミュレータをこの窓口だけで触る ----
     // ローカル版 (= ?worker=1 でない従来パス) は M を直接ラップ。後で worker 版に差し替えられるよう
@@ -1362,6 +1365,7 @@ async function makeWorkerEmu() {
             const code = M.getValue(p, 'i32'); M._free(p);
             return { exited: !!exited, code };
         },
+        async batchDone() { return !!dosBatchDoneFn(); },
         // 入力 (fire-and-forget。戻り値を使わないので await 不要)。handle はここで前置。
         keyDown(code)         { keyDown(handle, code); },
         keyUp(code)           { keyUp(handle, code); },
@@ -1563,10 +1567,10 @@ async function makeWorkerEmu() {
 
     // 現在 polling 中のハンドル (Stop ボタンで強制中断する用)。
     let currentPoll = null;   // 実行中の poll: { tick, busy } | null
-    function pollDosExit(onExit) {
+    function pollDosExit(onExit, onBatchDone) {
         // 万一前の poll が生きていたら確実に止める (再入時のタイマリーク防止)。
         if (currentPoll) { clearInterval(currentPoll.tick); currentPoll = null; }
-        const self = { tick: 0, busy: false };
+        const self = { tick: 0, busy: false, doneSeen: false };
         function stopPolling(code) {
             if (currentPoll !== self) return;  // 既に停止済 (二重停止防止)
             clearInterval(self.tick);
@@ -1575,11 +1579,23 @@ async function makeWorkerEmu() {
         }
         // exit code は emu.getExit() で取得 (ローカルは HEAP、worker はメッセージ往復)。
         // busy で多重往復を防ぐ。100ms 間隔。
+        //
+        // 起動 .bat が完走してもシェルは AH=4Ch を出さず .idle (sti+hlt) で回り続ける
+        // (常駐音源ドライバの ISR を生かすため — shell.asm)。よって get_exit だけ見ていると
+        // 「running」のまま固まる。batchDone() で完走を拾い、表示だけ切り替える (マシンは止めない)。
         self.tick = setInterval(async () => {
             if (self.busy) return;
             self.busy = true;
-            try { const r = await emu.getExit(); if (currentPoll === self && r.exited) stopPolling(r.code); }
-            finally { self.busy = false; }
+            try {
+                const r = await emu.getExit();
+                if (currentPoll !== self) return;
+                if (r.exited) { stopPolling(r.code); return; }
+                if (!self.doneSeen && onBatchDone && await emu.batchDone()) {
+                    if (currentPoll !== self) return;
+                    self.doneSeen = true;
+                    await onBatchDone();   // poll は続ける (Stop / 常駐 TSR の終了を拾うため)
+                }
+            } finally { self.busy = false; }
         }, 100);
         currentPoll = self;
         // Stop ボタンが叩く用のフックを保存
@@ -1675,6 +1691,14 @@ async function makeWorkerEmu() {
                 : `${label}: exited (code ${code})`;
             runButton.disabled = false;
             stopButton.hidden = true;
+        }, async () => {
+            // 起動 .bat のコマンドが全部終わった。ただしシェルは AH=4Ch を出さず .idle で回り続ける
+            // (常駐音源ドライバの ISR を生かすため)。マシンは止めず、表示だけ「完了」にして Run を
+            // 押せるようにする。Stop は出したままにする — 常駐演奏を止める手段が要るので。
+            stopRunSync();
+            await syncRunDir();         // 最後の書き込みを一覧へ取り込む
+            runStatusEl.textContent = `${label}: finished`;
+            runButton.disabled = false;
         });
     }
 

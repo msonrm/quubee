@@ -250,6 +250,10 @@ void qb_dos_memprobe_note_emm_open(void);
  * `code_out` が non-NULL なら exit code を書き込む。 */
 int qb_dos_get_exit(int *code_out);
 
+/* 起動 .bat の文列を消化し尽くしたか (1 = 完走)。シェルは常駐 TSR のため 4Ch を出さず
+ * .idle で回り続けるので、qb_dos_get_exit は立たない。UI の「完了」表示用。 */
+int qb_dos_batch_done(void);
+
 /* 1 = image が CPU で実行中 (loader-start hook 発火後、exit 前)。0 = それ以外。 */
 int qb_dos_is_running(void);
 

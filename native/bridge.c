@@ -772,6 +772,14 @@ int np2kai_dos_get_exit(int *code_out) {
 	return qb_dos_get_exit(code_out);
 }
 
+/* 起動 .bat が完走したか。シェル (shell.asm .done) は常駐音源ドライバの ISR を生かすため
+ * AH=4Ch を出さず sti+hlt で回り続けるので、np2kai_dos_get_exit は永遠に立たない。
+ * ホスト側の文インタプリタだけが「列が尽きた」瞬間を知っているので、それを公開する。
+ * UI はこれを見て表示だけ「完了」に切り替える (マシンは止めない = 常駐演奏は続く)。 */
+int np2kai_dos_batch_done(void) {
+	return qb_dos_batch_done();
+}
+
 /* 音楽セッション (PMD .M を再起動なしで次々演奏): stage_music で PMD86 常駐セッションを仕込み、
  * loader.d88 で 1 度起動 → 以後 music_play(song) で曲だけ差し替える。 */
 int np2kai_dos_stage_music(void) {

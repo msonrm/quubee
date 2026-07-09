@@ -236,6 +236,7 @@ set(EXPORTED_FUNCTIONS
     _np2kai_set_y2k_clamp
     _np2kai_get_y2k_clamp
     _np2kai_dos_get_exit
+    _np2kai_dos_batch_done
     _malloc
     _free
 )

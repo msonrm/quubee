@@ -243,6 +243,11 @@ int np2kai_dos_stage_script(const char *script, int len, const char *name);
 __attribute__((visibility("default")))
 int np2kai_dos_get_exit(int *code_out);
 
+/* 起動 .bat の文列を消化し尽くしたか (1 = 完走)。シェルは常駐 TSR のため 4Ch を出さず
+ * アイドルし続けるので get_exit は立たない。UI の表示切替 (running → finished) 用。 */
+__attribute__((visibility("default")))
+int np2kai_dos_batch_done(void);
+
 /* 音楽セッション (PMD .M を再起動なしで次々演奏)。stage_music で PMD86 常駐セッションを stage し、
  * loader.d88 で 1 度起動 → 以後 music_play(song) で曲だけ差し替える (別 DOS セッション=reset 不要)。
  * song は /run 相対の DOS パス。戻り値 0=OK / <0=エラー。 */

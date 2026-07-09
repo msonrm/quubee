@@ -649,6 +649,11 @@ static qb_batch_stmt_t g_batch_stmts[QB_BATCH_MAX_STMTS];
 static int  g_batch_nstmts = 0;
 static int  g_batch_pc     = 0;
 static int  g_batch_active = 0;    /* シェル stage 済 (qb_dos_reset_state でクリア) */
+/* 文列を消化し尽くした = 起動 .bat のコマンドが全部終わった。シェルは 4Ch を出さず .idle で
+ * sti+hlt し続ける (常駐音源ドライバの ISR を生かすため — shell.asm .done のコメント参照) ので、
+ * np2kai_dos_get_exit は永遠に立たない。UI が「running のまま」にならないよう、ホスト側だけが
+ * 知っているこの瞬間を旗にして公開する。マシンは止めない (常駐 TSR の演奏は続く)。 */
+static int  g_batch_done   = 0;
 static char g_batch_echo[QB_BATCH_ECHO_POOL];
 
 /* ---- 音楽セッション (PMD .M を再起動なしで次々演奏する常駐セッション) ----
@@ -1004,9 +1009,16 @@ int qb_dos_batch_next_hook(void) {
         return 1;
     }
 
-    CPU_AX = 0;   /* 列が尽きた → シェルが AH=4Ch でセッション終了 */
+    /* 列が尽きた。シェルは AH=4Ch を出さず .idle (sti+hlt) で常駐 TSR を生かしたまま回る。
+     * ここが「起動 .bat が完走した」と言い切れる唯一の地点なので、旗を立てて UI へ伝える。 */
+    g_batch_done = 1;
+    CPU_AX = 0;
     return 1;
 }
+
+/* 起動 .bat の文列を消化し尽くしたか (1 = 完走)。qb_dos_reset_state でクリア。
+ * 音楽セッション中 (g_music_active) は AX=2 の待機を返し続けるのでここは立たない。 */
+int qb_dos_batch_done(void) { return g_batch_done; }
 
 void qb_dos_reset_state(void) {
     g_run.running = 0;
@@ -1015,6 +1027,7 @@ void qb_dos_reset_state(void) {
     /* 新しい stage = 新しいセッション: 文インタプリタと errorlevel を初期化する。
      * (②/③ のシェル stage は stage_com 経由でここを通った後に active を立て直す) */
     g_batch_active = 0;
+    g_batch_done = 0;
     g_batch_pc = 0;
     g_last_exit_code = 0;
     g_last_exit_type = 0;
