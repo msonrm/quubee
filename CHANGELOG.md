@@ -1,5 +1,57 @@
 # CHANGELOG
 
+## [XMS の 15〜16MB ホール対応 — DOS エクステンダの「Out of memory」を根治 / 音の途切れの真因を特定] — 2026-07-09
+
+Suika3 (Awe Morris 氏、zlib) が数枚目の画像で `Out of memory. Cannot load an image "..."` で落ちる件を根治。
+あわせて PCM 音声の途切れの真因を計測で特定し、**従来の「デコード律速」という見立てを棄却**した。
+
+### XMS プールが 15〜16MB のホールを跨いでいた (根治・ブラウザ実機で確認済)
+
+- **真因**: PC-98 の物理 15MB〜16MB は RAM ではない。`i386c/cpumem.c` のマップどおり
+  `0xF00000-0xF7FFFF`=PEGC リニア VRAM / `0xF80000-0xF9FFFF`=未接続 / `0xFA0000-0xFFFFFF`=先頭 1MB への
+  エイリアス (`memsys_*` が `-= 0xf00000`)。`ia32.c` の `CPU_EXTLIMIT16 = MIN(extsize+0x100000, 0xf00000)`
+  がそれで、実機で「32MB 積んで 30.6MB」になるあのホール。
+  ところが `native/dos_xms.c` の EMB プールは ext オフセット `[0x10000, extsize)` を**一枚板**として扱い、
+  `AH=0Ch Lock` で `linear = 0x100000 + offset` を返していた。DOS/4GW は「最大連続空き」を丸ごと確保する
+  ので **31.94MB の "連続" ブロックを掴み、その中の 1MB が RAM でない**状態になる。書けば消え、読めば 0xff。
+- **なぜ他のタイトルは無事だったか**: VZ / AMEL 等は `AH=0Bh Move` (ホスト側 memcpy) しか使わない。
+  `AH=0Ch Lock` して線形アドレスで直接触るのは DOS エクステンダだけ。
+- **なぜ EXTMEM=64MB で直らなかったか**: ホールの位置は 15MB のまま動かないので、同じ画像で同じ場所で落ちる。
+- **修正**: `xms_occupied()` を追加し、確保済ハンドルに加えて **ホール `[0xE00000, 0xF00000)` (ext オフセット
+  = 物理 - 0x100000) を「使用中区間」として列挙**。`xms_find_gap` / `xms_free_query` がこれを跨がないようにした。
+  結果、EXTMEM=32MB では下側 13.94MB / 上側 17.00MB の 2 アリーナになり、DOS/4GW は上側 17.00MB
+  (物理 0x1000000〜0x2100000、連続) を取る。**これは 32MB 積んだ実機 PC-98 が DOS エクステンダに渡せる量そのもの**。
+- **診断ノブ**: `np2kai_set_extmem(MB)` / `qbDebug.extmem(MB)` を追加 (次 Run から反映)。連続 XMS の上限は
+  `EXTMEM - 15` MB なので、DOS/4GW に 32MB 連続を渡したければ `qbDebug.extmem(47)`。既定は 32MB のまま。
+  `qbDebug.xms()` に `largestKB` (最大連続空き) を追加。
+- **検証**: headless で払い出しが 31.94MB (跨ぐ) → 17.00MB (ホールの上) に変化。`extmem(47)` で 32.00MB。
+  回帰 `xms_test` / `exec_psp_test` / `touhou_test 4/4` green。**ブラウザ実機で OOM 解消をユーザー確認済**。
+- 副次: `SET DOS16M=1` が必須なのは我々の A20 ゲート未実装 (8042 経路) のため。外すと `DOS/16M error: [26]
+  8042 timeout`。実害小につき別件。
+
+### PCM 音声の途切れ = デコード律速では**なかった** (前エントリの記述を訂正)
+
+Suika3 のソース (zlib、github.com/awemorris/suika3) を読み、計測で確定:
+
+- `98main.c` のメインループは `sound_poll(); process_input(); hal_clear_image(); on_update(); on_render();
+  flip();` の無条件ループ。**バッファ補充 (`wss_sound_poll` → `fill_half_buffer`) はループ 1 周に 1 回だけ**。
+- 音声は 8000Hz 16bit モノラルのダブルバッファで、half = `HALF_FRAMES 8192` = **1.024 秒**。
+- 実測 (multiple=20): `process_input()` の `kbhit()`/`getch()` 呼び出し比 (INT 21h AH=0B/08 のカウンタ) から
+  **メインループ 1 周 = 4.43 エミュ秒** (53.17 秒で 12 周)。→ 4 つの half を鳴らす間に 1 回しか補充されない
+  ので、古い half が鳴り直される。ユーザー報告「4 秒ぶん行きつ戻りつして 1 秒ぶん進む」と一致。
+- **A/B で決定的**: 音源ボードを外して (`SOUND_SW=0x04`、`sound_driver=NONE` で `sound_poll` が no-op) 同条件を
+  測ると、1 周は **4.43 秒のまま完全に同一**。デコード (整数版 **Tremor**、8kHz モノラル) はループ時間の 8% 未満。
+  重いのは `hal_clear_image` + `hal_draw_image_alpha` の全画面ソフト合成と、`gdc_flip()` の 640×400 全ピクセル
+  → GDC 4 プレーン変換 (128K 回の VRAM 書き込み)。
+- クロック整合: multiple 20 → 60 で 1 周 4.43 → 1.55 秒 (クロック比 3.0 に対し実測 2.9)。外挿すると
+  multiple≈100 (≒245MHz) で約 0.9 秒 < 1.024 秒。作者の「NP21W で 245MHz 付近で問題なくなる」と一致。
+- **FPU 説も棄却**: BGM 再生中の区間だけを切り出した CPU プロファイル (`--profiling-funcs` ビルド + inspector)
+  で SoftFloat3 は **12.5%** に過ぎない (メモリアクセス 32.8% / ディスパッチ 17.1% / 命令フェッチ 16.2% /
+  命令実装 12.7% / EA 5.1%)。FPU をタダにしても全体 1.14 倍。clean-room x87 を書いても無駄だった。
+- **結論**: Vorbis デコーダのホスト内蔵は無意味 (デコードは既にタダ同然)。エミュを 4.3 倍にするのも非現実的。
+  **エンジン側で `sound_poll()` を描画ループの中からも呼べば直る** (補充レイテンシがフレーム時間ではなく
+  描画の一区画になる)。これは QuuBee 専用ではなく遅い実機すべてで効く改善なので、作者へフィードバック予定。
+
 ## [Mate-X PCM (CS4231) 検出対応 — DOS/4GW 近代エンジンで「No supported sound card found.」を根治] — 2026-07-09
 
 Awe Morris 氏の Suika3 (ビジュアルノベルエンジン) の PC-98 移植版 (Open Watcom + DOS/4GW) が

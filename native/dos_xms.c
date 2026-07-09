@@ -44,6 +44,17 @@
 #define XMS_MAX_HANDLES 64
 #define XMS_HMA_RESERVE 0x10000u   /* 先頭 64KB を HMA 用に予約 (EMB はこの先から) */
 
+/* PC-98 の物理 15MB〜16MB は RAM ではなく PEGC リニア VRAM + システム ROM の窓
+ * (cpumem.c の memfnf、ia32.c の CPU_EXTLIMIT16 = MIN(extsize+0x100000, 0xf00000))。
+ * 実機で「32MB 積んで 30.6MB」になるあのホール。
+ *
+ * EMB を AH=0Bh Move でしか触らないクライアント (VZ/AMEL 等) はホスト側 memcpy なので無傷だが、
+ * AH=0Ch Lock で線形アドレスを取って直接触るクライアント (DOS/4GW 等の DOS エクステンダ) が
+ * ここを跨ぐと、そのフラットヒープの中に 1MB の死に領域が埋まる (書けば消え、読めば 0xff)。
+ * → プールから恒久的に除外する。ext オフセット = 物理 - 0x100000。 */
+#define XMS_HOLE_BEG 0x0E00000u    /* 物理 0x00F00000 (15MB) */
+#define XMS_HOLE_END 0x0F00000u    /* 物理 0x01000000 (16MB) */
+
 typedef struct {
     int      used;
     int      lockcount;
@@ -78,18 +89,37 @@ static uint32_t cmem32(uint32_t a) {
     return (uint32_t)cmem16(a) | ((uint32_t)cmem16(a + 2) << 16);
 }
 
-/* ---- アロケータ: [g_pool_base, g_pool_end) で既存ハンドルと重ならない size バイトの
+/* ---- 使用中区間 [a,b) を列挙: 確保済ハンドル + 15-16MB ホール。返り値 = 個数。
+ *      ホールは extsize が 14MB を超えるときだけプールに現れる (それ以下なら物理 15MB に届かない)。
+ *      互いに重ならないことが呼び出し側の前提 (find_gap がホールを避けて配るので保たれる)。 ---- */
+static int xms_occupied(uint32_t (*iv)[2]) {
+    int n = 0;
+    for (int i = 1; i < XMS_MAX_HANDLES; i++) {
+        if (!g_h[i].used) continue;
+        iv[n][0] = g_h[i].offset;
+        iv[n][1] = g_h[i].offset + g_h[i].size;
+        n++;
+    }
+    if (g_pool_end > XMS_HOLE_BEG) {
+        iv[n][0] = XMS_HOLE_BEG;
+        iv[n][1] = (g_pool_end < XMS_HOLE_END) ? g_pool_end : XMS_HOLE_END;
+        n++;
+    }
+    return n;
+}
+
+/* ---- アロケータ: [g_pool_base, g_pool_end) で使用中区間と重ならない size バイトの
  *      最小開始オフセットを first-fit で探す。見つかれば *out=オフセットで 1、無ければ 0。 ---- */
 static int xms_find_gap(uint32_t size, uint32_t *out) {
+    uint32_t iv[XMS_MAX_HANDLES + 1][2];
+    int n = xms_occupied(iv);
     uint32_t cur = g_pool_base;
     int moved = 1;
     while (moved) {
         moved = 0;
         if (cur + size > g_pool_end) return 0;
-        for (int i = 1; i < XMS_MAX_HANDLES; i++) {
-            if (!g_h[i].used) continue;
-            uint32_t a = g_h[i].offset, b = g_h[i].offset + g_h[i].size;
-            if (cur < b && (cur + size) > a) { cur = b; moved = 1; break; }  /* 重なる→後ろへ */
+        for (int i = 0; i < n; i++) {
+            if (cur < iv[i][1] && (cur + size) > iv[i][0]) { cur = iv[i][1]; moved = 1; break; }  /* 重なる→後ろへ */
         }
     }
     if (cur + size > g_pool_end) return 0;
@@ -97,29 +127,30 @@ static int xms_find_gap(uint32_t size, uint32_t *out) {
     return 1;
 }
 
-/* 空き総量と最大連続空きブロック (バイト) を求める。 */
+/* 空き総量と最大連続空きブロック (バイト) を求める。ホールは「使用中」として数える。 */
 static void xms_free_query(uint32_t *largest, uint32_t *total) {
-    uint32_t used = 0;
-    for (int i = 1; i < XMS_MAX_HANDLES; i++) if (g_h[i].used) used += g_h[i].size;
+    uint32_t iv[XMS_MAX_HANDLES + 1][2];
+    int n = xms_occupied(iv);
+    uint32_t occ = 0;
+    for (int i = 0; i < n; i++) occ += iv[i][1] - iv[i][0];
     /* プール未初期化 (g_pool_end<=g_pool_base) では 0 を返す。uint32 アンダーフローで
      * 「巨大な空き」を誤報しないよう qb_xms_stat(3) と同じガードを掛ける。 */
-    *total = (g_pool_end > g_pool_base) ? (g_pool_end - g_pool_base) - used : 0;
+    uint32_t span = (g_pool_end > g_pool_base) ? (g_pool_end - g_pool_base) : 0;
+    *total = (span > occ) ? span - occ : 0;
 
-    /* 最大連続空き: 候補開始点 = pool_base と各使用ブロック末尾。各点から次の使用ブロック開始までの隙間。 */
+    /* 最大連続空き: 候補開始点 = pool_base と各使用中区間の末尾。各点から次の区間開始までの隙間。 */
     uint32_t best = 0;
-    uint32_t cand[XMS_MAX_HANDLES + 1]; int nc = 0;
+    uint32_t cand[XMS_MAX_HANDLES + 2]; int nc = 0;
     cand[nc++] = g_pool_base;
-    for (int i = 1; i < XMS_MAX_HANDLES; i++) if (g_h[i].used) cand[nc++] = g_h[i].offset + g_h[i].size;
+    for (int i = 0; i < n; i++) cand[nc++] = iv[i][1];
     for (int c = 0; c < nc; c++) {
         uint32_t s = cand[c];
         if (s < g_pool_base || s >= g_pool_end) continue;
         int inside = 0;
         uint32_t nextstart = g_pool_end;
-        for (int i = 1; i < XMS_MAX_HANDLES; i++) {
-            if (!g_h[i].used) continue;
-            uint32_t a = g_h[i].offset, b = g_h[i].offset + g_h[i].size;
-            if (s >= a && s < b) { inside = 1; break; }
-            if (a >= s && a < nextstart) nextstart = a;
+        for (int i = 0; i < n; i++) {
+            if (s >= iv[i][0] && s < iv[i][1]) { inside = 1; break; }
+            if (iv[i][0] >= s && iv[i][0] < nextstart) nextstart = iv[i][0];
         }
         if (inside) continue;
         uint32_t gap = nextstart - s;
@@ -301,7 +332,8 @@ uint32_t qb_xms_stat(int which) {
         case 0:  return (uint32_t)qb_xms_enabled();
         case 1:  return nh;
         case 2:  return used;
-        case 3:  return (g_pool_end > g_pool_base) ? (g_pool_end - g_pool_base) - used : 0;
+        case 3: { uint32_t largest, total; xms_free_query(&largest, &total); return total; }   /* 空き総量 (ホール除外) */
+        case 4: { uint32_t largest, total; xms_free_query(&largest, &total); return largest; } /* 最大連続空き */
         default: return 0;
     }
 }

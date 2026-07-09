@@ -645,6 +645,17 @@ int np2kai_set_wss(int on) {
 	return np2cfg.SOUND_SW;
 }
 
+/* 拡張メモリ量 (MB)。pccore_set → CPU_SETEXTSIZE で反映されるので次 Run (reset) から効く。
+ * PC-98 の物理 15〜16MB は PEGC VRAM/システム窓で RAM ではない (dos_xms.c の XMS_HOLE_* 参照) ため、
+ * DOS エクステンダに渡せる連続 XMS はホール上側の (EXTMEM - 15) MB が上限。32MB なら 17MB。
+ * DOS/4GW に 32MB 連続を渡したければ 47 以上が要る。qbDebug.extmem(MB) の実体 (診断用)。 */
+int np2kai_set_extmem(int mb) {
+	if (mb < 1) mb = 1;
+	if (mb > 512) mb = 512;
+	np2cfg.EXTMEM = (UINT16)mb;   /* SUPPORT_LARGE_MEMORY で UINT16。pccore_set が MEMORY_MAXSIZE で頭打ち */
+	return np2cfg.EXTMEM;
+}
+
 /* ブート時の ITF (BIOS POST) ROM 実行のトグル。on=1 で POST を復活 (メモリカウント+起動ピポ音を
  * 出す、実機ノスタルジー用)、on=0 で既定どおりスキップ。既定 = 0 (create 時に np2cfg.ITF_WORK=0)。
  * np2cfg.ITF_WORK は reset 毎の bios_initialize → bios_itfcall で読まれるので、設定後の次 Run (reset)

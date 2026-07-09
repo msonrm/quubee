@@ -229,6 +229,7 @@ set(EXPORTED_FUNCTIONS
     _np2kai_set_pmd_irq
     _np2kai_set_chibioto
     _np2kai_set_wss
+    _np2kai_set_extmem
     _np2kai_set_itf_post
     _np2kai_set_lines30
     _np2kai_set_clock_multiple

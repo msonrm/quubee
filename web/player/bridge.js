@@ -255,6 +255,7 @@ async function makeWorkerEmu() {
         async setPmdIrq(v)           { return (await call({ type: 'call', fn: 'np2kai_set_pmd_irq',  ret: 'number', argTypes: ['number'], args: [v] })).r; },
         async setChibiOto(v)         { return (await call({ type: 'call', fn: 'np2kai_set_chibioto', ret: 'number', argTypes: ['number'], args: [v] })).r; },
         async setWss(v)              { return (await call({ type: 'call', fn: 'np2kai_set_wss',      ret: 'number', argTypes: ['number'], args: [v] })).r; },
+        async setExtmem(v)           { return (await call({ type: 'call', fn: 'np2kai_set_extmem',   ret: 'number', argTypes: ['number'], args: [v] })).r; },
         async setBeepMute(v)         { return (await call({ type: 'call', fn: 'np2kai_set_beep_mute', ret: 'number', argTypes: ['number'], args: [v] })).r; },
         async setBeepGain(pct)       { return (await call({ type: 'call', fn: 'np2kai_set_beep_gain', ret: 'number', argTypes: ['number'], args: [pct] })).r; },
         async setClockMultiple(m)    { return (await call({ type: 'call', fn: 'np2kai_set_clock_multiple', ret: 'number', argTypes: ['number'], args: [m] })).r; },
@@ -1268,6 +1269,7 @@ async function makeWorkerEmu() {
     const setPmdIrq     = M.cwrap('np2kai_set_pmd_irq',     'number', ['number']);
     const setChibiOto   = M.cwrap('np2kai_set_chibioto',    'number', ['number']);
     const setWss        = M.cwrap('np2kai_set_wss',         'number', ['number']);
+    const setExtmem     = M.cwrap('np2kai_set_extmem',      'number', ['number']);
     // 86 ボード IRQ の上書きトグル。null=既定 (全ブート IRQ12)、0=既定 IRQ 強制、1=IRQ12 強制。
     // 既定は下の loadLoaderDisk で IRQ12。将来 IRQ12 非対応ドライバが出たら qbDebug.snd86irq(0) で逃げる。
     let forcePmdIrq = null;
@@ -1284,6 +1286,10 @@ async function makeWorkerEmu() {
     // ならず鳴る。forceWss=true の間は下の毎 Run 適用で chibioto より優先 (0x64 が 0x14 を包含するため)。
     // 万一 Mate-X PCM の出現でFM系ゲームが不利な音源を選ぶ等あれば qbDebug.wss(0) で素の 86(+ADPCM) に戻せる。
     let forceWss = true;
+    // 拡張メモリ量 (MB)。null = C 側の既定 (32) のまま。PC-98 の物理 15〜16MB は PEGC VRAM/システム窓で
+    // RAM ではないので、DOS エクステンダに渡せる連続 XMS はホール上側の (EXTMEM - 15) MB が上限
+    // (32MB なら 17MB)。DOS/4GW に 32MB 連続を渡したいなら 47 以上。診断用 (qbDebug.extmem)。
+    let forceExtmem = null;
     let suppressBootBeep = false;   // 次の loader ブートが音楽セッションか (= beep 消音 + IRQ12 + エンジン非表示)
     let hideEngineFiles  = false;   // 一覧から PMD86.COM/PMP.COM を隠すか (音楽セッション中だけ true)
     // np2kai_dos_get_exit(int* code) — JS では HEAP に書き込み番地を渡す
@@ -1329,6 +1335,7 @@ async function makeWorkerEmu() {
         async setPmdIrq(v) { return setPmdIrq(v); },
         async setChibiOto(v) { return setChibiOto(v); },
         async setWss(v) { return setWss(v); },
+        async setExtmem(v) { return setExtmem(v); },
         async setBeepMute(v) { return setBeepMute(v); },
         async setBeepGain(pct) { return setBeepGain(pct); },
         async setClockMultiple(m) { return setMul(m); },
@@ -1544,6 +1551,8 @@ async function makeWorkerEmu() {
         // qbDebug.wss(0) で素の 86(+ADPCM) に、qbDebug.chibioto(0) で更に素の 86 に戻せる。
         if (forceWss) await emu.setWss(1);
         else          await emu.setChibiOto(forceChibi ? 1 : 0);
+        // 拡張メモリ量 (MB)。既定 32。qbDebug.extmem(MB) で診断用に変えられる (reset 前に適用)。
+        if (forceExtmem !== null) await emu.setExtmem(forceExtmem);
         await emu.reset();
         if (fep) fep.reset();   // FEP の未確定バッファを破棄 (C 側表示状態は np2kai_reset が破棄済み)
         // 起動音 (ピポ) は音楽セッションのブートでだけ消す。ゲーム起動は当時どおり鳴らす
@@ -2710,6 +2719,13 @@ async function makeWorkerEmu() {
         // エンジン (Suika3 等、FM 非対応で SB16/Mate-X PCM だけ検出) が鳴るようになる。wss(0)=素の 86(+ADPCM=
         // ちびおと) に戻す。設定後に対象を Run (reset) して反映。
         wss: (on = 1) => { forceWss = !!on; return `forceWss=${forceWss} (既定 ON。1=86+ADPCM+Mate-X PCM(0x64)/0=ちびおと側) — 次の Run から反映`; },
+        // 拡張メモリ量 (MB)。引数なしで現状表示。PC-98 は物理 15〜16MB が RAM でないため、DOS エクステンダが
+        // 掴める連続 XMS はホール上側の (MB - 15) が上限 (32 → 17MB、47 → 32MB)。診断用。
+        extmem: (mb) => {
+            if (mb === undefined) return `extmem=${forceExtmem === null ? '32 (既定)' : forceExtmem} MB — 連続 XMS 上限 ≈ ${(forceExtmem === null ? 32 : forceExtmem) - 15} MB`;
+            forceExtmem = Math.max(16, Math.min(512, mb | 0));
+            return `extmem=${forceExtmem} MB (連続 XMS 上限 ≈ ${forceExtmem - 15} MB) — 次の Run から反映`;
+        },
         // 音源ボードの段階選択 (設定パネルの Sound Board の実体)。'matex'(0x64=86+ADPCM+Mate-X PCM,既定) /
         // 'adpcm'(0x14=86+ADPCM=ちびおと) / '86'(0x04=素の86)。上位は下位を含む階層なので chibioto/wss の
         // 重複 (Mate-X PCM が ADPCM を内包し Chibi-oto が効かなく見える) を 1 コントロールで解消。次の Run から反映。
@@ -2819,7 +2835,8 @@ async function makeWorkerEmu() {
         xms: (on) => {
             if (on !== undefined) xmsEnableFn(handle, on ? 1 : 0);
             return { enabled: !!xmsStatFn(handle, 0), handles: xmsStatFn(handle, 1),
-                     usedKB: (xmsStatFn(handle, 2) / 1024) | 0, freeKB: (xmsStatFn(handle, 3) / 1024) | 0 };
+                     usedKB: (xmsStatFn(handle, 2) / 1024) | 0, freeKB: (xmsStatFn(handle, 3) / 1024) | 0,
+                     largestKB: (xmsStatFn(handle, 4) / 1024) | 0 };
         },
         // INT 33h マウスドライバ HLE。引数なしで状態表示、mouse33('ms'|'nec'|0) でペルソナ切替/無効化。
         // 既定 MS 仕様 (corpus 実測より。NEC 前提タイトルは 'nec' へ)。実測正典は tools/mousetest/ 参照。
@@ -2980,8 +2997,9 @@ async function makeWorkerEmu() {
                 .then(([xms, ems, emmOpen, mouse33]) => ({ xms, ems, emmOpen, mouse33 })),
             xms: (on) => {
                 if (on !== undefined) ctl('np2kai_xms_enable', ['number'], [on ? 1 : 0], true);
-                return Promise.all([0, 1, 2, 3].map(i => q('np2kai_xms_stat', 'number', ['number', 'number'], [i], true)))
-                    .then(([en, handles, used, free]) => ({ enabled: !!en, handles, usedKB: (used / 1024) | 0, freeKB: (free / 1024) | 0 }));
+                return Promise.all([0, 1, 2, 3, 4].map(i => q('np2kai_xms_stat', 'number', ['number', 'number'], [i], true)))
+                    .then(([en, handles, used, free, largest]) => ({ enabled: !!en, handles,
+                        usedKB: (used / 1024) | 0, freeKB: (free / 1024) | 0, largestKB: (largest / 1024) | 0 }));
             },
             mouse33: (mode) => {
                 if (mode !== undefined)

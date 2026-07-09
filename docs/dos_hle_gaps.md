@@ -167,9 +167,21 @@ TODO.md「プリンタ出力 → ブラウザ」参照。
     `0Ch`/`0Dh`Lock/Unlock（実 linear `0x100000+offset` を返す）/ `0Eh`Info / `0Fh`Realloc / `03h-07h`A20（成功応答）。
     戻り値は XMS 3.0 契約（成功 AX=1 / 失敗 AX=0+BL=err）。
   - 未提供（素直に「無い」と応答）: HMA（`01h/02h`→BL=0x90）/ UMB（`10h/11h`→BL=0xB1）/ 32-bit版（`88h/89h`）。
-  - 制御/診断: `qbDebug.xms(0|1)`（既定 ON、A/B 用に切替可）→ `{enabled, handles, usedKB, freeKB}`。
+  - 制御/診断: `qbDebug.xms(0|1)`（既定 ON、A/B 用に切替可）→ `{enabled, handles, usedKB, freeKB, largestKB}`。
     検証 = `tools/xms_test.js`（合成 COM で検出→entry→alloc→Move 往復のバイト一致）。実証 = AMEL `/X` が
     338KB EMB を確保（games/mem_test）。
+  - ★ **プールは物理 15〜16MB のホールを跨がない（2026-07-09）**。PC-98 のその 1MB は RAM ではなく
+    PEGC リニア VRAM（`0xF00000-0xF7FFFF`）/ 未接続（`-0xF9FFFF`）/ 先頭 1MB へのエイリアス（`-0xFFFFFF`、
+    `memsys_*` が `-= 0xf00000`）。`ia32.c` の `CPU_EXTLIMIT16 = MIN(extsize+0x100000, 0xf00000)` がそれ。
+    `AH=0Bh Move` しか使わないクライアント（VZ/AMEL）はホスト側 memcpy なので無傷だが、**`AH=0Ch Lock` で
+    線形アドレスを取って直接触る DOS エクステンダ（DOS/4GW）がここを跨ぐと、そのフラットヒープに 1MB の
+    死に領域が埋まる**（Suika3 が数枚目の画像で決定論的に `Out of memory` になっていた真因）。
+    `xms_occupied()` がホールを「使用中区間」として列挙し、`xms_find_gap`/`xms_free_query` が避ける。
+    EXTMEM 32MB では下側 13.94MB / 上側 17.00MB の 2 アリーナになり、DOS/4GW は上側を取る（実機 32MB 機と同値）。
+    **連続 XMS の上限 = `EXTMEM - 15` MB**。診断ノブ `qbDebug.extmem(MB)`（47 で 32.00MB 連続）。
+  - ⚠ **A20 ゲートは未実装（`03h-07h` は成功を返すだけ）**。そのため DOS/4GW は `SET DOS16M=1`
+    （＝ PC-98 の A20 解除方式を選ぶ DOS/16M 時代の env、メモリサイズではない）が必須で、外すと
+    `DOS/16M error: [26] 8042 timeout`（8042 キーボードコントローラ経由の A20 を我々が提供していない）。
   - ⚠ **既定 ON は全タイトルへの提示挙動を変える（許容済みの設計判断、2026-06-05 記録）**: INT 2Fh `AX=4300h`
     が全ゲームに「XMS あり」と返すようになった。これまで XMS 無しで conventional にフォールバックして動いていた
     タイトルが XMS 経路に入り、未実装 fn（`default`→`BL=0x80` NOTIMPL や HMA 拒否 `0x90`）に当たって挙動が

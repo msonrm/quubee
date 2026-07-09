@@ -164,6 +164,11 @@ int np2kai_set_chibioto(int on);
 __attribute__((visibility("default")))
 int np2kai_set_wss(int on);
 
+/* 拡張メモリ量 (MB、既定 32)。次 Run (reset) から反映。PC-98 の物理 15〜16MB は RAM でないので、
+ * DOS エクステンダに渡せる連続 XMS はホール上側の (EXTMEM - 15) MB。qbDebug.extmem(MB) の実体 (診断用)。 */
+__attribute__((visibility("default")))
+int np2kai_set_extmem(int mb);
+
 /* ブート時 ITF (BIOS POST) ROM のトグル。on=1 で POST (メモリカウント+ピポ音) を復活、on=0 で
  * 既定どおりスキップ。次 Run (reset) から反映。qbDebug.itfpost(0|1) の実体。 */
 __attribute__((visibility("default")))
