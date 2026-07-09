@@ -1,5 +1,29 @@
 # QB 作業状況
 
+## 🧰 headless の土台 `tools/lib/machine.js` — 着手済 (2026-07-10)
+
+**動機**: `tools/` の headless スクリプトはブート手順を毎回コピペしており、そのたびに微妙に違うバグを
+埋めていた。実害 3 件 — ①音声を端数サンプルで汲んで音が 5 倍速に (存在しないエミュのバグを追った)
+②ヘッダだけ直したら ninja が再ビルドせず古い wasm を測った ③「BGM が鳴る場面」まで毎回 2500〜3000
+フレーム空回し (1 回 60〜250 秒 × 20 回近く)。
+
+- ✓ `Machine.boot/runFrames/runUntil/pressKey/textVram/screenshotPng/screenHash/captureAudio/int21/xms`
+- ✓ **素性を必ず返す** `info()` → wasm の SHA + mtime + 設定 + フレーム番号 (②を二度と踏まない)
+- ✓ **音声はブロック長ちょうどで汲む** (①を型で封じる)
+- ✓ **snapshot / restore** — 忠実性を `tools/snapshot_test.js` で実証。境界は
+  **「Wasm 線形メモリ + MEMFS のファイル + 開いているストリーム表 (FS.streams) + cwd」**。
+  ストリーム表を落とすと復元後の最初の fread が壊れる (Suika3 は assets.arc を開きっぱなし)。
+  wasm の SHA が違う snapshot は拒否 (関数テーブルの索引はビルド固有)。
+  **暖機 17s → 復元 0.07〜0.43s = 40〜200 倍**（復元時間はばらつく）。
+- 罠 (実装で踏んだ): `growHeapTo` は malloc→free を繰り返すと空きブロックが要求を満たして heap が
+  伸びない。目標に届くまで確保したまま積み、最後に解放する。
+
+**残**: ①既存 `tools/*.js` を machine.js へ寄せる (急がない。触るたびに 1 本ずつ)
+②snapshot の圧縮 (いま 64MiB 生) ③headless CLI (`quubee-run game.zip --json`) ④MCP アダプタ
+(他の開発者に「目と耳」を渡す。我々にとっての価値はライブラリ、彼らにとっての価値は MCP)。
+**注意: QuuBee の HLE-DOS は実 DOS ではない。MCP は「参照プラットフォーム」ではなく
+「煙感知器と計測器」として出す** (docs/dos_hle_gaps.md を必ず添える)。
+
 ## 🧠 エミュ本体の高速化 — 次の本丸 (2026-07-09 に計測で当たりが付いた)
 
 Suika3 の音の途切れを追った結果、**インタプリタそのものの速度が全タイトルの天井**だと分かった。
