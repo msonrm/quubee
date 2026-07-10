@@ -1,5 +1,40 @@
 # CHANGELOG
 
+## [エミュ本体の高速化 第 1 弾: メモリ/フェッチ fast path インライン化で 1.37 倍] — 2026-07-10
+
+patch 07 (`tools/np2kai_patches/07_cpu_mem_fastpath.patch`)。Suika3 実測 **11.2 → 8.1 ms/frame
+= 1.37 倍** (fps 88→123)。screen hash 一致 + 回帰スイート全 PASS (XMS/INT23/INT1C/EXEC/maxalloc/
+Y2K/CON/TSR/東方 4 作/VZ/FMP/snapshot) = 挙動不変。副次効果で snapshot_test の暖機も 13.5s に短縮。
+
+### 何が遅かったか — 計測で 2 回間違えて 3 回目に当てた
+
+1. **`bench_frame.js` (FreeDOS boot.d88) はインタプリタを測っていなかった**。プロファイルを取ると
+   時間の 65.7% が `__emscripten_throw_longjmp`。ブート後のスピンが BOUND 例外を連発し、
+   `EXCEPTION()` → `siglongjmp` → **JS 例外スロー**のスループットを測っていた。`-flto` も最初の
+   fast path も「効かない」と見えたのはこのため。→ 実ワークロードのベンチ **`tools/bench_game.js`**
+   (Suika3・決定論的・wasm SHA と screen hash を必ず出力) を新設。
+2. conventional RAM (< 0xA4000) だけ fast path にしたら Suika3 で**微減** (二重チェック化)。
+   `memp_read8` に MB 帯ヒストグラムを仕込んで実測 → **命令フェッチの 2.67 億回/600 フレームが
+   全部 16MB 以上**。DOS/4GW は 32MB 機だと最大連続 EMB (16MB〜33MB) にコードを置くので、
+   拡張メモリは `[USE_HIMEM, EXTLIMIT16)` と `[16MB, EXTLIMIT)` の **2 窓**が要る。
+3. 2 窓を足して 1.37 倍。溢れは 0 になった (非 CPU 経路の 17 万回のみ)。
+
+### 実装 (意味論は memp_* と厳密に同一)
+
+- `ia32/cpu.h`: `qb_phys_{read,write}{8,16,32}(_codefetch)` — conventional (read<0xA4000 /
+  write<0xA0000) + 拡張 2 窓は直アクセス、他 (VRAM/ROM/ホール) は従来 `memp_*` へフォールバック。
+  境界 16/32bit -1/-3・A20 マスク・write8 の 0x457 (IDE) も同一。`qb_codefetch{,_w,_d}` =
+  inline 版 `cpu_codefetch` (PM リミット検査・#GP・ページング分岐も同一)。
+- `ia32/ia32.mcr`: `GET_PC*` を qb_codefetch* へ。`interface.h`: `cpu_memoryread*` 系マクロを
+  qb_phys_* へ (ページング物理アクセス `_paging` 系も)。
+- `cpumem.c`: 溢れアドレスの MB 帯ヒストグラムを常設 (`np2kai_debug_memprobe(100+i/200+i)`)。
+  新規タイトルが遅い時の当たり付けにそのまま使える。
+- 代償: wasm 976KB → 1.17MB (+20%、数百のフェッチサイトへの展開)。
+- 棄却した案: `-flto` (実測 3 回ノイズ内・ビルド 3 分・+10%)、コードページキャッシュ (フェッチが
+  既に直読みになったので当面不要)、FPU 高速化 (以前に棄却済み)。
+- 残り (プロファイル済み): `exec_allstep` 36.6% (ディスパッチ本体) / 命令実装+EA ~30% /
+  `-sSUPPORT_LONGJMP=wasm` (例外連発ゲスト用)。詳細 = TODO.md「エミュ本体の高速化」。
+
 ## [headless の土台 tools/lib/machine.js — snapshot/restore で暖機を 40〜200 倍速に] — 2026-07-10
 
 `tools/` の 77 本のうち **63 本がブート手順を自前で書いていた**。回帰テスト群 (69 本) 自体は主張が

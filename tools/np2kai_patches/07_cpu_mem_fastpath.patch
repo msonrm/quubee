@@ -1,0 +1,370 @@
+diff --git a/i386c/cpumem.c b/i386c/cpumem.c
+index 2a0c0f3..6ced747 100755
+--- a/i386c/cpumem.c
++++ b/i386c/cpumem.c
+@@ -511,8 +511,15 @@ static const MEMFNF memfnf = {
+ #endif
+ 
+ // ----
++/* QuuBee 一時診断: fast path から溢れて来たアドレスの帯域分布 (MB 単位)。
++ * [0..14]=そのMB帯、[15]=15MB以上。dos_loader.c qb_dos_memprobe_count(100+i / 200+i) が読む。 */
++UINT32 qb_dbg_read8_hist[16];
++UINT32 qb_dbg_read8cf_hist[16];
++#define QB_DBG_HIST(h, a) do { UINT32 mb__ = (a) >> 20; (h)[(mb__ > 15) ? 15 : mb__]++; } while (0)
++
+ REG8 MEMCALL memp_read8(UINT32 address) {
+-	
++	QB_DBG_HIST(qb_dbg_read8_hist, address);
++
+ #ifdef MEM_BDA_TRACEOUT
+ 	if(0x400 <= address && address < 0x600){
+ 		switch(address){
+@@ -869,7 +876,7 @@ UINT32 MEMCALL memp_read32(UINT32 address) {
+ 
+ // ----
+ PF_UINT8 MEMCALL memp_read8_codefetch(UINT32 address) {
+-	
++	QB_DBG_HIST(qb_dbg_read8cf_hist, address);
+ 	if (address < I286_MEMREADMAX) {
+ 		return(mem[address]);
+ 	}
+diff --git a/i386c/ia32/cpu.h b/i386c/ia32/cpu.h
+index 0e9d0b4..faea43c 100755
+--- a/i386c/ia32/cpu.h
++++ b/i386c/ia32/cpu.h
+@@ -447,6 +447,160 @@ extern UINT32		opCache;
+ #define	CPU_INPADRS	i386core.e.inport
+ #define	CPU_EMSPTR	i386core.e.ems
+ 
++/* ---- QuuBee patch 07: 物理メモリ fast path (inline) ----
++ * CPU からのアクセスの大半は「conventional RAM (< 0xA0000/0xA4000)」か「拡張メモリ」だが、
++ * 従来は毎バイト別翻訳単位の memp_*() 呼び出し + if チェーンだった。RAM 区間だけを
++ * 呼び出し元へインライン展開し、それ以外 (VRAM/ROM/15-16MB ホール/9821 領域) は
++ * 従来関数へフォールバックする。拡張メモリの窓は memp_*() のチェーンと同じ 2 つ:
++ *   [USE_HIMEM, CPU_EXTLIMIT16)  … 1MB 強〜最大 15MB
++ *   [0x1000000, CPU_EXTLIMIT)    … 16MB〜 (DOS/4GW は 32MB 機だと最大連続ブロックが
++ *                                   16MB 以上に取れるため、ここにコードが載る。実測
++ *                                   Suika3 は命令フェッチの 98% がこの窓だった)
++ * 境界値 (read=CPU_MEMREADMAX, write=CPU_MEMWRITEMAX, 16/32bit は -1/-3)・A20 マスク・
++ * write8 の 0x457 (IDE ワークアラウンド) の意味論は memp_*() の先頭 fast path と同一。
++ * 拡張メモリの 16/32bit は 32KB 境界でもバンク切替が無いため直ロードとバイト合成は同値。
++ * CPU_EXTLIMIT16/CPU_EXTLIMIT は ia32_setextsize() で常に >= 0x100000 なので
++ * -1/-3 がアンダーフローすることはない。 */
++#include "cpumem.h"
++
++STATIC_INLINE REG8 qb_phys_read8(UINT32 address) {
++	UINT32 madr;
++	if (address < CPU_MEMREADMAX)
++		return mem[address];
++	madr = address & CPU_ADRSMASK;
++	if (madr >= USE_HIMEM) {
++		if (madr < CPU_EXTLIMIT16)
++			return CPU_EXTMEMBASE[madr];
++		if (madr >= 0x01000000 && madr < CPU_EXTLIMIT)
++			return CPU_EXTMEMBASE[madr];
++	}
++	return memp_read8(address);
++}
++STATIC_INLINE REG16 qb_phys_read16(UINT32 address) {
++	UINT32 madr;
++	if (address < (CPU_MEMREADMAX - 1))
++		return (REG16)(LOADINTELWORD(mem + address));
++	madr = address & CPU_ADRSMASK;
++	if (madr >= USE_HIMEM) {
++		if (madr < (CPU_EXTLIMIT16 - 1))
++			return (REG16)(LOADINTELWORD(CPU_EXTMEMBASE + madr));
++		if (madr >= 0x01000000 && madr < (CPU_EXTLIMIT - 1))
++			return (REG16)(LOADINTELWORD(CPU_EXTMEMBASE + madr));
++	}
++	return memp_read16(address);
++}
++STATIC_INLINE UINT32 qb_phys_read32(UINT32 address) {
++	UINT32 madr;
++	if (address < (CPU_MEMREADMAX - 3))
++		return LOADINTELDWORD(mem + address);
++	madr = address & CPU_ADRSMASK;
++	if (madr >= USE_HIMEM) {
++		if (madr < (CPU_EXTLIMIT16 - 3))
++			return LOADINTELDWORD(CPU_EXTMEMBASE + madr);
++		if (madr >= 0x01000000 && madr < (CPU_EXTLIMIT - 3))
++			return LOADINTELDWORD(CPU_EXTMEMBASE + madr);
++	}
++	return memp_read32(address);
++}
++STATIC_INLINE void qb_phys_write8(UINT32 address, REG8 value) {
++	UINT32 madr;
++	if (address < CPU_MEMWRITEMAX) {
++		if (address != 0x0457)	/* IDE データ破壊回避 (memp_write8 と同一) */
++			mem[address] = (UINT8)value;
++		return;
++	}
++	madr = address & CPU_ADRSMASK;
++	if (madr >= USE_HIMEM) {
++		if (madr < CPU_EXTLIMIT16) {
++			CPU_EXTMEMBASE[madr] = (UINT8)value;
++			return;
++		}
++		if (madr >= 0x01000000 && madr < CPU_EXTLIMIT) {
++			CPU_EXTMEMBASE[madr] = (UINT8)value;
++			return;
++		}
++	}
++	memp_write8(address, value);
++}
++STATIC_INLINE void qb_phys_write16(UINT32 address, REG16 value) {
++	UINT32 madr;
++	if (address < (CPU_MEMWRITEMAX - 1)) {
++		STOREINTELWORD(mem + address, value);
++		return;
++	}
++	madr = address & CPU_ADRSMASK;
++	if (madr >= USE_HIMEM) {
++		if (madr < (CPU_EXTLIMIT16 - 1)) {
++			STOREINTELWORD(CPU_EXTMEMBASE + madr, value);
++			return;
++		}
++		if (madr >= 0x01000000 && madr < (CPU_EXTLIMIT - 1)) {
++			STOREINTELWORD(CPU_EXTMEMBASE + madr, value);
++			return;
++		}
++	}
++	memp_write16(address, value);
++}
++STATIC_INLINE void qb_phys_write32(UINT32 address, UINT32 value) {
++	UINT32 madr;
++	if (address < (CPU_MEMWRITEMAX - 3)) {
++		STOREINTELDWORD(mem + address, value);
++		return;
++	}
++	madr = address & CPU_ADRSMASK;
++	if (madr >= USE_HIMEM) {
++		if (madr < (CPU_EXTLIMIT16 - 3)) {
++			STOREINTELDWORD(CPU_EXTMEMBASE + madr, value);
++			return;
++		}
++		if (madr >= 0x01000000 && madr < (CPU_EXTLIMIT - 3)) {
++			STOREINTELDWORD(CPU_EXTMEMBASE + madr, value);
++			return;
++		}
++	}
++	memp_write32(address, value);
++}
++STATIC_INLINE PF_UINT8 qb_phys_read8_codefetch(UINT32 address) {
++	UINT32 madr;
++	if (address < CPU_MEMREADMAX)
++		return mem[address];
++	madr = address & CPU_ADRSMASK;
++	if (madr >= USE_HIMEM) {
++		if (madr < CPU_EXTLIMIT16)
++			return CPU_EXTMEMBASE[madr];
++		if (madr >= 0x01000000 && madr < CPU_EXTLIMIT)
++			return CPU_EXTMEMBASE[madr];
++	}
++	return memp_read8_codefetch(address);
++}
++STATIC_INLINE PF_UINT16 qb_phys_read16_codefetch(UINT32 address) {
++	UINT32 madr;
++	if (address < (CPU_MEMREADMAX - 1))
++		return (PF_UINT16)(LOADINTELWORD(mem + address));
++	madr = address & CPU_ADRSMASK;
++	if (madr >= USE_HIMEM) {
++		if (madr < (CPU_EXTLIMIT16 - 1))
++			return (PF_UINT16)(LOADINTELWORD(CPU_EXTMEMBASE + madr));
++		if (madr >= 0x01000000 && madr < (CPU_EXTLIMIT - 1))
++			return (PF_UINT16)(LOADINTELWORD(CPU_EXTMEMBASE + madr));
++	}
++	return memp_read16_codefetch(address);
++}
++STATIC_INLINE PF_UINT32 qb_phys_read32_codefetch(UINT32 address) {
++	UINT32 madr;
++	if (address < (CPU_MEMREADMAX - 3))
++		return LOADINTELDWORD(mem + address);
++	madr = address & CPU_ADRSMASK;
++	if (madr >= USE_HIMEM) {
++		if (madr < (CPU_EXTLIMIT16 - 3))
++			return LOADINTELDWORD(CPU_EXTMEMBASE + madr);
++		if (madr >= 0x01000000 && madr < (CPU_EXTLIMIT - 3))
++			return LOADINTELDWORD(CPU_EXTMEMBASE + madr);
++	}
++	return memp_read32_codefetch(address);
++}
++/* ---- QuuBee patch 07 ここまで (命令フェッチ側は本ファイル末尾) ---- */
++
+ extern sigjmp_buf	exec_1step_jmpbuf;
+ 
+ /*
+@@ -1477,4 +1631,60 @@ char *cpu_disasm2str(UINT32 eip);
+ #include "resolve.h"
+ #include "task.h"
+ 
++/* ---- QuuBee patch 07: 命令フェッチ fast path (inline 版 cpu_codefetch) ----
++ * 全命令フェッチは ia32.mcr の GET_PC* マクロ経由でここを通る (直接呼び出しは
++ * IA32_INSTRUCTION_TRACE のみ)。out-of-line の cpu_codefetch* (cpu_mem.c) と
++ * 分岐構造・#GP 例外・リミット比較 (w=-1, d=-3) は同一で、物理アクセスだけ
++ * qb_phys_*_codefetch でインライン化している。EXCEPTION/CPU_PAGE_* が要るため
++ * exception.h / paging.h の include より後に置く。 */
++STATIC_INLINE PF_UINT8 qb_codefetch(UINT32 offset)
++{
++	descriptor_t *sdp = &CPU_CS_DESC;
++	UINT32 addr = sdp->u.seg.segbase + offset;
++
++	if (!CPU_STAT_PM)
++		return qb_phys_read8_codefetch(addr);
++	if (offset <= sdp->u.seg.limit) {
++		if (!CPU_STAT_PAGING)
++			return qb_phys_read8_codefetch(addr);
++		return cpu_linear_memory_read_b_codefetch(addr,
++		    CPU_PAGE_READ_CODE | CPU_STAT_USER_MODE);
++	}
++	EXCEPTION(GP_EXCEPTION, 0);
++	return 0;	/* compiler happy */
++}
++STATIC_INLINE PF_UINT16 qb_codefetch_w(UINT32 offset)
++{
++	descriptor_t *sdp = &CPU_CS_DESC;
++	UINT32 addr = sdp->u.seg.segbase + offset;
++
++	if (!CPU_STAT_PM)
++		return qb_phys_read16_codefetch(addr);
++	if (offset <= sdp->u.seg.limit - 1) {
++		if (!CPU_STAT_PAGING)
++			return qb_phys_read16_codefetch(addr);
++		return cpu_linear_memory_read_w_codefetch(addr,
++		    CPU_PAGE_READ_CODE | CPU_STAT_USER_MODE);
++	}
++	EXCEPTION(GP_EXCEPTION, 0);
++	return 0;	/* compiler happy */
++}
++STATIC_INLINE PF_UINT32 qb_codefetch_d(UINT32 offset)
++{
++	descriptor_t *sdp = &CPU_CS_DESC;
++	UINT32 addr = sdp->u.seg.segbase + offset;
++
++	if (!CPU_STAT_PM)
++		return qb_phys_read32_codefetch(addr);
++	if (offset <= sdp->u.seg.limit - 3) {
++		if (!CPU_STAT_PAGING)
++			return qb_phys_read32_codefetch(addr);
++		return cpu_linear_memory_read_d_codefetch(addr,
++		    CPU_PAGE_READ_CODE | CPU_STAT_USER_MODE);
++	}
++	EXCEPTION(GP_EXCEPTION, 0);
++	return 0;	/* compiler happy */
++}
++/* ---- QuuBee patch 07 ここまで ---- */
++
+ #endif	/* !IA32_CPU_CPU_H__ */
+diff --git a/i386c/ia32/ia32.mcr b/i386c/ia32/ia32.mcr
+index 5540ded..a64b0a4 100755
+--- a/i386c/ia32/ia32.mcr
++++ b/i386c/ia32/ia32.mcr
+@@ -115,9 +115,10 @@ do { \
+ } while (/*CONSTCOND*/ 0)
+ #endif
+ 
++/* QuuBee patch 07: 命令フェッチは inline 版 (cpu.h 末尾の qb_codefetch*) を使う */
+ #define	GET_PCBYTE(v) \
+ do { \
+-	(v) = cpu_codefetch(CPU_EIP); \
++	(v) = qb_codefetch(CPU_EIP); \
+ 	_ADD_EIP(1); \
+ } while (/*CONSTCOND*/ 0)
+ 
+@@ -137,31 +138,31 @@ do { \
+ 
+ #define	GET_PCBYTES(v) \
+ do { \
+-	(v) = __CBW(cpu_codefetch(CPU_EIP)); \
++	(v) = __CBW(qb_codefetch(CPU_EIP)); \
+ 	_ADD_EIP(1); \
+ } while (/*CONSTCOND*/ 0)
+ 
+ #define	GET_PCBYTESD(v) \
+ do { \
+-	(v) = __CBD(cpu_codefetch(CPU_EIP)); \
++	(v) = __CBD(qb_codefetch(CPU_EIP)); \
+ 	_ADD_EIP(1); \
+ } while (/*CONSTCOND*/ 0)
+ 
+ #define	GET_PCWORD(v) \
+ do { \
+-	(v) = cpu_codefetch_w(CPU_EIP); \
++	(v) = qb_codefetch_w(CPU_EIP); \
+ 	_ADD_EIP(2); \
+ } while (/*CONSTCOND*/ 0)
+ 
+ #define	GET_PCWORDS(v) \
+ do { \
+-	(v) = __CWDE(cpu_codefetch_w(CPU_EIP)); \
++	(v) = __CWDE(qb_codefetch_w(CPU_EIP)); \
+ 	_ADD_EIP(2); \
+ } while (/*CONSTCOND*/ 0)
+ 
+ #define	GET_PCDWORD(v) \
+ do { \
+-	(v) = cpu_codefetch_d(CPU_EIP); \
++	(v) = qb_codefetch_d(CPU_EIP); \
+ 	_ADD_EIP(4); \
+ } while (/*CONSTCOND*/ 0)
+ 
+diff --git a/i386c/ia32/interface.h b/i386c/ia32/interface.h
+index 6339419..9a6b112 100755
+--- a/i386c/ia32/interface.h
++++ b/i386c/ia32/interface.h
+@@ -58,18 +58,21 @@
+ #define	CPU_SETEXTSIZE(size)		ia32_setextsize((UINT32)(size) << 20)
+ #define CPU_SETEMM(frame, addr)		ia32_setemm(frame, addr)
+ 
+-#define	cpu_memorywrite(a,v)	memp_write8(a,v)
+-#define	cpu_memorywrite_b(a,v)	memp_write8(a,v)
+-#define	cpu_memorywrite_w(a,v)	memp_write16(a,v)
+-#define	cpu_memorywrite_d(a,v)	memp_write32(a,v)
+-#define	cpu_memoryread(a)	memp_read8(a)
+-#define	cpu_memoryread_b(a)	memp_read8(a)
+-#define	cpu_memoryread_w(a)	memp_read16(a)
+-#define	cpu_memoryread_d(a)	memp_read32(a)
+-#define	cpu_memoryread_codefetch(a)		memp_read8_codefetch(a)
+-#define	cpu_memoryread_b_codefetch(a)	memp_read8_codefetch(a)
+-#define	cpu_memoryread_w_codefetch(a)	memp_read16_codefetch(a)
+-#define	cpu_memoryread_d_codefetch(a)	memp_read32_codefetch(a)
++/* QuuBee patch 07: 物理アクセスを inline fast path (cpu.h の qb_phys_*) へ。
++ * マクロは使用箇所 (各 .c 内の関数本体) で展開されるため、qb_phys_* の定義が
++ * cpu.h 中盤 (本ヘッダの include より後) にあっても問題ない。 */
++#define	cpu_memorywrite(a,v)	qb_phys_write8(a,v)
++#define	cpu_memorywrite_b(a,v)	qb_phys_write8(a,v)
++#define	cpu_memorywrite_w(a,v)	qb_phys_write16(a,v)
++#define	cpu_memorywrite_d(a,v)	qb_phys_write32(a,v)
++#define	cpu_memoryread(a)	qb_phys_read8(a)
++#define	cpu_memoryread_b(a)	qb_phys_read8(a)
++#define	cpu_memoryread_w(a)	qb_phys_read16(a)
++#define	cpu_memoryread_d(a)	qb_phys_read32(a)
++#define	cpu_memoryread_codefetch(a)		qb_phys_read8_codefetch(a)
++#define	cpu_memoryread_b_codefetch(a)	qb_phys_read8_codefetch(a)
++#define	cpu_memoryread_w_codefetch(a)	qb_phys_read16_codefetch(a)
++#define	cpu_memoryread_d_codefetch(a)	qb_phys_read32_codefetch(a)
+ #ifdef USE_FASTPAGING
+ #define	cpu_memoryread_paging(a)		memp_read8_paging(a)
+ #define	cpu_memoryread_b_paging(a)		memp_read8_paging(a)
+@@ -80,14 +83,14 @@
+ #define	cpu_memorywrite_w_paging(a,v)	memp_write16_paging(a,v)
+ #define	cpu_memorywrite_d_paging(a,v)	memp_write32_paging(a,v)
+ #else
+-#define	cpu_memoryread_paging(a)		memp_read8_codefetch(a)
+-#define	cpu_memoryread_b_paging(a)		memp_read8_codefetch(a)
+-#define	cpu_memoryread_w_paging(a)		memp_read16_codefetch(a)
+-#define	cpu_memoryread_d_paging(a)		memp_read32_codefetch(a)
+-#define	cpu_memorywrite_paging(a,v)		memp_write8(a,v)
+-#define	cpu_memorywrite_b_paging(a,v)	memp_write8(a,v)
+-#define	cpu_memorywrite_w_paging(a,v)	memp_write16(a,v)
+-#define	cpu_memorywrite_d_paging(a,v)	memp_write32(a,v)
++#define	cpu_memoryread_paging(a)		qb_phys_read8_codefetch(a)
++#define	cpu_memoryread_b_paging(a)		qb_phys_read8_codefetch(a)
++#define	cpu_memoryread_w_paging(a)		qb_phys_read16_codefetch(a)
++#define	cpu_memoryread_d_paging(a)		qb_phys_read32_codefetch(a)
++#define	cpu_memorywrite_paging(a,v)		qb_phys_write8(a,v)
++#define	cpu_memorywrite_b_paging(a,v)	qb_phys_write8(a,v)
++#define	cpu_memorywrite_w_paging(a,v)	qb_phys_write16(a,v)
++#define	cpu_memorywrite_d_paging(a,v)	qb_phys_write32(a,v)
+ #endif
+ 
+ #define	cpu_memoryread_region(a,p,l)	memp_reads(a,p,l)

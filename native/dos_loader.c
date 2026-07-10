@@ -1222,6 +1222,12 @@ void qb_dos_memprobe_note_emm_open(void) {
 }
 
 uint32_t qb_dos_memprobe_count(int which) {
+    /* 100-115 / 200-215: cpumem.c の一時診断ヒストグラム (memp_read8 / _codefetch の
+     * アドレス帯分布、MB 単位)。fast path インライン化 (patch 07) の溢れ先の特定用。 */
+    extern UINT32 qb_dbg_read8_hist[16];
+    extern UINT32 qb_dbg_read8cf_hist[16];
+    if (which >= 100 && which < 116) return qb_dbg_read8_hist[which - 100];
+    if (which >= 200 && which < 216) return qb_dbg_read8cf_hist[which - 200];
     switch (which) {
         case 0:  return g_probe_xms;
         case 1:  return g_probe_ems;

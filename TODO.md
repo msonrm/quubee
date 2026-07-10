@@ -24,26 +24,39 @@
 **注意: QuuBee の HLE-DOS は実 DOS ではない。MCP は「参照プラットフォーム」ではなく
 「煙感知器と計測器」として出す** (docs/dos_hle_gaps.md を必ず添える)。
 
-## 🧠 エミュ本体の高速化 — 次の本丸 (2026-07-09 に計測で当たりが付いた)
+## 🧠 エミュ本体の高速化 — 第 1 弾完了: メモリ/フェッチ fast path で 1.37 倍 (2026-07-10)
 
-Suika3 の音の途切れを追った結果、**インタプリタそのものの速度が全タイトルの天井**だと分かった。
-BGM 再生中に窓を切って取った CPU プロファイル (`--profiling-funcs` ビルド + `inspector.Session`):
+**patch 07 (`07_cpu_mem_fastpath.patch`) 実装・回帰全 PASS・コミット済み。** Suika3 実測
+11.2 → 8.1 ms/frame = **1.37 倍** (fps 88→123)。screen hash 一致 = 挙動不変。wasm は +20%
+(976KB→1.17MB、インライン展開の代償)。詳細 = memory/reference_cpu_mem_fastpath.md。
 
-| 分類 | 占有 | 主犯 |
+**過程で分かったこと (重要、次の一手の前提):**
+- **`tools/bench_frame.js` (FreeDOS boot.d88) はインタプリタのベンチとして不適**。ブート後の
+  スピンが BOUND 例外を連発し、時間の 65.7% が `__emscripten_throw_longjmp` (JS 例外スロー)。
+  インタプリタ計測は **`tools/bench_game.js`** (Suika3 実ワークロード・決定論的・SHA 付き) を使う。
+- **DOS/4GW はコードを 16MB 以上に置く** (32MB 機では最大連続 EMB がそこ)。fast path は
+  conventional だけでなく拡張メモリの 2 窓 ([USE_HIMEM,EXTLIMIT16) と [16MB,EXTLIMIT)) が必須。
+  実測: 溢れ特定は `qbDebug` → `np2kai_debug_memprobe(100+i/200+i)` の MB 帯ヒストグラム (常設)。
+- ④ `-flto` は**効果ゼロ** (実測 3 回、ノイズ内。巨大関数はインライン判断に乗らない)。ビルド 3 分・
+  wasm +10% のコストだけなので不採用。
+- ①コードページキャッシュは**当面不要**。フェッチは qb_codefetch インラインで既に直読み
+  (セグメント base 加算 + 上限チェック + 2 比較 + ロードのみ)。
+
+**残りの候補 (プロファイル 2026-07-10、patch 07 後の Suika3):**
+| 分類 | 占有 | 中身 |
 |---|---|---|
-| メモリアクセス | 32.8% | `memp_read8` 21.3% (1 バイトごとの関数呼び出し + if チェーン) |
-| ディスパッチ | 17.1% | `exec_allstep` |
-| 命令フェッチ | 16.2% | `cpu_codefetch` (命令 1 バイトごとにセグメント上限チェック + ページング変換) |
-| 命令実装 | 12.7% | `MOV_EdGd` 等 |
-| FPU (SoftFloat3) | 12.5% | `SF_ESC*` — **ここは律速ではない (棄却済)** |
-| 実効アドレス計算 | 5.1% | `ea32_sib_disp8` |
+| `exec_allstep` | 36.6% | ディスパッチ本体 (フェッチ inline 吸収後)。命令ごとの状態リセット + prefix スキャン + `call_indirect` (wasm では署名チェック付き) |
+| 命令実装 + EA | ~30% | `MOV_EdGd` 5.6% / `ea32_sib_disp8` 6.0% など薄く広い |
+| データアクセス (vmem) | ~6% | `cpu_vmemoryread_d` 等 (out-of-line のセグメント検査。中の物理アクセスは inline 済) |
+| FPU (SoftFloat3) | ~5% | 棄却済み (タダにしても +5%) |
 
-- **FPU 高速化 (clean-room double x87) は無駄**と実測で確定。タダにしても全体 1.14 倍。
-- 当たり: ①**コードページキャッシュ** (linear→ホストポインタ、CR3/セグメント変更で無効化。DOSBox が
-  やっている) ②`memp_read8` の fast path インライン化 ③`setjmp/longjmp` の Wasm EH 化 (`invoke_*` ラッパが
-  全呼び出しのインライン化を阻害している疑い) ④コンパイル段 `-O2` → `-O3` / `-flto`。
-- 効果測定は `tools/bench_frame.js`。前例 = `-O0` → `-O2/-O3` で 2.02 倍・wasm 3.2 倍縮小。
-- 詳細 = memory/project_suika3_audio_loop_period.md。
+- 次の一手候補: ③ `-sSUPPORT_LONGJMP=wasm` (Wasm EH 化。例外連発ゲスト = boot.d88 型で効く。
+  Suika3 型には効かない。フラグ 1 個なので次に試す価値) / `exec_allstep` の細部 (INLINEINST の
+  拡充、`insttable_info` 参照削減) / `cpu_vmemoryread_*` のインライン化 (効果 ~数%)。
+- プロファイル手順: CMakeLists の link options に `--profiling-funcs` を足す → `inspector.Session`
+  (ハーネスはセッション scratchpad の profile_game.js 相当を machine.js で組む)。
+- FPU 高速化 (clean-room double x87) は無駄と実測で確定 (タダにしても全体 1.14 倍)。
+- 経緯の詳細 = memory/project_suika3_audio_loop_period.md / CHANGELOG 2026-07-10。
 
 ## 🈁 HLE FEP — M2 完了・次は新配列 (keymap-format) 統合 (2026-07-07〜08)
 

@@ -377,6 +377,8 @@ target_compile_definitions(np2kai_core PRIVATE
 # Emscripten linker flags
 target_link_options(np2kai_core PRIVATE
     -O3                      # リンク時最適化 (Binaryen wasm-opt)。上流 sdl/Makefile21.em のリンク段と同じ
+    # プロファイルを取るときはここに --profiling-funcs を足す (name section 保持。実行速度への
+    # 影響は無いが wasm が ~100KB 太るので本番ビルドでは外す)。計測手順は TODO.md「エミュ本体の高速化」
     -sWASM=1
     -sALLOW_MEMORY_GROWTH=1
     "-sEXPORTED_FUNCTIONS=[${EXPORTED_FUNCTIONS_STR}]"
