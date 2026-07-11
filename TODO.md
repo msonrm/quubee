@@ -460,7 +460,8 @@ T3 確認は入力が要るのでブラウザで人が行う (headless は T0〜
 | ✗ CRASH (BIOS 暴走) | 0 | — |
 
 → **EXIT=0 かつ CRASH=0 = 早期終了も BIOS 暴走も皆無。stretch 目標 20 ALIVE 到達。** 残る非描画は分類癖
-(GGL2 はタイトル到達済・DYNAMO/F1GP/STB は anim+USER で生存) か入力待ち。**本物の BIOS 領域到達は GETS のみ。**
+(GGL2 はタイトル到達済・DYNAMO/F1GP/STB は anim+USER で生存) か入力待ち。~~本物の BIOS 領域到達は GETS のみ~~
+→ **GETS もブラウザ実機で動作 (2026-07-11 ユーザー報告) = BIOS 分類は偽陰性、本物の BIOS 暴走ゼロで確定。**
 
 注: GGL2 は headless 色数 6 で triage 上 BOOT だが、実体は「GOGGLE-Ⅱ / PUSH TRIGGER TO START」タイトル画面に
 到達済 (タイトルが黒地少色のため色メトリクスが過小評価)。実質プレイ可能 = ブラウザ T3 確認待ち。
@@ -475,7 +476,9 @@ T3 確認は入力が要るのでブラウザで人が行う (headless は T0〜
 - [ ] SSP101 / GGL2 / OZ100 / CZ102 / GS100 をブラウザで T3 確認 (再デプロイ要)
 - [ ] ALIVE 群をブラウザで T3 確認 (実プレイ・入力テスト)
 - [ ] EMS+XMS の 25 本が XMS フォールバックで健全に動くか実プレイで確認 (`qbDebug.memprobe()` の ems 監視)
-- [ ] GETS の BIOS 領域到達 (neccheck) 調査 (残る唯一の本物 BIOS リード)
+- [x] ~~GETS の BIOS 領域到達 (neccheck) 調査 (残る唯一の本物 BIOS リード)~~ → **ブラウザ実機で動作
+  (2026-07-11 ユーザー報告)**。headless triage の BOOT/BIOS 分類 (pc=0xfd89b) は入力待ち等で BIOS 領域の
+  PC を拾った偽陰性の可能性が高い (GGL2 の色数と同類の分類癖)。**bio100 に本物の BIOS 暴走はゼロで確定**
 
 ### 東方旧作 (TH02 封魔録ほか) — 封魔録が headless でステージ1プレイ描画まで到達 (2026-06-09)
 games/touhou に東方旧作 4 作 (TH02 封魔録=通常 LZH / TH03 夢時空・TH04 幻想郷・TH05 怪綺談=自己展開 EXE)。
