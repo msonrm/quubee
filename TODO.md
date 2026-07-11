@@ -30,9 +30,11 @@
 - **Suika3 (32bit DOS/4GW): 11.2 → 8.1 ms/frame = 1.39 倍** (第 1 弾: メモリ/フェッチ fast path)
 - **Ray IV (16bit 実モード): 14.0 → 9.8 ms/frame = 1.43 倍** (第 2 弾: vmemory/load_segreg/
   16bit 直接ディスパッチ + USE_CPU_INLINEINST/EIPMASK)
-- ブラウザ実機 (ユーザー確認 2026-07-11): 第 1 弾時点で「Ray が一番体感できる。multiple 26 まで
-  上げられる (前は 20 超で即ノイズ)」。第 2 弾で Ray@27 headless 13.25ms (予算の 79%) — 27 が射程内。
-- 既定 multiple は 20 のまま (上げるかはユーザーの実機確認後の判断)。
+- ブラウザ実機 (ユーザー確認 2026-07-11): 第 1 弾後「Ray が一番体感できる。multiple 26 まで
+  (前は 20 超で即ノイズ)」→ **第 2 弾後「38 まで持つ。39 からプチノイズ」**。
+- **既定 multiple を 20→27 (≈66MHz) に引き上げ (2026-07-11、ユーザー判断)**。過去 2 回の音詰まりは
+  ホスト律速が真因で解消済み。headless (machine.js) の既定は回帰の暖機フレーム数が 20 前提のため
+  20 のまま。
 - wasm 976KB → 1.39MB (+42%、インライン展開の代償。gzip 配信では大幅圧縮)。
 - 詳細 = memory/reference_cpu_mem_fastpath.md / CHANGELOG 2026-07-10・11。
 

@@ -2583,12 +2583,17 @@ async function makeWorkerEmu() {
     const setMul      = M.cwrap('np2kai_set_clock_multiple', 'number', ['number']);
     const setY2k      = M.cwrap('np2kai_set_y2k_clamp',      'number', ['number']);
     const getY2k      = M.cwrap('np2kai_get_y2k_clamp',      'number', []);
-    // 既定クロック倍率。multiple=20 × baseclock 2.4576MHz ≈ 49MHz (≈486DX2-50)。
-    // 2026-06-26 に 27 (≈66MHz、ZUN 推奨環境相当) へ上げたが、ちびおと(ADPCM)既定 ON 後の
-    // FMDSP 等で run_frame が重くなり音が詰まる実害をユーザーが実機で確認したため 20 に戻した
-    // (2026-06-27)。np2kai_set_clock_multiple は np2cfg.multiple も書くので一度適用すれば以後の
+    // 既定クロック倍率。multiple=27 × baseclock 2.4576MHz ≈ 66MHz (ZUN 推奨環境相当)。
+    // 経緯: 2026-06-26 に 27 へ上げたが、当時はホスト律速で FMDSP 等の音が詰まり 20 (≈486DX2-50)
+    // に差し戻した (2026-06-27)。2026-07-10/11 の CPU fast path (patch 07、Suika3 1.39x・Ray 1.43x)
+    // で律速が解消し、最重量の Ray でもブラウザ実機で multiple 38 まで音が持つことをユーザーが確認
+    // (39 からプチノイズ) したため、余裕を見て 27 を既定に再採用 (2026-07-11)。
+    // np2kai_set_clock_multiple は np2cfg.multiple も書くので一度適用すれば以後の
     // Run (reset) でも保持される (下の起動時 emu.setClockMultiple で一度だけ適用)。
-    const DEFAULT_MULTIPLE = 20;
+    // 注: 速度ガード無しの初期ソフトは素の CPU 速度で走るため 27 では約 1.35 倍速く回る
+    // (既知の課題、対症 = qbDebug.multiple(20) や (1))。headless (tools/lib/machine.js) の既定は
+    // 回帰テストの暖機フレーム数が 20 前提のため 20 のまま。
+    const DEFAULT_MULTIPLE = 27;
     const setVol      = M.cwrap('np2kai_set_vol',  null,     ['number','number','number','number']);
     const getVol      = M.cwrap('np2kai_get_vol',  'number', ['number']);
     const midiBytes   = M.cwrap('np2kai_debug_serial_midi_bytes',  'number', ['number']);
@@ -2610,18 +2615,18 @@ async function makeWorkerEmu() {
     // (np2kai_set_clock_multiple = engine と同手順の changeclock + gdc_updateclock) だけ
     // 借りて、フィードバックは我々の最も信頼できる実時間信号 = run_frame 実測で駆動する。
     const autoClock = {
-        enabled: false,           // 既定 OFF (multiple=DEFAULT_MULTIPLE=20≈49MHz 固定)。autoclock の快適化利得は小さく
-                                  // (大半のゲームは HLT 待ちで倍率ほぼ無影響)、一方で倍率を上げると
-                                  // run_frame が重くなり音楽のテンポがもたつく実害が出る (MIDI でも FM/Ray でも
-                                  // 確認、2026-06-14。ちびおと既定 ON 後の FMDSP でも 2026-06-27 に再確認)。速さが欲しい稀な
+        enabled: false,           // 既定 OFF (multiple=DEFAULT_MULTIPLE=27≈66MHz 固定)。autoclock の快適化利得は小さく
+                                  // (大半のゲームは HLT 待ちで倍率ほぼ無影響)、過去はホスト律速で倍率を上げると
+                                  // 音楽のテンポがもたつく実害があった (2026-06-14/27 確認 → patch 07 の CPU fast path
+                                  // で解消し 2026-07-11 に既定を 20→27 へ)。速さが欲しい稀な
                                   // CPU 律速タイトルだけ qbDebug.autoclock(1) または qbDebug.multiple(N) で手動で上げる。
-                                  // 既定倍率は起動時に emu.setClockMultiple(DEFAULT_MULTIPLE=20) で適用し
-                                  // np2cfg.multiple に保持される (≈486DX2-50 相当。音切れの出ない安全側)。
+                                  // 既定倍率は起動時に emu.setClockMultiple(DEFAULT_MULTIPLE=27) で適用し
+                                  // np2cfg.multiple に保持される。
         floor: 20, ceil: 42, step: 2,   // floor=20: autoclock ON 時の安全下限 (重い時はここまで下げる)。
                                   // ceil=42: 仕様の x42 快適化目標。これ以上 (例 60) だと
                                   // vsync ロックゲームの CPU-bound バースト (ステージ遷移等) が
                                   // 速すぎになる (Nyahax で確認) ため、速度の上限として 42 を採用。
-        cur: DEFAULT_MULTIPLE,    // 現在の倍率 (= pccore.multiple と同期)。既定 20≈49MHz
+        cur: DEFAULT_MULTIPLE,    // 現在の倍率 (= pccore.multiple と同期)。既定 27≈66MHz
         emaMs: 0,                 // run_frame 1 回の所要 ms の指数移動平均
         budgetMs: 1000 / 56,      // 1 step の real-time 予算 (run loop の TARGET_HZ=56 と一致)
         evalEvery: 30,            // 評価間隔 (rAF 単位 ≈ 0.5s)。頻繁すぎる発振を防ぐ
@@ -2639,14 +2644,14 @@ async function makeWorkerEmu() {
         },
         setEnabled(on) {
             this.enabled = !!on;
-            if (!this.enabled) this.cur = setMul(DEFAULT_MULTIPLE);   // OFF で既定 (20≈49MHz) に戻す
+            if (!this.enabled) this.cur = setMul(DEFAULT_MULTIPLE);   // OFF で既定 (27≈66MHz) に戻す
             else this.emaMs = 0;                        // ON で EMA を初期化し測り直す
             return this.enabled;
         },
         setManual(m) { this.enabled = false; this.cur = setMul(m); return this.cur; },  // 手動固定
     };
 
-    // 既定クロックを ≈49MHz (multiple=20) に。np2kai_set_clock_multiple が np2cfg.multiple も書くので
+    // 既定クロックを ≈66MHz (multiple=27) に。np2kai_set_clock_multiple が np2cfg.multiple も書くので
     // 一度の適用で以後の Run (reset) でも保持される。local/worker 両モードで効く (emu 経由)。
     // ≈486DX2-50 相当。ちびおと(ADPCM)既定 ON 後も FMDSP 等で音が詰まらない安全側 (2026-06-27 実機確認)。
     emu.setClockMultiple(DEFAULT_MULTIPLE);
@@ -2775,7 +2780,7 @@ async function makeWorkerEmu() {
         y2k: (on) => { if (on !== undefined) setY2k(on ? 1 : 0);
             return `y2k_clamp=${getY2k()} (1=ON クランプ有効/0=OFF 本当の日付) — 次の Run 推奨`; },
         // async 自動クロック (快適化, **既定 OFF**)。autoclock(1)=ON で host の余裕に応じ multiple を
-        // floor..ceil 内で自動調整 (達成フレーム時間から逆算)。autoclock(0)=OFF で既定 20≈49MHz 固定。
+        // floor..ceil 内で自動調整 (達成フレーム時間から逆算)。autoclock(0)=OFF で既定 27≈66MHz 固定。
         // 既定 OFF の理由: 倍率を上げる利得は小さく音楽テンポがもたつく実害がある (上の autoClock 定義参照)。
         // 第2引数で ceil (上限倍率) を調整可: 例 autoclock(1, 30) で遷移をさらに緩く、(1, 60) で攻める。
         autoclock: (on=1, ceil) => {
@@ -2786,7 +2791,7 @@ async function makeWorkerEmu() {
             if (en && autoClock.cur > autoClock.ceil) autoClock.cur = setMul(autoClock.ceil);
             return en
                 ? `autoclock ON — host 余裕に応じ multiple を ${autoClock.floor}..${autoClock.ceil} で自動調整 (現 ${autoClock.cur})。重い時は自動で下げて音切れを防ぎます`
-                : `autoclock OFF — multiple=${DEFAULT_MULTIPLE} 固定 (≈49MHz)`;
+                : `autoclock OFF — multiple=${DEFAULT_MULTIPLE} 固定 (≈66MHz)`;
         },
         // CPU クロック倍率の手動上書き (autoclock を OFF にして固定)。引数なしで現状表示。
         // 快適化の A/B 用 (例: qbDebug.multiple(42) で速さ・音切れを体感比較)。
