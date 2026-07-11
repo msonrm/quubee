@@ -1838,6 +1838,45 @@ static void int21_19_curdrive(void) {          /* カレントドライブ取得
     CPU_AL = 0;
 }
 
+/* AH=60h TRUENAME: パス名を正準形 "A:\PATH" に展開する。DS:SI=元パス(ASCIIZ)、
+ * ES:DI=128 byte 出力バッファ。ファイラ (FD 等) やシェルがカレント基準の相対パスを
+ * 表示用フルパスに直すのに使う。我々は全ドライブを A:(/run) に集約するので、read_dos_rel
+ * で「drive 除去・cwd 前置・'/' 化・DBCS 保護」した /run 相対を作り、"A:\" + '\' 区切り +
+ * 大文字 に整形する (DBCS ペアは大文字化せず素通し)。実 DOS の canonical 形と同型。 */
+static void int21_60_truename(void) {
+    char rel[192];
+    read_dos_rel(CPU_DS, CPU_SI, rel, sizeof(rel));   /* /run 相対・'/' 区切り・drive 無し */
+    uint32_t out = lin(CPU_ES, CPU_DI);
+    poke8(out + 0, 'A'); poke8(out + 1, ':'); poke8(out + 2, '\\');
+    size_t o = 3;
+    for (size_t k = 0; rel[k] && o < 126; ) {
+        uint8_t c = (uint8_t)rel[k];
+        if (sjis_is_lead(c) && rel[k + 1]) {          /* DBCS ペアは 2 byte 素通し (大文字化しない) */
+            poke8(out + o++, c);
+            if (o < 127) poke8(out + o++, (uint8_t)rel[k + 1]);
+            k += 2;
+            continue;
+        }
+        if (c == '/') c = '\\';
+        else if (c >= 'a' && c <= 'z') c = (uint8_t)(c - 'a' + 'A');
+        poke8(out + o++, c);
+        k++;
+    }
+    poke8(out + o, 0);
+    CPU_FLAG &= ~C_FLAG;                               /* 成功 */
+}
+
+/* AH=32h Get DPB (Drive Parameter Block)。DL=ドライブ (0=デフォルト, 1=A:, 2=B:...)。
+ * **我々の A: は「リモート (リダイレクト) ドライブ」扱い** (IOCTL AL=09h と一貫。実 FAT
+ * セクタを持たないホスト連携 FS なので、実機のローカル固定ディスクより network/CD 側に近い)。
+ * リモートドライブにはローカル DPB が存在しない (実 DOS もネットワークドライブの AH=32h は
+ * 失敗) ので AL=0FFh (invalid drive) を返す。合成 DPB を返すと「リモートなのに DPB がある」
+ * 矛盾で FD がローカル用の直接セクタ経路に迷い込み停止する (fd98_313 で確認)。
+ * ジオメトリ/空き容量は AH=36h が提供するので、リモート経路のファイラはそれで足りる。 */
+static void int21_32_get_dpb(void) {
+    CPU_AL = 0xFF;   /* no DPB (A: = remote drive) */
+}
+
 /* AH=33h Ctrl-Break チェックフラグ get/set。我々は実際の break 検出をしないので
  * 値を保持するだけ。C ランタイムが起動時に AL=00 で読むのを成立させる。 */
 static int g_ctrl_break;
@@ -1847,6 +1886,22 @@ static void int21_33_ctrlbreak(void) {
     case 0x01: g_ctrl_break = (CPU_DL != 0);         break;   /* set */
     default:   CPU_DL = (uint8_t)g_ctrl_break;       break;   /* 02-06: 無害に get 扱い */
     }
+}
+
+/* AH=37h Get/Set Switch Character (準ドキュメント。コマンドライン switch 文字 '/' の取得/設定)。
+ * AL=00 get → DL=switch char / AL=01 set / AL=02 get availdev → DL (00=/dev/ 必須, FF=任意)
+ * / AL=03 set availdev。FD やシェルが「'/' は switch か path 区切りか」を決めるのに使う。
+ * 我々は switch='/'・availdev=FF (DOS 3.3+ 標準) を返す。 */
+static uint8_t g_switch_char = '/';
+static void int21_37_switchar(void) {
+    switch (CPU_AL) {
+    case 0x00: CPU_DL = g_switch_char; CPU_AL = 0x00; break;
+    case 0x01: g_switch_char = CPU_DL; CPU_AL = 0x00; break;
+    case 0x02: CPU_DL = 0xFF;          CPU_AL = 0x00; break;   /* device names allowed in any path */
+    case 0x03: CPU_AL = 0x00;                          break;
+    default:   CPU_AL = 0xFF;                          break;  /* invalid subfunction */
+    }
+    CPU_FLAG &= ~C_FLAG;
 }
 
 static void int21_09_putstr(void) {
@@ -2450,6 +2505,44 @@ static void int21_44_ioctl(void) {
         }
         CPU_FLAG &= ~C_FLAG;
         break;
+    case 0x08:  /* IOCTL: ブロックデバイスが交換可能メディアか (removable check)。
+                 * BL = ドライブ番号 (0=デフォルト, 1=A:, ...)。AX=0 → 交換不可 (固定)、
+                 * AX=1 → 交換可能。我々の A: は /run に集約した固定ストレージ的存在なので
+                 * 「交換不可」(AX=0) を返す (ファイラが「メディア入れ替え」を促さない)。
+                 * 実在しないドライブは CF=1・AX=0Fh。 */
+    {
+        int drv08 = (int)(CPU_BX & 0xFF);
+        if (drv08 == 0 || drv08 == 1) {
+            CPU_AX = 0x0000;              /* 0 = 交換不可 (固定メディア) */
+            CPU_FLAG &= ~C_FLAG;
+        } else {
+            CPU_AX = 0x000F;             /* invalid drive */
+            CPU_FLAG |= C_FLAG;
+        }
+        break;
+    }
+    case 0x09:  /* IOCTL: ブロックデバイスがリモート (ネットワーク/CD) か。
+                 * BL = ドライブ番号 (0=デフォルト, 1=A:, 2=B:, ...)。FD 等のファイラは
+                 * 全ドライブ (BL=1..26) を列挙し、CF と DX bit12 で「有効なドライブ」を判定する。
+                 * **A: は bit12=1 (リモート) を返す**のが faithful かつ実利的:
+                 *  ① 我々の A:(/run) はホスト連携の HLE ファイルシステムで、実 FAT セクタを持たない
+                 *     = 実機のローカル固定ディスクより「リダイレクト/ネットワークドライブ」に近い。
+                 *  ② FD (fd98_313.doc) はローカル判定だと「ディレクトリエントリを直接セクタ読み」
+                 *     する経路に入り、実 FAT が無い我々では一覧を作れず空白で停止する。リモート
+                 *     判定なら ver3.12 で追加された「DOS ファンクション (FindFirst 等) を使う経路」
+                 *     に切り替わり、我々が実装済みの INT 21h で一覧が出る (Write 等は制限・閲覧可)。
+                 * A: (と 0=デフォルト) は CF=0・DX=0x1000 (bit12=remote)、それ以外は CF=1・AX=0Fh。 */
+    {
+        int drv09 = (int)(CPU_BX & 0xFF);
+        if (drv09 == 0 || drv09 == 1) {
+            CPU_DX = 0x1000;             /* bit12(remote)=1 → リダイレクト/ネットワーク相当 */
+            CPU_FLAG &= ~C_FLAG;
+        } else {
+            CPU_AX = 0x000F;             /* invalid drive */
+            CPU_FLAG |= C_FLAG;
+        }
+        break;
+    }
     default:
         /* 旧実装は全 sub-fn を「何もせず成功 (CF=0)」にしていたが、レジスタ未設定の
          * まま嘘の成功を返すと沈黙の誤動作になる。未対応 sub-fn は明示的に失敗
@@ -3279,10 +3372,12 @@ void qb_dos_int21_dispatch(void) {
     case 0x2F: int21_2f_get_dta();      break;
     case 0x30: int21_30_version();   break;
     case 0x31: int21_31_keep();         break;
+    case 0x32: int21_32_get_dpb();      break;
     case 0x33: int21_33_ctrlbreak();    break;
     case 0x34: int21_34_indos();        break;
     case 0x35: int21_35_get_vec();   break;
     case 0x36: int21_36_freespace();    break;
+    case 0x37: int21_37_switchar();     break;
     case 0x38: int21_38_country();      break;
     case 0x39: int21_39_mkdir();        break;
     case 0x3A: int21_3a_rmdir();        break;
@@ -3311,6 +3406,7 @@ void qb_dos_int21_dispatch(void) {
     case 0x51: int21_51_get_psp();   break;
     case 0x52: int21_52_list_of_lists(); break;
     case 0x58: int21_58_alloc_strategy(); break;
+    case 0x60: int21_60_truename();  break;
     case 0x62: int21_51_get_psp();   break;   /* 62h = 51h の documented 版 */
     case 0x63: int21_63_dbcs(); break;
     default:

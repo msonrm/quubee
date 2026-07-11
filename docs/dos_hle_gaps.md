@@ -25,6 +25,9 @@ TODO.md「プリンタ出力 → ブラウザ」参照。
 | 63 | Get DBCS Lead-Byte Table | 中（日本語特有。多くはハードコードにフォールバック） | ✅ 2026-06-09 実装（東方 op.exe の壁①） |
 | 62 / 50 / 51 | Get/Set PSP | 中 | ✅ 2026-07-02 実装（`g_cur_psp` を BX で往復するだけ。SimK 氏 EXECTEST で顕在化 — 62h 未実装だと BX=0 のまま返り、子が ES=0 の IVT を PSP と誤読して command tail 表示が漢字化けする。回帰 `tools/exec_psp_test.js`） |
 | 00 | Terminate（旧式） | 低（終了は INT 20h / 4Ch 想定） | 未対応 |
+| **32** | Get DPB (Drive Parameter Block) | 中（ファイラ・ディスクツール） | ✅ 2026-07-12 **AL=0FFh (no DPB)**。A: はリモートドライブ扱い（下記）なのでローカル DPB を持たない＝実 DOS のネットワークドライブと同じ。合成 DPB を返すと「リモートなのに DPB がある」矛盾で FD が直接セクタ経路に迷い停止した |
+| **37** | Get/Set Switch Character | 低〜中（'/' を switch/path で使い分ける判定） | ✅ 2026-07-12 実装（switch='/'・availdev=FF = DOS 3.3+ 標準） |
+| **60** | TRUENAME（パス正準化） | 中（ファイラ・シェルの表示用フルパス） | ✅ 2026-07-12 実装（`read_dos_rel` 再利用で "A:\PATH" 大文字化・DBCS 保護） |
 | 2B / 2D | Set Date / Set Time | 低（Get のみ実装） | 未対応 |
 | 38 | Get/Set Country Info | 中（QB 日本語ランタイム等が起動時に呼ぶ） | ✅ 2026-07-02 実装（日本 country 81 固定・YMD・通貨 "\"・24h・case-map は far RET スタブ。Set は日本以外を正直に拒否。回帰 `tools/country_info_test.js`） |
 | 5B / 5A / 67 / 68 … | 排他作成 / temp / handle 数 / commit | 低〜中 | 未対応 |
@@ -40,6 +43,17 @@ TODO.md「プリンタ出力 → ブラウザ」参照。
 2. **カレントドライブ/ディレクトリ** — 19h は常に A:(=0)。ドライブレターは剥がして `/run` に集約するので、**A:/B: を別ボリュームとして使う2枚組ゲームは両者が混ざる**。CHDIR は ✅ 実装したが「ドライブ」は依然 1 つ（`g_cwd` で論理カレントを保持）。
    - **パス解決（`read_dos_rel`）は 8.3 フィールドのパディング空白を除去**（2026-06-15）。DOS の 8.3 名に空白は入らない（空白＝FCB の埋め文字）ので、プログラムが FindFirst 結果を 11 byte FCB 形式で持ち `"NAME    .EXT"` の形で再 open するケース（MUAP98 が選択曲を開く経路）でも実 DOS 同様に開ける。`0x20` は SJIS リード/トレイル範囲外なので DBCS を壊さない。
    - **起動 .bat の `cd` / `set`**（2026-06-15）— ミニ COMMAND.COM（`shell.asm` + C 文インタプリタ）が `cd PATH` で `g_cwd` を移動し（`qb_dos_chdir`）、`set VAR=VALUE` を DOS env に反映して以降 EXEC される子へ継承させる（環境変数でデータディレクトリを知る MUAP98 等のため）。env ブロックは 256 byte 固定なので収まらない set は honest に捨てる。
+
+2.5 **A: は「リモート（リダイレクト）ドライブ」として振る舞う**（2026-07-12）。我々の A:（=/run）は
+   ホスト連携の HLE ファイルシステムで、**実 FAT セクタを持たない**。実機のローカル固定ディスクより
+   ネットワーク/CD ドライブに近いので、IOCTL `AH=44h AL=09h`（drive remote?）は **bit12=1（リモート）**、
+   `AH=32h`（Get DPB）は **AL=0FFh（DPB 無し）** を返す（実 DOS もネットワークドライブの DPB は失敗）。
+   この一貫性が実利的: **ファイラ FD Ver.3.13**（出射厚, fd98_313）はローカル判定だと「ディレクトリ
+   エントリを直接セクタ読み」する経路に入り実 FAT の無い我々では一覧を作れず停止するが、リモート判定
+   だと ver3.12 で追加された「DOS ファンクション（FindFirst 等）を使う経路」に切り替わり、実装済みの
+   INT 21h で一覧描画・ブラウズができる（`[Write]`/`[Sort]` 等の直接書換系はリモートでは FD 自身が
+   無効化する = 閲覧主体の我々のスコープと一致）。回帰 `tools/fd_filer_test.js`。**差異**: 直接セクタ
+   アクセス前提の機能（削除ファイルの隙間詰め・ディレクトリの直接タイムスタンプ変更）は動かない。
 
 3. **FindFirst/Next がグローバル1本（`g_find`）** — 実 DOS は検索状態を DTA に持つので入れ子・並行検索が可能。2 つ目の FindFirst が 1 つ目を破壊。DTA の reserved 検索状態も書かない。
    - **wildcard 照合（`dos_wildcard_match`）は実 DOS 流の `name.ext` フィールド分割**（2026-06-15）。`.` を含む pattern は base/ext を別々に glob するので `*.*` は拡張子の無い名前（ディレクトリ `NORM` 等）にも一致する（MUAP98 のファイラがサブディレクトリを巡回できる）。`.` を含まない pattern は名前全体に char glob（末尾 `*` は `.` を跨ぐので `FOO*`→`FOO.BAR` 可、ただしワイルドカード無しの `HTJL` は `HTJL.COM` に**一致しない**＝実 DOS で ext 空のみ。緩めると「素の名前で FindFirst→無ければ `.COM` 補完」型のソフト＝GS100=gsnake が誤分岐で壊れる）。
