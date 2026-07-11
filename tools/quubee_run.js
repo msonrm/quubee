@@ -26,18 +26,9 @@
 //   - ディスクイメージ (.d88/.fdi 等) 入力は未対応 (diskimage.js 統合は次段)
 //   - キー入力は投入のみ (対話ループは MCP 段で)
 
-const fs = require('fs');
-const os = require('os');
-const path = require('path');
-const ROOT = path.resolve(__dirname, '..');
-const WEB = path.join(ROOT, 'web');
 const { Machine, NKEY } = require('./lib/machine');
 const tier = require('./lib/tier');
-const qbBatScript = require(path.join(WEB, 'player', 'batscript.js'));
-const qbArchive = require(path.join(WEB, 'player', 'archive.js'));
-
-const NOTE = 'QuuBee HLE-DOS is not real DOS (see docs/dos_hle_gaps.md). ' +
-    'Treat results as smoke detection + instrumentation, not real-machine compatibility proof.';
+const { NOTE, stageInput, planLaunch } = require('./lib/stage');
 
 function usage(msg) {
     if (msg) console.error('ERROR: ' + msg);
@@ -84,84 +75,6 @@ function parseKeys(spec) {
         plan.set(+m[2], key);
     }
     return plan;
-}
-
-/* --- 書庫 → 作業ディレクトリ。名前は SJIS 生バイトの latin1 写像のまま扱う (MEMFS 正準形)。
- *     区切りは '/' のみ (0x5C は SJIS 2 バイト目と衝突するため区切りとして扱わない)。 --- */
-async function stageInput(input) {
-    const st = fs.statSync(input);
-    if (st.isDirectory()) {
-        // ユーザーのディレクトリを汚さない (合成 .bat を書くことがある) ため一時ディレクトリへ複製
-        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'quubee_run_'));
-        for (const nb of fs.readdirSync(input, { encoding: 'buffer' })) {
-            const src = Buffer.concat([Buffer.from(input + '/'), nb]);
-            if (!fs.statSync(src).isFile()) continue;
-            fs.writeFileSync(Buffer.concat([Buffer.from(dir + '/'), nb]), fs.readFileSync(src));
-        }
-        return { dir, cleanup: () => fs.rmSync(dir, { recursive: true, force: true }) };
-    }
-
-    const buf = fs.readFileSync(input);
-    let entries;
-    if (/\.(lzh|lha|lzs)$/i.test(input)) entries = qbArchive.parseLzh(new Uint8Array(buf));
-    else if (/\.zip$/i.test(input)) entries = await qbArchive.parseZip(new Uint8Array(buf));
-    else usage('未対応の入力形式 (対応: .lzh/.lha/.lzs/.zip/ディレクトリ): ' + input);
-    if (!entries || !entries.length) throw new Error('書庫からエントリを取り出せなかった: ' + input);
-
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'quubee_run_'));
-    for (const e of entries) {
-        if (!e.data) continue;
-        const parts = e.name.split('/').filter((p) => p && p !== '.' && p !== '..');
-        if (!parts.length) continue;
-        let cur = dir;
-        for (const p of parts.slice(0, -1)) {
-            cur = path.join(cur, Buffer.from(p, 'latin1').toString('latin1'));
-            if (!fs.existsSync(cur)) fs.mkdirSync(cur);
-        }
-        fs.writeFileSync(Buffer.from(path.join(cur, parts[parts.length - 1]), 'latin1'), e.data);
-    }
-    return { dir, cleanup: () => fs.rmSync(dir, { recursive: true, force: true }) };
-}
-
-/* --- 起動計画: --exe > .bat 自動解決 > 単一 .exe/.com。triage の planLaunch と同じ考え方。
- *     単一起動も stage_batch (③ 文インタプリタ) に乗せるため 1 行 .bat を合成する
- *     (bench_ray.js と同型・Machine.boot の正典経路に一本化)。 --- */
-function planLaunch(dir, opts) {
-    const names = fs.readdirSync(dir).filter((f) => {
-        try { return fs.statSync(path.join(dir, f)).isFile(); } catch (_) { return false; }
-    });
-    if (opts.exe) {
-        const exe = names.find((f) => f.toLowerCase() === opts.exe.toLowerCase());
-        if (!exe) throw new Error('--exe が見つからない: ' + opts.exe + ' (候補: ' + names.join(' ') + ')');
-        return synth(dir, names, exe, opts.args);
-    }
-    const bats = names.filter((n) => /\.bat$/i.test(n) && !/^__RUN__/i.test(n)).sort();
-    const tryBats = opts.bat ? [opts.bat] : bats;
-    for (const b of tryBats) {
-        const f = names.find((n) => n.toLowerCase() === b.toLowerCase());
-        if (!f) { if (opts.bat) throw new Error('--bat が見つからない: ' + b); continue; }
-        const recipe = qbBatScript.parse(fs.readFileSync(path.join(dir, f)));
-        const stmts = qbBatScript.buildStatements(recipe, names, opts.args);
-        const cmds = stmts ? stmts.filter((s) => s.op === 'cmd') : [];
-        if (cmds.length) {
-            const main = cmds.find((c) => {
-                const key = c.name.toLowerCase().replace(/\.(com|exe|bat)$/, '');
-                return !qbBatScript.DRIVER_NAMES.has(key);
-            }) || cmds[cmds.length - 1];
-            return { bat: f, names, label: `bat:${f}→${main.name}${cmds.length > 1 ? '+drv' : ''}` };
-        }
-        if (opts.bat) throw new Error('--bat から起動列を組めなかった: ' + b);
-    }
-    const exes = names.filter((n) => /\.(exe|com)$/i.test(n));
-    if (exes.length === 1) return synth(dir, names, exes[0], opts.args);
-    throw new Error(exes.length === 0
-        ? '起動対象が見つからない (.bat 解決不能・実行ファイル無し)'
-        : '実行ファイルが複数あり選べない。--exe で指定してください: ' + exes.join(' '));
-}
-function synth(dir, names, exe, args) {
-    const bat = '__RUN__.BAT';
-    fs.writeFileSync(path.join(dir, bat), exe + (args ? ' ' + args : '') + '\r\n');
-    return { bat, names: names.concat(bat), label: `exe:${exe}${args ? ' ' + args : ''} (合成 .bat)`, synthetic: true };
 }
 
 (async () => {

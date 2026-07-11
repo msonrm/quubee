@@ -1,5 +1,22 @@
 # CHANGELOG
 
+## [MCP サーバ tools/mcp/server.js — 「目と耳」を対話セッションで外に出す] — 2026-07-11
+
+TODO「machine.js 残 ④」。ユーザー判断 = **対話セッション型 + 公式 SDK** (@modelcontextprotocol/sdk +
+zod、`tools/mcp/` に隔離した初の npm 依存。「互換性 > ビルド手間」でプロトコル追従を SDK に任せる)。
+stdio MCP サーバが生きた Machine (tools/lib/machine.js) をセッション (上限 3、フレーム上限
+6000/コール) として保持し、**boot→run→key→observe の対話**ができる。ツール 9 本: quubee_boot /
+run / key / screenshot (PNG image content) / text / audio (RMS) / classify / close / **gaps
+(docs/dos_hle_gaps.md 全文)**。位置づけは「参照プラットフォーム」ではなく**煙感知器と計測器** —
+**全応答 JSON に note (not real DOS) を同梱**し、gaps ツールで差異の正典を機械可読で添える。
+対話キー拡張のため machine.js の NKEY を bridge.js PC98_KEYMAP 正典から A-Z/数字/矢印/F1-10 等へ
+拡張 (既存 5 キーの値は不変)。起動系 (書庫展開 + 起動解決) は `tools/lib/stage.js` へ切り出して
+CLI (quubee_run.js) と共用化 (CLI は挙動不変 = quubee_run_test 10/10 で確認)。
+実地 = liotest.zip で boot→WAIT 検出→RETURN 投入→画面前進→PNG/テキスト取得の一巡をブラウザ級に確認。
+回帰 = 新設 `tools/mcp_server_test.js` (SDK に依存しない素の JSON-RPC クライアントで 12 項目、
+SDK/素材不在は SKIP) + スイート全 72 本 PASS。セットアップ = `cd tools/mcp && npm install`、
+登録例とツール一覧 = `tools/mcp/README.md`。
+
 ## [headless CLI quubee_run.js — 書庫を 1 コマンドで起動し JSON 報告 (MCP の土台)] — 2026-07-11
 
 TODO「machine.js 残 ③」。`node tools/quubee_run.js game.lzh [--exe N] [--args S] [--frames N]

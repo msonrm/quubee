@@ -36,12 +36,24 @@
   制約 (v1) = サブディレクトリ不持込 (triage 同等)・ディスクイメージ入力未対応・NKEY が
   RETURN/SPACE/ESC/CTRL/SHIFT の 5 キーのみ (対話を広げるなら machine.js の NKEY 表を拡張)。
 
+- ✓ **④ MCP アダプタ `tools/mcp/server.js` — v1 完成 (2026-07-11、ユーザー判断 = 対話セッション型 +
+  公式 SDK)**: stdio MCP サーバ。生きた Machine をセッション (上限 3) として保持し、
+  boot→run→key→observe を繰り返せる本物の「目と耳」。ツール 9 本 = boot / run (上限 6000f/コール) /
+  key (NKEY 名。machine.js の NKEY を bridge.js PC98_KEYMAP から A-Z/数字/矢印/F1-10 へ拡張済) /
+  screenshot (PNG image content) / text / audio (RMS) / classify / close / **gaps (dos_hle_gaps.md
+  全文 = 誤読防止の正典)**。**全応答 JSON に note (not real DOS) を同梱・剥がすの禁止**。
+  依存 = @modelcontextprotocol/sdk + zod (`tools/mcp/` に隔離、npm install 要。node_modules/lock は
+  gitignore)。共有部品 = 起動系を `tools/lib/stage.js` へ切り出し (CLI と共用)。
+  回帰 = `tools/mcp_server_test.js` (素の JSON-RPC クライアントで 12 項目。SDK/素材不在は SKIP)。
+  セットアップ/登録例 = `tools/mcp/README.md`。
+  残 (v2 候補): セッションの snapshot/restore 公開 (暖機 40〜200 倍を外にも) / ディスクイメージ入力 /
+  quubee_run CLI の --json との整合レビュー。
+
 **残**: ①既存 `tools/*.js` を machine.js へ寄せる (急がない。触るたびに 1 本ずつ)
-②snapshot の圧縮 (いま 64MiB 生) ④MCP アダプタ — 次の本命。quubee_run を薄くラップし
-「目と耳」(run/observe/screenshot/keys) をツールとして出す。
-**注意: QuuBee の HLE-DOS は実 DOS ではない。MCP は「参照プラットフォーム」ではなく
-「煙感知器と計測器」として出す** (docs/dos_hle_gaps.md を必ず添える。quubee_run の note
-フィールドはその布石)。
+②snapshot の圧縮 (いま 64MiB 生)。
+**注意 (③④で実装済みの原則): QuuBee の HLE-DOS は実 DOS ではない。CLI/MCP は「参照
+プラットフォーム」ではなく「煙感知器と計測器」** — 全応答に note を同梱し、quubee_gaps で
+docs/dos_hle_gaps.md を機械可読で添える。
 
 ## 🧠 エミュ本体の高速化 — 第 1+2 弾完了 (2026-07-10/11)
 
