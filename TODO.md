@@ -24,11 +24,24 @@
   FAIL/TIMEOUT は出力末尾を添付。フルラン実測 129 秒 (jobs=8)。テストの規約 = PASS→exit 0 /
   FAIL→exit 非 0 / 前提不足→行頭 `SKIP — 理由` + exit 0 (全 69 本が準拠)。横断リファクタの安全網。
 
+- ✓ **③ headless CLI `tools/quubee_run.js` — v1 完成 (2026-07-11)**: 書庫 (.lzh/.lha/.lzs/.zip) か
+  ディレクトリを 1 コマンドで起動し JSON 報告。起動解決 = --exe > .bat 自動 (triage の planLaunch と
+  同じ考え方・DRIVER_NAMES で主実行を判別) > 単一 exe。単一起動も 1 行 .bat 合成で stage_batch
+  (③ 文インタプリタ) に一本化。観察 = tier/state (分類は `tools/lib/tier.js` に共有化。triage は
+  「触るたびに」方針で未移行) + `--screenshot` PNG / `--text` VRAM / `--audio` RMS /
+  `--keys "RETURN@500"` 投入。**全 JSON に wasm SHA と「not real DOS」注意書きを必ず同梱**
+  (煙感知器の位置づけ)。回帰 = `tools/quubee_run_test.js` (liotest.zip、10 項目)。
+  既知の癖: DYNAMO が triage=BOOT / CLI=BUSY (colors 2 vs 4-6。Machine.boot は soundboard=matex +
+  音声汲みありで triage の裸ループとブート経路が微差。生存判定の実質は一致)。
+  制約 (v1) = サブディレクトリ不持込 (triage 同等)・ディスクイメージ入力未対応・NKEY が
+  RETURN/SPACE/ESC/CTRL/SHIFT の 5 キーのみ (対話を広げるなら machine.js の NKEY 表を拡張)。
+
 **残**: ①既存 `tools/*.js` を machine.js へ寄せる (急がない。触るたびに 1 本ずつ)
-②snapshot の圧縮 (いま 64MiB 生) ③headless CLI (`quubee-run game.zip --json`) ④MCP アダプタ
-(他の開発者に「目と耳」を渡す。我々にとっての価値はライブラリ、彼らにとっての価値は MCP)。
+②snapshot の圧縮 (いま 64MiB 生) ④MCP アダプタ — 次の本命。quubee_run を薄くラップし
+「目と耳」(run/observe/screenshot/keys) をツールとして出す。
 **注意: QuuBee の HLE-DOS は実 DOS ではない。MCP は「参照プラットフォーム」ではなく
-「煙感知器と計測器」として出す** (docs/dos_hle_gaps.md を必ず添える)。
+「煙感知器と計測器」として出す** (docs/dos_hle_gaps.md を必ず添える。quubee_run の note
+フィールドはその布石)。
 
 ## 🧠 エミュ本体の高速化 — 第 1+2 弾完了 (2026-07-10/11)
 

@@ -1,5 +1,21 @@
 # CHANGELOG
 
+## [headless CLI quubee_run.js — 書庫を 1 コマンドで起動し JSON 報告 (MCP の土台)] — 2026-07-11
+
+TODO「machine.js 残 ③」。`node tools/quubee_run.js game.lzh [--exe N] [--args S] [--frames N]
+[--screenshot F] [--text] [--audio SEC] [--keys "RETURN@500"] [--quiet]` で、書庫
+(.lzh/.lha/.lzs/.zip、展開は本番と同じ archive.js) かディレクトリを起動し、
+tier/state (bio100_triage の分類を `tools/lib/tier.js` へ共有化)・色数・アニメ有無・PC・XMS・
+音声 RMS・スクリーンショット・テキスト VRAM を JSON 1 行で返す。起動解決 = --exe 明示 >
+.bat 自動解決 (DRIVER_NAMES で主実行判別) > 単一 exe、いずれも 1 行 .bat 合成で
+stage_batch (③ 文インタプリタ = 前日に一本化した正典経路) に乗せる。曖昧 (exe 複数) は
+候補列挙つきの正直な失敗。**全 JSON に wasm SHA (headless 正典ルール) と「QuuBee HLE-DOS is
+not real DOS」注意書きを必ず同梱** — MCP 化 (次段) での「参照プラットフォームでなく煙感知器と
+計測器」の位置づけを出力形式レベルで固定する。実地 = DEPTH100.LZH→ALIVE (タイトル画面 PNG 確認) /
+DYNAMO16.LZH→.bat 解決 DD.BAT→DD_OPN.EXE+drv / YY.LZH→WAIT (「Y)es or N)o ?」プロンプトを
+--text で取得) / ray_iv2a.lzh→ALIVE + audioRms / liotest.zip→--keys で画面前進。
+回帰 = 新設 `tools/quubee_run_test.js` (10 項目) + スイート全 71 本 PASS。
+
 ## [SUPPORT_LONGJMP=wasm は実測で不採用 — 速度パス一区切り] — 2026-07-11
 
 エミュ高速化の残候補だった `-sSUPPORT_LONGJMP=wasm` (longjmp を JS 例外でなく Wasm EH で投げる)
