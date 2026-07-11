@@ -1,5 +1,16 @@
 # CHANGELOG
 
+## [計測器 (CLI/MCP) は Y2K クランプ既定 OFF = 実時計 — 煙を隠さない] — 2026-07-11
+
+ユーザー提案。RTC の 1999 クランプ (patch 03) は**プレイヤー用の保護** (2 桁年ソフトのセーブ破壊
+防止) であって、煙感知器と計測器では Y2K バグという煙を隠す側に働く。headless の作業ディレクトリは
+使い捨てで守るべきセーブも無い。→ machine.js boot に `y2kClamp` オプションを追加 (**既定 true =
+プレイヤー同等 = 既存回帰全部そのまま**)、quubee_run CLI と MCP サーバだけ**既定 false = 実時計
+(2026 年の実機相当)** に。opt-in で戻せる (CLI `--y2k-clamp` / MCP boot `y2kClamp:true`)。どちらで
+観察したかは出力 JSON の `y2kClamp` に常に記録。実測 falsify = RTC BCD 年が既定 0x26 (2026)・
+クランプ時 0x99。ブラウザのプレイヤーは従来どおりクランプ ON (変更なし・wasm 不変)。
+回帰 = mcp_server_test に既定値検査を追加 (13 項目)・スイート全 72 本 PASS。
+
 ## [MCP サーバ tools/mcp/server.js — 「目と耳」を対話セッションで外に出す] — 2026-07-11
 
 TODO「machine.js 残 ④」。ユーザー判断 = **対話セッション型 + 公式 SDK** (@modelcontextprotocol/sdk +

@@ -19,6 +19,8 @@
 //     --text           テキスト VRAM 25 行を JSON に含める
 //     --audio SEC      末尾 SEC 秒の音声を汲んで RMS を測る (発音の煙感知)
 //     --keys SPEC      キー投入 "RETURN@500,SPACE@1200" (NKEY 名@フレーム。6 フレーム保持)
+//     --y2k-clamp      RTC の Y2K クランプ (1999 固定) を ON にする。既定 OFF = 実時計
+//                      (2026 年の実機相当。計測器は Y2K バグの煙を隠さない。ブラウザは ON 相当)
 //     --quiet          JSON 1 行のみ出力 (機械消費用)
 //
 // 制約 (v1):
@@ -39,7 +41,7 @@ function usage(msg) {
 }
 
 function parseArgs(argv) {
-    const o = { frames: 3000, multiple: 20, args: '', text: false, quiet: false };
+    const o = { frames: 3000, multiple: 20, args: '', text: false, quiet: false, y2kClamp: false };
     const rest = [];
     for (let i = 0; i < argv.length; i++) {
         const a = argv[i];
@@ -53,6 +55,7 @@ function parseArgs(argv) {
         else if (a === '--text') o.text = true;
         else if (a === '--audio') o.audio = +next();
         else if (a === '--keys') o.keys = next();
+        else if (a === '--y2k-clamp') o.y2kClamp = true;
         else if (a === '--quiet') o.quiet = true;
         else if (a.startsWith('--')) usage('未知のオプション: ' + a);
         else rest.push(a);
@@ -86,7 +89,7 @@ function parseKeys(spec) {
         const plan = planLaunch(staged.dir, opts);
         const m = await Machine.boot({
             dir: staged.dir, bat: plan.bat, args: plan.synthetic ? '' : opts.args,
-            multiple: opts.multiple,
+            multiple: opts.multiple, y2kClamp: opts.y2kClamp,
         });
 
         // --- 観察ループ: 途中 4 点 + 最終でフレームバッファをサンプル。位置は triage の
@@ -132,6 +135,7 @@ function parseKeys(spec) {
             xms: m.xms(),
             wasm: m.info().wasm.sha256.slice(0, 16),
             multiple: opts.multiple,
+            y2kClamp: opts.y2kClamp,
             note: NOTE,
         };
         if (opts.audio) {

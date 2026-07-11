@@ -72,6 +72,7 @@ async function tool(name, args) {
     const b = await tool('quubee_boot', { path: ZIP, exe: 'T1.EXE' });
     check('boot がセッションを返す', !b.isError && !!(b.json && b.json.session), JSON.stringify(b.json));
     check('boot に wasm SHA', !!(b.json && /^[0-9a-f]{16}$/.test(b.json.wasm)));
+    check('boot 既定は実時計 (y2kClamp=false)', b.json && b.json.y2kClamp === false, JSON.stringify(b.json));
     const sid = b.json.session;
 
     const r1 = await tool('quubee_run', { session: sid, frames: 600 });

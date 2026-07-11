@@ -44,8 +44,10 @@
   全文 = 誤読防止の正典)**。**全応答 JSON に note (not real DOS) を同梱・剥がすの禁止**。
   依存 = @modelcontextprotocol/sdk + zod (`tools/mcp/` に隔離、npm install 要。node_modules/lock は
   gitignore)。共有部品 = 起動系を `tools/lib/stage.js` へ切り出し (CLI と共用)。
-  回帰 = `tools/mcp_server_test.js` (素の JSON-RPC クライアントで 12 項目。SDK/素材不在は SKIP)。
-  セットアップ/登録例 = `tools/mcp/README.md`。
+  回帰 = `tools/mcp_server_test.js` (素の JSON-RPC クライアントで 13 項目。SDK/素材不在は SKIP)。
+  セットアップ/登録例 = `tools/mcp/README.md`。**計測器の流儀 = Y2K クランプ既定 OFF (実時計 2026)**
+  — プレイヤーの保護 (1999 固定) は煙感知では煙隠しになるため (ユーザー判断 2026-07-11)。
+  opt-in で戻せる (CLI `--y2k-clamp` / MCP boot `y2kClamp:true`)。観察条件は JSON に常に記録。
   残 (v2 候補): セッションの snapshot/restore 公開 (暖機 40〜200 倍を外にも) / ディスクイメージ入力 /
   quubee_run CLI の --json との整合レビュー。
 

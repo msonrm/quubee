@@ -206,6 +206,7 @@ class Machine {
                 soundboard: this.opts.soundboard,
                 multiple: this.opts.multiple,
                 extmem: this.opts.extmem,
+                y2kClamp: this.opts.y2kClamp,
             },
             audio: { rate: this.rate, blockFrames: this.bufsize },
         };
@@ -413,6 +414,10 @@ class Machine {
     static async boot(opts) {
         const o = {
             dir: null, bat: null, soundboard: 'matex', multiple: 20, extmem: null, quiet: true,
+            // RTC の Y2K クランプ (patch 03、年を 1999 に固定)。既定 true = ブラウザのプレイヤーと同じ
+            // (2 桁年ソフトのセーブ破壊保護)。計測器 (quubee_run CLI / MCP) は false で実時計に
+            // する — 2026 年の実機相当の挙動 (Y2K バグの煙) を隠さないため。
+            y2kClamp: true,
             ...opts,
         };
         const M = await Machine._load(o.quiet);
@@ -443,6 +448,7 @@ class Machine {
         if (o.soundboard === 'matex') M.ccall('np2kai_set_wss', 'number', ['number'], [1]);
         else M.ccall('np2kai_set_chibioto', 'number', ['number'], [o.soundboard === 'adpcm' ? 1 : 0]);
         if (o.extmem) M.ccall('np2kai_set_extmem', 'number', ['number'], [o.extmem]);
+        if (!o.y2kClamp) M.ccall('np2kai_set_y2k_clamp', 'number', ['number'], [0]);
 
         M.FS.writeFile('/tmp/loader.d88', new Uint8Array(fs.readFileSync(path.join(WEB, 'assets/loader.d88'))));
         M.ccall('np2kai_insert_fdd', 'number', ['number', 'string', 'number', 'number'], [h, '/tmp/loader.d88', 0, 0]);

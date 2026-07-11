@@ -44,6 +44,13 @@ claude mcp add quubee -- node /絶対パス/qb/tools/mcp/server.js
 
 典型フロー: `boot` → `run(1500)` → `screenshot`/`text` → `key(RETURN)` → `run(300)` → `classify` → `close`。
 
+## プレイヤーとの意図的な違い: Y2K クランプは既定 OFF (実時計)
+
+ブラウザの QuuBee は RTC の年を 1999 に固定して 2 桁年ソフトのセーブ破壊から**プレイヤーを保護**する。
+計測器であるこのサーバ (と CLI) は逆に**既定で実時計 (2026 年の実機相当)** — Y2K バグの煙を
+隠さないため。プレイヤー環境の挙動を再現したいときは `quubee_boot` に `y2kClamp: true` を渡す
+(CLI は `--y2k-clamp`)。boot 応答の `y2kClamp` フィールドでどちらで観察したか常に分かる。
+
 ## 実装メモ
 
 - セッション = サーバ内に生きた `Machine` を保持 (対話型)。ワンショットで良ければ

@@ -75,6 +75,8 @@ server.tool(
         bat: z.string().optional().describe('起動 .bat を明示'),
         args: z.string().optional().describe('コマンドライン引数'),
         multiple: z.number().int().min(1).max(64).optional().describe('クロック倍率 (既定 20 = headless 正典)'),
+        y2kClamp: z.boolean().optional().describe('RTC を 1999 に固定するプレイヤー用保護。' +
+            '既定 false = 実時計 (2026 年の実機相当。2 桁年ソフトの Y2K バグがそのまま観察できる)'),
     },
     async (a) => {
         try {
@@ -85,13 +87,13 @@ server.tool(
                 const plan = planLaunch(staged.dir, { exe: a.exe, bat: a.bat, args: a.args || '' });
                 const m = await Machine.boot({
                     dir: staged.dir, bat: plan.bat, args: plan.synthetic ? '' : (a.args || ''),
-                    multiple: a.multiple || 20,
+                    multiple: a.multiple || 20, y2kClamp: !!a.y2kClamp,
                 });
                 const id = 's' + nextId++;
                 sessions.set(id, { m, cleanup: staged.cleanup, launch: plan.label,
                     samples: { maxColors: 0, hashes: [] } });
                 return json({ session: id, launch: plan.label, wasm: m.info().wasm.sha256.slice(0, 16),
-                    multiple: a.multiple || 20, frame: 0,
+                    multiple: a.multiple || 20, y2kClamp: !!a.y2kClamp, frame: 0,
                     hint: 'quubee_run で進める (例 frames=1500) → quubee_screenshot / quubee_text で観察' });
             } catch (e) { staged.cleanup(); throw e; }
         } catch (e) { return jsonError(e.message || e); }
