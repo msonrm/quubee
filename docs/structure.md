@@ -63,6 +63,8 @@ qb/
 │   ├── deploy.sh            # Cloudflare Pages デプロイ (dist/ 生成)
 │   ├── img2d88.py           # PC-98 raw .img → .d88 変換
 │   ├── setup_soundfont.sh   # MIDI 音色 SF2 (GeneralUser GS ~32MB) を取得
+│   ├── run_tests.js         # 一括テストランナー: *_test.js 全 69 本を並列実行 (約 2 分)。
+│   │                        #   node tools/run_tests.js [filter] [--jobs N] [--timeout S]
 │   ├── *_test.js ほか       # headless 回帰テスト群 (Node + Wasm 実ブート)。例:
 │   │                        #   batch_test (bat 分岐) / xms_test / sft_test / sgr_test /
 │   │                        #   find_sjis_test / exec_env_test / diskimage_test / lzh_l1ext_test /
