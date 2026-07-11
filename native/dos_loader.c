@@ -163,9 +163,11 @@ static void mcb_coalesce(void) {
  * 最上位プログラムの初回 4Ah self-shrink / loader-start から呼ぶ (まだ 48h 確保が無い段階で
  * 呼ぶ前提)。env・プログラム本体も実 MCB として鎖に入れるので、以後はそれらの resize/free が
  * 通常の MCB 経路で忠実に動く。
- *   arena_base_para = 空きアリーナの起点 (= プログラム本体の末尾 = PSP + プログラムサイズ)。 */
+ *   arena_base_para = 空きアリーナの起点 (= プログラム本体の末尾 = PSP + プログラムサイズ)。
+ *   arena_base_para >= MEM_TOP のときは空きアリーナ無し: プログラム本体自身が終端 Z ブロックとして
+ *   0xA000 まで所有する (実 DOS の最上位プログラム既定 = COM / e_maxalloc=FFFF の EXE。
+ *   self-shrink すると上の 3 ブロック形へ移行する)。 */
 void qb_dos_alloc_reset(uint16_t arena_base_para) {
-    if (arena_base_para >= QB_DOS_MEM_TOP_SEG)  arena_base_para = (uint16_t)(QB_DOS_MEM_TOP_SEG - 1);
     if (arena_base_para <= QB_DOS_LOAD_SEG)     arena_base_para = (uint16_t)(QB_DOS_LOAD_SEG + 1);
     g_first_mcb = (uint16_t)(QB_DOS_ENV_SEG - 1);   /* チェーン先頭 = env ブロックの MCB */
 
@@ -173,6 +175,14 @@ void qb_dos_alloc_reset(uint16_t arena_base_para) {
      * size = (LOAD_SEG-1) - ENV_SEG なので次の MCB がちょうど LOAD_SEG-1 (プログラム MCB) に来る。 */
     mcb_set((uint16_t)(QB_DOS_ENV_SEG - 1), QB_MCB_M, QB_DOS_LOAD_SEG,
             (uint16_t)(QB_DOS_LOAD_SEG - 1 - QB_DOS_ENV_SEG));
+    if (arena_base_para >= QB_DOS_MEM_TOP_SEG) {
+        /* 空きアリーナ無し: プログラム本体 = 終端 Z ブロック、data=[LOAD_SEG, 0xA000)。
+         * PSP:2 (top-of-memory=0xA000) と MCB の答えが一致する。largest_free=0 なので
+         * self-shrink 前の AH=48h / EXEC は実 DOS 同様に失敗する。 */
+        mcb_set((uint16_t)(QB_DOS_LOAD_SEG - 1), QB_MCB_Z, QB_DOS_LOAD_SEG,
+                (uint16_t)(QB_DOS_MEM_TOP_SEG - QB_DOS_LOAD_SEG));
+        return;
+    }
     /* プログラム本体ブロック: MCB@LOAD_SEG-1, owner=PSP, data=[LOAD_SEG, arena_base)。 */
     mcb_set((uint16_t)(QB_DOS_LOAD_SEG - 1), QB_MCB_M, QB_DOS_LOAD_SEG,
             (uint16_t)(arena_base_para - QB_DOS_LOAD_SEG));
@@ -1724,8 +1734,13 @@ int qb_dos_loader_start_hook(void) {
         CPU_SP = 0xFFFE;
         CPU_ESI = 0x0100;
         CPU_EDI = 0xFFFE;
-        /* AH=48h 用 alloc base: COM は 0x0100 + 0x1000 paragraphs (= 64KB ブロック直後) */
-        qb_dos_alloc_reset((uint16_t)(QB_DOS_LOAD_SEG + 0x1000));
+        /* 実 DOS: COM には最大空きブロックを丸ごと割り当てる = PSP から 0xA000 まで全部所有
+         * (PSP:2=0xA000 とも一致)。確保/EXEC の前に self-shrink (AH=4Ah) するのが実機の作法で、
+         * 実機で公開されてきたソフトはその淘汰を通っている。旧実装の「64KB 固定 + 直上に
+         * 空きアリーナ」(gaps §4-20) は ①シュリンク無しの確保/EXEC が実機に無い形で成功する
+         * ②64KB 超を黙って使う CP/M 流の合法ソフトがアリーナ MCB を踏み潰す、の両罪だった。
+         * EXE (e_maxalloc=FFFF → 全所有) と同じ意味論に統一 (2026-07-11)。 */
+        qb_dos_alloc_reset(QB_DOS_MEM_TOP_SEG);
         fprintf(stderr,
                 "[dos_loader] COM loaded at %04x:%04x, entry %04x:%04x, SP=%04x\n",
                 QB_DOS_LOAD_SEG, 0x0100, CPU_CS, CPU_IP, CPU_SP);

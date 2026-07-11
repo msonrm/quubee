@@ -353,10 +353,18 @@ TODO.md「プリンタ出力 → ブラウザ」参照。
 19. ~~**AH=4Dh の終了種別 (AH) が常に 0**~~ → ✅ 2026-07-05 実装。signal_tsr（AH=31h/INT 27h
     経由の常駐）で type 3 を記録し、実 DOS 同様 4Dh の AH=3 で「TSR 終了」が返る。
     最上位 TSR（親無し halt loop）は 4Dh の読み手が存在しないため対象外。
-20. **最上位 COM のブロックが 64KB 固定**— 実 DOS は最大ブロック全部を渡す
+20. ~~**最上位 COM のブロックが 64KB 固定**— 実 DOS は最大ブロック全部を渡す
     (PSP:2=0xA000 とも整合)。self-shrink 前の AH=48h が実 DOS では失敗するのに成功する /
     shrink せず EXEC する行儀の悪い COM は実 DOS なら AX=8 で失敗するが、ここでは
-    64KB 超に spill した親データの上に子がロードされ得る。
+    64KB 超に spill した親データの上に子がロードされ得る。~~ → ✅ 2026-07-11 **実 DOS 相当に
+    統一**（ユーザー指摘「実機で公開されたソフトは実 DOS の淘汰を通っている」が契機）。COM も
+    EXE (e_maxalloc=FFFF) と同じ「PSP から 0xA000 まで全所有・プログラム本体が終端 Z ブロック」
+    に。self-shrink 前の AH=48h/EXEC は実機同様に失敗 (largest=0)、64KB 超を黙って使う CP/M 流も
+    合法化 (旧実装ではアリーナ MCB を踏み潰していた)。PSP:2 と MCB の答えも一致。検証 =
+    スイート全 73 本 + bio100 triage --fresh の新旧 wasm タイトル単位 A/B で 31/31 本 tier/state
+    完全一致 (公開ソフトに寛容さへの依存ゼロを実証)。回帰 = `tools/com_memown_test.js`
+    (シュリンク前 largest=0 / シュリンク後に空き出現。旧実装では largest=0x8EFF を検出して FAIL
+    = 検出力実証済み)。
 21. **最上位 COM の SS:SP に zero word を積まない**— EXEC 子 COM / load-only は積むのに
     loader-start だけ欠落。RET 終了（CP/M 流）の契約。※実害は現状ほぼ無し —
     `pccore_reset` が毎 Run `ZeroMemory(mem, 0x110000)` するため当該 word は常に 0。
