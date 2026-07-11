@@ -62,9 +62,13 @@
 | Ray (16bit) | `exec_allstep` 34.5% (フェッチ+prefix スキャン+残り call_indirect) / `LES_GwMp` 20.2% (内周ループの構造そのもの・全インライン済み) |
 | Suika3 (32bit) | `exec_allstep` ~37% / 命令実装+EA ~30% (薄く広い) / FPU ~5% (棄却済み) |
 
-- 次の一手候補 (やるなら): ③ `-sSUPPORT_LONGJMP=wasm` (Wasm EH 化。例外連発ゲスト = boot.d88 型
-  で効く。Ray/Suika3 型には効かない。フラグ 1 個) / 16bit 直接ディスパッチの命令追加 (1 命令 <1%) /
-  既定 multiple を 20→27 に上げる判断 (Ray 級の実機確認後)。
+- ✅ **③ `-sSUPPORT_LONGJMP=wasm` は実測で不採用と決着 (2026-07-11)**。A/B (各 3 回 + Suika3 は
+  wasm 差し替えインターリーブ 3 対): bench_frame (例外連発型) は 18.02→10.60 ms/frame = **1.70 倍**
+  だが、**Suika3 (32bit) が 7.98→8.16 ms/frame = 約 3% 悪化 (6/6 回重なりゼロ = 実コスト)**、
+  Ray はノイズ域 (9.63→9.57)。効くのはサポート外ワークロード (FreeDOS ブートスピン型) だけで、
+  主力の 32bit ゲーム級に実害 + Wasm EH は古いブラウザを切る。例外連発する実タイトルが corpus に
+  現れたら再考。**これで速度パスは一区切り** (残候補は 16bit ディスパッチ命令追加 <1%/命令 のみ)。
+- ~~既定 multiple を 20→27 に上げる判断~~ → 採用済み (2026-07-11)。
 - プロファイル手順: CMakeLists の link options に `--profiling-funcs` を足す → `inspector.Session`
   (ハーネスは machine.js + Profiler。呼び出し元特定は profile.nodes の親子辺を集計)。
 - FPU 高速化 (clean-room double x87) は無駄と実測で確定 (タダにしても全体 1.14 倍)。
