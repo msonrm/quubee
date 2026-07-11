@@ -3134,7 +3134,10 @@ async function makeWorkerEmu() {
         const saveSettings = () => { try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch (_) {} };
 
         // 表示用の既定値 (getter の無い設定の初期表示に使う。native の実既定と一致させること)。
-        const DEFAULTS = { fmgen: 1, beepgain: 3.83, soundboard: 'matex', midifx: 1, multiple: 20,
+        // multiple はリテラルでなく DEFAULT_MULTIPLE を参照 (既定 20→27 の引き上げ時、ここだけ 20 が
+        // 残り「既定に戻す」が 20 に落とすズレをユーザーが発見した。定義は一箇所に)。
+        const DEFAULTS = { fmgen: 1, beepgain: 3.83, soundboard: 'matex', midifx: 1,
+                           multiple: DEFAULT_MULTIPLE,
                            lines30: 0, itfpost: 0, y2k: 1, mouse33: 'ms', verbose: 0, theme: 'dark',
                            fepstyle: 'wx', kanalayout: 'builtin', kanaregion: 'us' };
         const get = (k) => (k in settings ? settings[k] : DEFAULTS[k]);
