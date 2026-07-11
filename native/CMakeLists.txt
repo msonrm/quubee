@@ -315,6 +315,10 @@ target_compile_definitions(np2kai_core PRIVATE
     CPUCORE_IA32
     IA32_REBOOT_ON_PANIC
     IA32_PAGING_EACHSIZE
+    USE_CPU_INLINEINST   # exec_allstep 内でホット命令 (MOV r32 / 0Fh / JZ) と prefix を直処理
+                         # (call_indirect 削減。np21w 実績のスイッチ、2026-07-11 計測で採用)
+    USE_CPU_EIPMASK      # _ADD_EIP の per-byte 分岐を CPU_EIPMASK の AND に置換 (branchless)。
+                         # マスク維持は segments.c/interface.c/ia32.c に無条件で実装済み
     SUPPORT_PC9821       # i386c/cpumem.c の memfnf テーブルが
                          # SUPPORT_PC9821 無効時も memvgaf_* を参照するため必須
     SUPPORT_PEGC         # PC-9821 の 256 色 VRAM。memvga.c が参照

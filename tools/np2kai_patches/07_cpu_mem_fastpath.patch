@@ -28,8 +28,51 @@ index 2a0c0f3..6ced747 100755
  	if (address < I286_MEMREADMAX) {
  		return(mem[address]);
  	}
+diff --git a/i386c/ia32/cpu.c b/i386c/ia32/cpu.c
+index 077259c..59313db 100755
+--- a/i386c/ia32/cpu.c
++++ b/i386c/ia32/cpu.c
+@@ -29,6 +29,12 @@
+ #include "ia32.mcr"
+ 
+ #include "inst_table.h"
++/* QuuBee patch 07: 16bit 直接ディスパッチ用のハンドラ宣言 */
++#include "instructions/ctrl_trans.h"
++#include "instructions/data_trans.h"
++#include "instructions/bin_arith.h"
++#include "instructions/seg_reg.h"
++#include "groups.h"
+ 
+ #if defined(ENABLE_TRAP)
+ #include "trap/steptrap.h"
+@@ -478,6 +484,25 @@ exec_allstep(void)
+ 				continue;
+ 			}
+ 		}
++		else
++		{
++			/* QuuBee patch 07: 16bit 側の直接ディスパッチ。Ray 級 (16bit 実モードゲーム) の
++			 * 頻出命令を call_indirect (署名チェック付き) でなく直接呼びにする。呼ぶ関数は
++			 * insttable_1byte[0][op] と同一なので意味論は不変で、V8 のインライン化が効く。 */
++			switch (op) {
++			case 0x74: JZ_Jb(); continue;
++			case 0x75: JNZ_Jb(); continue;
++			case 0x3b: CMP_GwEw(); continue;
++			case 0x80: Grp1_EbIb(); continue;
++			case 0x83: Grp1_EwIb(); continue;
++			case 0x88: MOV_EbGb(); continue;
++			case 0x89: MOV_EwGw(); continue;
++			case 0x8a: MOV_GbEb(); continue;
++			case 0x8b: MOV_GwEw(); continue;
++			case 0xc4: LES_GwMp(); continue;
++			default: break;
++			}
++		}
+ #endif
+ 		if (!(insttable_info[op] & INST_STRING) || !CPU_INST_REPUSE) {
+ #if defined(DEBUG)
 diff --git a/i386c/ia32/cpu.h b/i386c/ia32/cpu.h
-index 0e9d0b4..faea43c 100755
+index 0e9d0b4..9c89213 100755
 --- a/i386c/ia32/cpu.h
 +++ b/i386c/ia32/cpu.h
 @@ -447,6 +447,160 @@ extern UINT32		opCache;
@@ -193,7 +236,7 @@ index 0e9d0b4..faea43c 100755
  extern sigjmp_buf	exec_1step_jmpbuf;
  
  /*
-@@ -1477,4 +1631,60 @@ char *cpu_disasm2str(UINT32 eip);
+@@ -1477,4 +1631,174 @@ char *cpu_disasm2str(UINT32 eip);
  #include "resolve.h"
  #include "task.h"
  
@@ -253,7 +296,134 @@ index 0e9d0b4..faea43c 100755
 +}
 +/* ---- QuuBee patch 07 ここまで ---- */
 +
++/* ---- QuuBee patch 08: 実モードの data access / segreg load fast path ----
++ * 16bit 実モードゲーム (Ray 等) は cpu_vmemoryread_w / load_segreg (LES 連発) が
++ * プロファイル上位に来る。!CPU_STAT_PM 分岐 (cpu_mem.mcr / segments.c と逐語同一) を
++ * 呼び出し元へインライン化し、PM は従来の out-of-line へフォールバックする。
++ * cpu_mem.c 自身は QB_CPU_MEM_IMPL を定義してマクロ差し替えを受けない
++ * (本体定義がリネームされて衝突するのを防ぐ)。 */
++STATIC_INLINE UINT8 qb_vmemoryread_b(int idx, UINT32 offset) {
++	if (!CPU_STAT_PM)
++		return (UINT8)qb_phys_read8(CPU_STAT_SREG(idx).u.seg.segbase + offset);
++	return cpu_vmemoryread_b(idx, offset);
++}
++STATIC_INLINE UINT16 qb_vmemoryread_w(int idx, UINT32 offset) {
++	if (!CPU_STAT_PM)
++		return (UINT16)qb_phys_read16(CPU_STAT_SREG(idx).u.seg.segbase + offset);
++	return cpu_vmemoryread_w(idx, offset);
++}
++STATIC_INLINE UINT32 qb_vmemoryread_d(int idx, UINT32 offset) {
++	if (!CPU_STAT_PM)
++		return qb_phys_read32(CPU_STAT_SREG(idx).u.seg.segbase + offset);
++	return cpu_vmemoryread_d(idx, offset);
++}
++STATIC_INLINE void qb_vmemorywrite_b(int idx, UINT32 offset, UINT8 value) {
++	if (!CPU_STAT_PM) {
++		qb_phys_write8(CPU_STAT_SREG(idx).u.seg.segbase + offset, value);
++		return;
++	}
++	cpu_vmemorywrite_b(idx, offset, value);
++}
++STATIC_INLINE void qb_vmemorywrite_w(int idx, UINT32 offset, UINT16 value) {
++	if (!CPU_STAT_PM) {
++		qb_phys_write16(CPU_STAT_SREG(idx).u.seg.segbase + offset, value);
++		return;
++	}
++	cpu_vmemorywrite_w(idx, offset, value);
++}
++STATIC_INLINE void qb_vmemorywrite_d(int idx, UINT32 offset, UINT32 value) {
++	if (!CPU_STAT_PM) {
++		qb_phys_write32(CPU_STAT_SREG(idx).u.seg.segbase + offset, value);
++		return;
++	}
++	cpu_vmemorywrite_d(idx, offset, value);
++}
++STATIC_INLINE UINT32 qb_vmemory_RMW_b(int idx, UINT32 offset, UINT32 (CPUCALL *func)(UINT32, void *), void *arg) {
++	if (!CPU_STAT_PM) {
++		UINT32 addr = CPU_STAT_SREG(idx).u.seg.segbase + offset;
++		UINT8 value = (UINT8)qb_phys_read8(addr);
++		UINT32 result = (*func)(value, arg);
++		qb_phys_write8(addr, (UINT8)result);
++		return value;
++	}
++	return cpu_vmemory_RMW_b(idx, offset, func, arg);
++}
++STATIC_INLINE UINT32 qb_vmemory_RMW_w(int idx, UINT32 offset, UINT32 (CPUCALL *func)(UINT32, void *), void *arg) {
++	if (!CPU_STAT_PM) {
++		UINT32 addr = CPU_STAT_SREG(idx).u.seg.segbase + offset;
++		UINT16 value = (UINT16)qb_phys_read16(addr);
++		UINT32 result = (*func)(value, arg);
++		qb_phys_write16(addr, (UINT16)result);
++		return value;
++	}
++	return cpu_vmemory_RMW_w(idx, offset, func, arg);
++}
++STATIC_INLINE UINT32 qb_vmemory_RMW_d(int idx, UINT32 offset, UINT32 (CPUCALL *func)(UINT32, void *), void *arg) {
++	if (!CPU_STAT_PM) {
++		UINT32 addr = CPU_STAT_SREG(idx).u.seg.segbase + offset;
++		UINT32 value = qb_phys_read32(addr);
++		UINT32 result = (*func)(value, arg);
++		qb_phys_write32(addr, result);
++		return value;
++	}
++	return cpu_vmemory_RMW_d(idx, offset, func, arg);
++}
++#if !defined(QB_CPU_MEM_IMPL)
++#define	cpu_vmemoryread_b(i,o)		qb_vmemoryread_b(i,o)
++#define	cpu_vmemoryread_w(i,o)		qb_vmemoryread_w(i,o)
++#define	cpu_vmemoryread_d(i,o)		qb_vmemoryread_d(i,o)
++#define	cpu_vmemorywrite_b(i,o,v)	qb_vmemorywrite_b(i,o,v)
++#define	cpu_vmemorywrite_w(i,o,v)	qb_vmemorywrite_w(i,o,v)
++#define	cpu_vmemorywrite_d(i,o,v)	qb_vmemorywrite_d(i,o,v)
++#define	cpu_vmemory_RMW_b(i,o,f,a)	qb_vmemory_RMW_b(i,o,f,a)
++#define	cpu_vmemory_RMW_w(i,o,f,a)	qb_vmemory_RMW_w(i,o,f,a)
++#define	cpu_vmemory_RMW_d(i,o,f,a)	qb_vmemory_RMW_d(i,o,f,a)
++#endif
++
++/* segreg load: 実モード/VM86 は segments.c load_segreg の該当分岐 +
++ * segdesc_set_default の逐語インライン (書き込むフィールドも同一。唯一の差は
++ * 未使用パディング u.seg.d_pad に「スタックごみ」でなく旧値が残ること)。 */
++STATIC_INLINE void qb_load_segreg(int idx, UINT16 selector, UINT16 *sregp, descriptor_t *sdp, int exc) {
++	if (!CPU_STAT_PM || CPU_STAT_VM86) {
++		*sregp = selector;
++		sdp->u.seg.segbase = (UINT32)selector << 4;
++		sdp->u.seg.limit = 0xffff;
++		sdp->u.seg.c = (idx == CPU_CS_INDEX) ? 1 : 0;
++		sdp->u.seg.g = 0;
++		sdp->u.seg.wr = 1;
++		sdp->u.seg.ec = 0;
++		sdp->valid = 1;
++		sdp->p = 1;
++		sdp->type = (CPU_SEGDESC_TYPE_WR << CPU_DESC_H_TYPE_SHIFT)
++		            | ((idx == CPU_CS_INDEX) ? CPU_SEGDESC_H_D_C : 0);
++		sdp->dpl = CPU_STAT_VM86 ? 3 : 0;
++		sdp->rpl = CPU_STAT_VM86 ? 3 : 0;
++		sdp->s = 1;
++		sdp->d = 0;
++		sdp->flag = CPU_DESC_FLAG_READABLE|CPU_DESC_FLAG_WRITABLE;
++		return;
++	}
++	load_segreg(idx, selector, sregp, sdp, exc);
++}
++#undef	LOAD_SEGREG1
++#define	LOAD_SEGREG1(idx, selector, e) \
++	qb_load_segreg(idx, selector, &CPU_REGS_SREG(idx), &CPU_STAT_SREG(idx), e)
++/* ---- QuuBee patch 08 ここまで ---- */
++
  #endif	/* !IA32_CPU_CPU_H__ */
+diff --git a/i386c/ia32/cpu_mem.c b/i386c/ia32/cpu_mem.c
+index f0d5e27..aa2d726 100755
+--- a/i386c/ia32/cpu_mem.c
++++ b/i386c/ia32/cpu_mem.c
+@@ -23,6 +23,8 @@
+  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+  */
+ 
++/* QuuBee patch 08: cpu_vmemory* の本体定義 TU。cpu.h 末尾のマクロ差し替えを受けない */
++#define QB_CPU_MEM_IMPL
+ #include <compiler.h>
+ #include "cpu.h"
+ #include "cpumem.h"
 diff --git a/i386c/ia32/ia32.mcr b/i386c/ia32/ia32.mcr
 index 5540ded..a64b0a4 100755
 --- a/i386c/ia32/ia32.mcr

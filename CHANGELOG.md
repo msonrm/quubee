@@ -1,5 +1,32 @@
 # CHANGELOG
 
+## [エミュ高速化 第 2 弾: 16bit 実モード fast path — Ray 1.43 倍・multiple 27 が射程内に] — 2026-07-11
+
+第 1 弾のブラウザ実機確認 (ユーザー) で「**Ray が一番効果を実感できる。multiple 26 まで上げられる
+(前は 20 超で即ノイズ)、27 でプチノイズ**」→ Ray 級 (16bit 実モードゲーム = QuuBee の本丸ターゲット層)
+を的に第 2 弾。Ray 実測 **14.0 → 9.8 ms/frame = 1.43 倍**、multiple 27 換算 18.9 → 13.25ms で
+**予算 16.7ms の内側に**。Suika3 は 8.1ms を維持 (回帰なし)。回帰スイート全 PASS。
+
+Ray のプロファイル (支配項: exec_allstep 35% / LES+load_segreg 22% / cpu_vmemoryread_w 7%、
+音源はわずか 1% — 音詰まりは純粋にホスト CPU 律速) に対応して 4 点。パッチは 07 に統合:
+
+1. **上流スイッチ有効化** (CMakeLists): `USE_CPU_INLINEINST` (32bit ホット命令 + prefix の直処理) +
+   `USE_CPU_EIPMASK` (_ADD_EIP の per-byte 分岐→AND。マスク維持は上流に無条件実装済みだった)。-7%。
+2. **`qb_vmemoryread/write/RMW_{b,w,d}`** (cpu.h): データアクセスの !PM 分岐 (cpu_mem.mcr と逐語
+   同一) をインライン化。cpu_mem.c 本体は `QB_CPU_MEM_IMPL` ガードでマクロ差し替えから除外
+   (定義リネーム衝突の回避)。
+3. **`qb_load_segreg`** (cpu.h): 実モード/VM86 の segdesc_set_default を逐語インライン。Ray は
+   LES 連発 (load_segreg 単体で 10.2%) だった。descriptor_t の全書き込みフィールドが同一である
+   ことを構造体定義で確認 (唯一の差 = 未使用パディング d_pad にスタックごみでなく旧値が残る)。
+4. **16bit 直接ディスパッチ** (cpu.c exec_allstep): 頻出 10 命令 (MOV/CMP/Grp1/JZ/JNZ/LES) を
+   call_indirect (署名チェック付き) でなく直接呼びに。**呼ぶ関数は insttable_1byte[0][op] と同一**
+   なので意味論リスクゼロ、V8 のインライン化が効く。-8%。
+
+計測基盤: `tools/bench_ray.js` 新設 (16bit 実モード側の基準ワークロード。Suika3 と対で、CPU 最適化の
+A/B は必ず両方で測る)。残り: exec_allstep 34.5% (フェッチ+prefix スキャン+残りの call_indirect) /
+LES_GwMp 20.2% (Ray の内周ループの構造そのもの) — ここから先は逓減。
+代償: wasm 1.17→1.39MB (原点から +42%)。
+
 ## [エミュ本体の高速化 第 1 弾: メモリ/フェッチ fast path インライン化で 1.37 倍] — 2026-07-10
 
 patch 07 (`tools/np2kai_patches/07_cpu_mem_fastpath.patch`)。Suika3 実測 **11.2 → 8.1 ms/frame

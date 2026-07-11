@@ -24,11 +24,17 @@
 **注意: QuuBee の HLE-DOS は実 DOS ではない。MCP は「参照プラットフォーム」ではなく
 「煙感知器と計測器」として出す** (docs/dos_hle_gaps.md を必ず添える)。
 
-## 🧠 エミュ本体の高速化 — 第 1 弾完了: メモリ/フェッチ fast path で 1.37 倍 (2026-07-10)
+## 🧠 エミュ本体の高速化 — 第 1+2 弾完了 (2026-07-10/11)
 
-**patch 07 (`07_cpu_mem_fastpath.patch`) 実装・回帰全 PASS・コミット済み。** Suika3 実測
-11.2 → 8.1 ms/frame = **1.37 倍** (fps 88→123)。screen hash 一致 = 挙動不変。wasm は +20%
-(976KB→1.17MB、インライン展開の代償)。詳細 = memory/reference_cpu_mem_fastpath.md。
+**patch 07 (`07_cpu_mem_fastpath.patch`、第 2 弾を統合済み)・回帰全 PASS。** 実測:
+- **Suika3 (32bit DOS/4GW): 11.2 → 8.1 ms/frame = 1.39 倍** (第 1 弾: メモリ/フェッチ fast path)
+- **Ray IV (16bit 実モード): 14.0 → 9.8 ms/frame = 1.43 倍** (第 2 弾: vmemory/load_segreg/
+  16bit 直接ディスパッチ + USE_CPU_INLINEINST/EIPMASK)
+- ブラウザ実機 (ユーザー確認 2026-07-11): 第 1 弾時点で「Ray が一番体感できる。multiple 26 まで
+  上げられる (前は 20 超で即ノイズ)」。第 2 弾で Ray@27 headless 13.25ms (予算の 79%) — 27 が射程内。
+- 既定 multiple は 20 のまま (上げるかはユーザーの実機確認後の判断)。
+- wasm 976KB → 1.39MB (+42%、インライン展開の代償。gzip 配信では大幅圧縮)。
+- 詳細 = memory/reference_cpu_mem_fastpath.md / CHANGELOG 2026-07-10・11。
 
 **過程で分かったこと (重要、次の一手の前提):**
 - **`tools/bench_frame.js` (FreeDOS boot.d88) はインタプリタのベンチとして不適**。ブート後の
@@ -42,21 +48,19 @@
 - ①コードページキャッシュは**当面不要**。フェッチは qb_codefetch インラインで既に直読み
   (セグメント base 加算 + 上限チェック + 2 比較 + ロードのみ)。
 
-**残りの候補 (プロファイル 2026-07-10、patch 07 後の Suika3):**
-| 分類 | 占有 | 中身 |
-|---|---|---|
-| `exec_allstep` | 36.6% | ディスパッチ本体 (フェッチ inline 吸収後)。命令ごとの状態リセット + prefix スキャン + `call_indirect` (wasm では署名チェック付き) |
-| 命令実装 + EA | ~30% | `MOV_EdGd` 5.6% / `ea32_sib_disp8` 6.0% など薄く広い |
-| データアクセス (vmem) | ~6% | `cpu_vmemoryread_d` 等 (out-of-line のセグメント検査。中の物理アクセスは inline 済) |
-| FPU (SoftFloat3) | ~5% | 棄却済み (タダにしても +5%) |
+**残り (第 2 弾後のプロファイル 2026-07-11。ここから先は逓減):**
+| ワークロード | 残の支配項 |
+|---|---|
+| Ray (16bit) | `exec_allstep` 34.5% (フェッチ+prefix スキャン+残り call_indirect) / `LES_GwMp` 20.2% (内周ループの構造そのもの・全インライン済み) |
+| Suika3 (32bit) | `exec_allstep` ~37% / 命令実装+EA ~30% (薄く広い) / FPU ~5% (棄却済み) |
 
-- 次の一手候補: ③ `-sSUPPORT_LONGJMP=wasm` (Wasm EH 化。例外連発ゲスト = boot.d88 型で効く。
-  Suika3 型には効かない。フラグ 1 個なので次に試す価値) / `exec_allstep` の細部 (INLINEINST の
-  拡充、`insttable_info` 参照削減) / `cpu_vmemoryread_*` のインライン化 (効果 ~数%)。
+- 次の一手候補 (やるなら): ③ `-sSUPPORT_LONGJMP=wasm` (Wasm EH 化。例外連発ゲスト = boot.d88 型
+  で効く。Ray/Suika3 型には効かない。フラグ 1 個) / 16bit 直接ディスパッチの命令追加 (1 命令 <1%) /
+  既定 multiple を 20→27 に上げる判断 (Ray 級の実機確認後)。
 - プロファイル手順: CMakeLists の link options に `--profiling-funcs` を足す → `inspector.Session`
-  (ハーネスはセッション scratchpad の profile_game.js 相当を machine.js で組む)。
+  (ハーネスは machine.js + Profiler。呼び出し元特定は profile.nodes の親子辺を集計)。
 - FPU 高速化 (clean-room double x87) は無駄と実測で確定 (タダにしても全体 1.14 倍)。
-- 経緯の詳細 = memory/project_suika3_audio_loop_period.md / CHANGELOG 2026-07-10。
+- 経緯の詳細 = memory/project_suika3_audio_loop_period.md / CHANGELOG 2026-07-10・11。
 
 ## 🈁 HLE FEP — M2 完了・次は新配列 (keymap-format) 統合 (2026-07-07〜08)
 
