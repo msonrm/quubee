@@ -1,5 +1,26 @@
 # CHANGELOG
 
+## [キーリピート対応 (案A) — 押しっぱなしで実機同様にリピートする] — 2026-07-11
+
+2026-06-30 のユーザー指摘 (判断保留) を実装。実機 PC-98 はキーボードがハードウェアで
+auto-repeat するのに、bridge.js keydown が OS のオートリピートを意図的に捨てていたため
+一切リピートしなかった (エディタでカーソル押しっぱなしが 1 文字しか動かない忠実性ギャップ)。
+既存コメントの「リピートは PC-98 側のタイプマチックに委ねる」は誤りで、NP2kai の自前
+タイプマチック (np2cfg.keyrepeat_enable) は我々のビルドで既定 OFF = 何もリピートしない。
+
+**案A = OS リピートの keydown もゲストへ転送** (bridge.js のみ・Wasm 不変・即 revert 可)。
+NP2kai keystat_down が既押下キーへの再 down で break+make (新規キーストローク) を生成する
+(keystat.c、既定 keyrep=0x21) — 実機のハードタイプマチックをホスト OS のリピートで駆動する形。
+リピート間隔は OS 設定に従う。修飾キー (SFT/CAPS/KANA/GRPH/CTRL) は kbexflag の
+KBEX_NONREP=0x80 で対象外 = 押しっぱなし修飾は壊れない。pressed Set は keyup/blur 一括解放の
+追跡用として維持し、リピートでない二重 down は従来どおり落とす (防御)。
+
+C 側前提は恒久回帰 `tools/keyrepeat_test.js` (7 PASS) で型に封じた: AH=08h で 3 文字読む COM に
+'A' を keyUp なしで 3 回 down → down 1 回につきちょうど 1 文字 / 保持だけでは無音 (自前
+タイプマチック OFF = OS リピートと二重生成しない証明) / SHIFT 二重 down 後も shift 保持
+('A' 大文字で実証)。回帰スイート 70/70 PASS。ブラウザ実機確認 (①VZ/JED のリピート
+②東方/Super Depth の押しっぱなし移動が滑らかなまま) はユーザー確認待ち。
+
 ## [一括テストランナー + 起動 .bat の ② 線形列経路を ③ 文インタプリタへ統合] — 2026-07-11
 
 **一括テストランナー `tools/run_tests.js` 新設**。headless 回帰は 69 本 (`tools/*_test.js`) に

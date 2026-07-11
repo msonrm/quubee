@@ -2163,7 +2163,7 @@ async function makeWorkerEmu() {
     const keyDown = M.cwrap('np2kai_key_down', null, ['number', 'number']);
     const keyUp   = M.cwrap('np2kai_key_up',   null, ['number', 'number']);
 
-    // 押されている code を追跡 (オートリピートで重複 keydown を送らない)
+    // 押されている code を追跡 (keyup の透過判定と blur/モーダル時の一括解放用)
     const pressed = new Set();
 
     // 保持中のキーを全部 keyUp してから追跡集合を空にする。モーダル (ビューア/音楽
@@ -2197,8 +2197,11 @@ async function makeWorkerEmu() {
     //                              再入して同時打鍵バッファを壊す (labo docs/keymap-engine-embedding
     //                              §5.1)。タップは code/修飾を持つので keyEventFromBrowser(tap) が
     //                              そのまま組める。keyup は fep.feedUp 経由で供給する (下記)。
-    //   - ゲスト (PC98_KEYMAP):    初回 down のみ (pressed Set で二重 down を落とす)。リピートは
-    //                              PC-98 側のタイプマチックに委ねる (実機同様)。
+    //   - ゲスト (PC98_KEYMAP):    down は OS リピート (repeat===true) も転送 (2026-07-11、キー
+    //                              リピート対応)。NP2kai keystat_down が既押下キーへの再 down で
+    //                              break+make = 新規キーストロークを生成する (実機のハードタイプ
+    //                              マチック相当をホスト OS のリピートで駆動)。修飾キーは C 側
+    //                              KBEX_NONREP が弾く。pressed Set は keyup/一括解放の追跡用。
     // timestamp: 現状どの消費者も未使用 (エンジンは内部 setTimeout で時間判定する — labo §5.1)。
     //            合意済みのタップ形なので載せておく (将来の解析/ログ用)。
     function normTap(e, down) {
@@ -2428,9 +2431,14 @@ async function makeWorkerEmu() {
         if (code === undefined) return;
         // 透過時 (BS/DEL は KEY_PREVENT_DEFAULT 外) も欄の既定動作を抑止してゲストへ回す
         if (passThru || isCtrlC || KEY_PREVENT_DEFAULT.has(tap.code)) e.preventDefault();
-        // ゲスト: 初回 down のみ。OS オートリピート (tap.repeat===true) は pressed により
-        // ここで落ち、リピートは PC-98 側のタイプマチックに委ねる (実機同様)。
-        if (pressed.has(tap.code)) return;
+        // ゲスト: OS オートリピート (tap.repeat===true) も転送する (2026-07-11、キーリピート対応。
+        // 従来は捨てていて一切リピートしなかった = 実機 PC-98 のハード auto-repeat とのギャップ)。
+        // NP2kai keystat_down は既押下キーへの再 down で break+make = 新規キーストロークを生成する
+        // (keystat.c、既定 keyrep=0x21)。修飾キー (SFT/CAPS/KANA/GRPH/CTRL) は KBEX_NONREP=0x80 で
+        // 対象外なので押しっぱなし修飾は壊れない。キー状態 sense (keystat.ref) を読むゲームは
+        // break→make が同一呼び出し内で完結するため「押下」を観測し続け無傷。
+        // リピートでない二重 down (合成イベント等の防御) は従来どおり落とす。
+        if (pressed.has(tap.code) && !tap.repeat) return;
         pressed.add(tap.code);
         emu.keyDown(code);
     });
