@@ -217,7 +217,6 @@ set(EXPORTED_FUNCTIONS
     _np2kai_xms_stat
     _np2kai_dos_stage_com
     _np2kai_dos_stage_exe
-    _np2kai_dos_stage_script
     _np2kai_dos_stage_batch
     _np2kai_dos_stage_music
     _np2kai_dos_music_play

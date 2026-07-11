@@ -39,10 +39,10 @@ const MTEST = Uint8Array.from([
     M.FS.writeFile('/run/MOUSE.COM', new Uint8Array(fs.readFileSync(MOUSE)));
     M.FS.writeFile('/run/MTEST.COM', MTEST);
 
-    const script = 'MOUSE.COM\r\nMTEST.COM\r\n';
-    const r = M.ccall('np2kai_dos_stage_script', 'number',
+    const script = 'C\tMOUSE.COM\r\nC\tMTEST.COM\r\n';
+    const r = M.ccall('np2kai_dos_stage_batch', 'number',
         ['string', 'number', 'string'], [script, script.length, 'mousechain']);
-    if (r !== 0) { console.log('FAIL stage_script r=' + r); process.exit(1); }
+    if (r !== 0) { console.log('FAIL stage_batch r=' + r); process.exit(1); }
 
     M.FS.writeFile('/tmp/loader.d88', new Uint8Array(fs.readFileSync(path.join(WEB, 'assets/loader.d88'))));
     M.ccall('np2kai_insert_fdd', 'number', ['number','string','number','number'], [handle, '/tmp/loader.d88', 0, 0]);

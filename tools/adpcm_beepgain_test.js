@@ -79,10 +79,10 @@ async function playCapture(gainPct, adpcmVol, frames) {
     M.FS.writeFile('/run/' + song, new Uint8Array(fs.readFileSync(OVI)));
     for (const pv of PVIs) M.FS.writeFile('/run/' + path.basename(pv).toUpperCase(), new Uint8Array(fs.readFileSync(pv)));
     M.ccall('np2kai_insert_fdd', 'number', ['number', 'string', 'number', 'number'], [handle, '/tmp/loader.d88', 0, 0]);
-    const script = `FMP.COM\ts\nPLAY.COM\t${song}\n`;
+    const script = `C\tFMP.COM\ts\nC\tPLAY.COM\t${song}\n`;
     const bytes = Buffer.from(script, 'latin1');
     const ptr = M._malloc(bytes.length); M.HEAPU8.set(bytes, ptr);
-    M.ccall('np2kai_dos_stage_script', 'number', ['number', 'number', 'string'], [ptr, bytes.length, 'adpcm_bg']);
+    M.ccall('np2kai_dos_stage_batch', 'number', ['number', 'number', 'string'], [ptr, bytes.length, 'adpcm_bg']);
     M._free(ptr);
     M.ccall('np2kai_reset', null, ['number'], [handle]);   // opna_reset が vol_pcm を fmgen へ (ブラウザ Run と同条件)
     if (adpcmVol >= 0) M.ccall('np2kai_set_vol', null, ['number','number','number','number'], [-1, -1, -1, adpcmVol]);

@@ -246,10 +246,11 @@ TODO.md「プリンタ出力 → ブラウザ」参照。
   `mouse.com` が常駐し INT 33h AX=0 に AX=0xFFFF を返すまで確認済み・2026-06-25）。実マウス移動の追従は
   OPNA タイマ割り込み + 8255 読みの実時間挙動依存でブラウザ実機確認が要る。
 - **COMMAND.COM は起動 .bat 専用のミニ実装のみ**（2026-06-03、`tools/dos_loader/shell.asm` +
-  `qb_dos_stage_script`）。起動 .bat のコマンドを 1 セッション内で順に `AH=4Bh` EXEC する（ドライバ TSR 常駐 →
-  game → -r 解除）専用シェルで、汎用シェルではない。**対話プロンプト・環境変数展開・`cd`/`set`・リダイレクトは
-  非対応**。制御フロー（`:label`/`goto`/`if errorlevel`/`if "%N"==`）は ✅ 2026-06-10 の errorlevel 分岐
-  インタプリタで対応（`qb_dos_stage_batch`、`IF ERRORLEVEL == N` の `=` 区切り変種も可）。それ以外の構文
+  `qb_dos_stage_batch`。2026-07-11 に旧線形列 API `qb_dos_stage_script` を stage_batch へ統合・撤去）。
+  起動 .bat のコマンドを 1 セッション内で順に `AH=4Bh` EXEC する（ドライバ TSR 常駐 →
+  game → -r 解除）専用シェルで、汎用シェルではない。**対話プロンプト・環境変数展開・リダイレクトは
+  非対応**（`cd`/`set` は文インタプリタが対応）。制御フロー（`:label`/`goto`/`if errorlevel`/`if "%N"==`）は
+  ✅ 2026-06-10 の errorlevel 分岐インタプリタで対応（`IF ERRORLEVEL == N` の `=` 区切り変種も可）。それ以外の構文
   （`for`/`call`/`choice`/`shift`、then 節が goto 以外）は単一主プログラム起動にフォールバック。プログラム以外の
   行（`echo`/`rem`/`pause` 等）は echo 表示以外読み飛ばす。シェル経由の子の `argv[0]` は **子自身のパスに正規化される**
   （C1 解消済、2026-06-04。`build_child_env` で子固有 env を確保）。

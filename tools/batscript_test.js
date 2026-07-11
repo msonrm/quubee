@@ -101,34 +101,41 @@ function mainOf(recipe, entries) {
     eq(bat.buildCmdline(r.mains[0].args, 'ignored'), '', 'oz: 引数テンプレ無→空 cmdline');
 }
 
-// ---- 10. ② resolveSequence: ドライバ常駐の逐次実行 (元順序保持 + 各 cmd の引数) ----
+// ---- 10. 線形 .bat → 文列: ドライバ常駐の逐次実行 (元順序保持 + 各 cmd の引数) ----
+// (旧 ② resolveSequence の守備範囲。2026-07-11 に buildStatements へ統合 — 線形列は
+//  cmd 文だけの文プログラムとして同じ経路を通る。)
 {
     const r = bat.parse(batBytes(['echo off', 'mdrv98 /v', 'camelzoo %1', 'mdrv98 -r']));
-    const seq = bat.resolveSequence(r, ['mdrv98.com', 'camelzoo.exe'], 'hard');
-    eq(seq.map(c => c.name), ['mdrv98.com', 'camelzoo.exe', 'mdrv98.com'],
+    const stmts = bat.buildStatements(r, ['mdrv98.com', 'camelzoo.exe'], 'hard');
+    eq(stmts.map(s => s.op), ['cmd', 'cmd', 'cmd'], 'seq: 線形 .bat は cmd 文のみ (echo off は消える)');
+    eq(stmts.map(c => c.name), ['mdrv98.com', 'camelzoo.exe', 'mdrv98.com'],
         'seq: 元順序でドライバ→本体→解除');
-    eq(seq.map(c => c.args), ['/v', 'hard', '-r'], 'seq: 各 cmd の引数 (%1←hard)');
+    eq(stmts.map(c => c.args), ['/v', 'hard', '-r'], 'seq: 各 cmd の引数 (%1←hard)');
 }
 
-// ---- 11. ② 制御フロー入りは null (① 単一起動にフォールバック) ----
+// ---- 11. 制御フロー入りも同じ経路: goto がラベルの文 index へ解決される ----
+// (旧 ② では null → ① 退避だったケース。統合後は文インタプリタが実行時に分岐する。)
 {
     const r = bat.parse(batBytes(['middrv -T3', ':LOOP', 'finmain %1', 'GOTO LOOP', 'middrv -R']));
-    eq(bat.resolveSequence(r, ['middrv.com', 'finmain.exe'], ''), null, 'seq: 制御フロー入りは null');
+    ok(r.hasControlFlow, 'seq: hasControlFlow が立つ (Run 側のラベル表示用)');
+    const stmts = bat.buildStatements(r, ['middrv.com', 'finmain.exe'], '');
+    eq(stmts.map(s => s.op), ['cmd', 'cmd', 'goto', 'cmd'], 'seq: 制御フロー入りも文列に落ちる');
+    eq(stmts[2].target, 1, 'seq: goto LOOP は :LOOP 直後 (finmain) の文 index へ解決');
 }
 
-// ---- 12. ② 単一本体は length 1 (シェル不要 → ① 単一起動) ----
+// ---- 12. 単一本体は cmd 1 文 (Run 側はシェル不要と判定 → ① 単一起動) ----
 {
-    const seq = bat.resolveSequence(bat.parse(batBytes(['game %1'])), ['game.exe'], '');
-    eq(seq.length, 1, 'seq: 単一本体は 1 要素');
-    eq(seq[0].name, 'game.exe', 'seq: 本体 game.exe');
+    const stmts = bat.buildStatements(bat.parse(batBytes(['game %1'])), ['game.exe'], '');
+    eq(stmts.filter(s => s.op === 'cmd').length, 1, 'seq: 単一本体は cmd 1 文');
+    eq(stmts[0].name, 'game.exe', 'seq: 本体 game.exe');
 }
 
-// ---- 13. ② 束に無いコマンドは skip / 本体が無ければ null ----
+// ---- 13. 束に無いコマンドは skip / 本体が無ければ null ----
 {
-    const seq = bat.resolveSequence(
+    const stmts = bat.buildStatements(
         bat.parse(batBytes(['mdrv98', 'setup', 'game'])), ['mdrv98.com', 'game.exe'], '');
-    eq(seq.map(c => c.name), ['mdrv98.com', 'game.exe'], 'seq: 束に無い setup を skip');
-    eq(bat.resolveSequence(bat.parse(batBytes(['mdrv98', 'mdrv98 -r'])), ['mdrv98.com'], ''),
+    eq(stmts.map(c => c.name), ['mdrv98.com', 'game.exe'], 'seq: 束に無い setup を skip');
+    eq(bat.buildStatements(bat.parse(batBytes(['mdrv98', 'mdrv98 -r'])), ['mdrv98.com'], ''),
         null, 'seq: 本体無し (ドライバのみ) は null');
 }
 
@@ -272,7 +279,7 @@ function mainOf(recipe, entries) {
     const entries = ['amelmidi.bat', 'amel.exe', 'midrv.com', 'amel_00.dat'];
     ok(bat.usesMidi(r), 'amelmidi: usesMidi=true (midrv で MIDI 結線が発火する)');
     eq(mainOf(r, entries), 'amel.exe', 'amelmidi: 主プログラムは amel.exe (midrv はドライバ扱い)');
-    eq(bat.resolveSequence(r, entries, '').map((s) => s.name.toLowerCase()),
+    eq(bat.buildStatements(r, entries, '').filter((s) => s.op === 'cmd').map((s) => s.name.toLowerCase()),
         ['midrv.com', 'amel.exe', 'midrv.com'],
         'amelmidi: 逐次列 = midrv(常駐)→amel.exe→midrv');
     // FM レシピ (amelfm.bat) は MIDI を発火させない (回帰の取り違え防止)。

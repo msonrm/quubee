@@ -231,13 +231,6 @@ __attribute__((visibility("default")))
 int np2kai_dos_stage_exe(const uint8_t *image, int size, const char *cmdline,
                          const char *name);
 
-/* ② 起動 .bat を 1 DOS セッション内で順に EXEC するミニ COMMAND.COM を stage。
- * script は "PATH\tARGS\nPATH\tARGS\n…" の生バイト (SJIS パス名対策で NUL 終端でなく len 指定)。
- * 子バイトは渡さない (展開済 /run から AH=4Bh が読む)。name は表示/argv[0] 用。
- * 戻り値: 0 = OK、< 0 = エラー (dos_loader.h 参照)。 */
-__attribute__((visibility("default")))
-int np2kai_dos_stage_script(const char *script, int len, const char *name);
-
 /* DOS image の exit 状態を取得。
  * 戻り値: 0 = まだ動作中、1 = 終了済み。code_out が non-NULL なら exit code を書く。 */
 __attribute__((visibility("default")))

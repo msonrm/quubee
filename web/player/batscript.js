@@ -5,10 +5,12 @@
 // 常駐手順が書かれている。本モジュールは .bat をパースして「実際に走らせる主プログラム + cmdline」
 // を取り出し、フロントのエントリ自動検出に橋渡しする (ゲームごとの手書き起動テーブルを不要にする)。
 //
-// MVP (①) のスコープ: 主プログラムを 1 本起動するところまで。音源ドライバ TSR の常駐 (mdrv98 →
-// game → mdrv98 -r を 1 セッションで保つ) は、Run 毎に pccore_reset で別セッションになる都合上
-// JS だけでは無理で、C 側 (AH=4Bh EXEC ベースの COMMAND.COM もどき) が要る ―― これは ② の課題。
-// それまでは「ゲームが FM ポートを直叩きなら鳴る / ドライバ依存音源なら無音」のグレースフル動作。
+// 実行は 2 段構え: ① 単一起動 (resolveMain — 単一 cmd で set/cd も分岐も無い .bat と素の COM/EXE) /
+// ③ 文インタプリタ (buildStatements — 複数コマンド・set/cd・if errorlevel/goto。ドライバ TSR の常駐
+// mdrv98 → game → mdrv98 -r を 1 DOS セッション内で保ち、分岐は C 側が errorlevel で実行時評価)。
+// 未対応構文 (for/call/if exist 等) は null を返し ① へ退避する (honest fallback)。
+// かつて存在した ② 線形列経路 (resolveSequence → qb_dos_stage_script) は ③ の部分集合であり
+// 2026-07-11 に ③ へ統合・撤去した。
 //
 // 純 JS・Wasm 不変。tools/batscript_test.js が合成 fixture で振る舞いを守る。
 
@@ -104,7 +106,7 @@
     }
 
     // 展開済みエントリ名一覧 → 「素の basename → 実エントリ名」を DOS の拡張子補完順
-    // (.COM > .EXE)・大小無視で引く find(base) を返す。resolveMain / resolveSequence 共用。
+    // (.COM > .EXE)・大小無視で引く find(base) を返す。resolveMain / buildStatements 共用。
     function entryFinder(entryNames) {
         const byBase = new Map();
         for (const n of entryNames) {
@@ -119,7 +121,7 @@
     }
 
     // レシピ + 展開済みエントリ名一覧 → 実際に起動する主プログラムを解決する。{ name, args } か null。
-    // (① 単一起動 / 表示の見出し用。複数コマンド逐次実行は resolveSequence。)
+    // (① 単一起動 / 表示の見出し用。複数コマンド逐次実行は buildStatements。)
     function resolveMain(recipe, entryNames) {
         const find = entryFinder(entryNames);
         for (const m of recipe.mains) {
@@ -127,28 +129,6 @@
             if (hit) return { name: hit, args: m.args.slice() };
         }
         return null;
-    }
-
-    // ② レシピを「.bat の元の順序で実行するコマンド列」に解決する (ドライバ常駐込み)。
-    // ミニ COMMAND.COM (C 側 qb_dos_stage_script) に渡して 1 DOS セッション内で順に EXEC する用。
-    // 各要素 { name(実エントリ), args(buildCmdline 済) }。userArgs は各コマンドの %N に差し込む。
-    // 線形化できない (goto/if 等の制御フロー入り) / 主プログラムが束に無い → null (① にフォールバック)。
-    // 束に無いコマンド (システム依存ユーティリティ等) は best-effort で読み飛ばす。
-    function resolveSequence(recipe, entryNames, userArgs) {
-        if (recipe.hasControlFlow) return null;        // 分岐入りは順序が確定しない → ①
-        const find = entryFinder(entryNames);
-        const seq = [];
-        let sawMain = false;
-        for (const l of recipe.lines) {
-            if (l.kind !== 'command') continue;        // directive (echo/rem/set/cls/pause) は無視
-            const hit = find(l.base);
-            if (!hit) continue;                        // 束に無い → スキップ
-            const key = l.base.toLowerCase().replace(/\.(com|exe|bat)$/, '');
-            if (!DRIVER_NAMES.has(key)) sawMain = true; // ドライバ以外 = ゲーム本体相当
-            seq.push({ name: hit, args: buildCmdline(l.args, userArgs) });
-        }
-        if (!sawMain) return null;                     // 本体が無い列は無効 → ①
-        return seq;
     }
 
     // ③ レシピを「制御フロー込みの文ステートメント列」に解決する (errorlevel ラダー対応)。
@@ -298,7 +278,7 @@
             MIDI_DRIVER_NAMES.has(l.base.toLowerCase().replace(/\.(com|exe|bat)$/, '')));
     }
 
-    const api = { parse, resolveMain, resolveSequence, buildStatements, serializeStatements, buildCmdline, programBasename, usesMidi, DRIVER_NAMES };
+    const api = { parse, resolveMain, buildStatements, serializeStatements, buildCmdline, programBasename, usesMidi, DRIVER_NAMES };
     if (typeof module !== 'undefined' && module.exports) {
         module.exports = api;
     } else {

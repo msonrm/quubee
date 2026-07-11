@@ -123,21 +123,15 @@ int qb_dos_stage_com(const uint8_t *image, size_t size, const char *cmdline,
 int qb_dos_stage_exe(const uint8_t *image, size_t size, const char *cmdline,
                      const char *name);
 
-/* Phase 3 ②: 起動 .bat を「1 DOS セッション内で順に EXEC」するミニ COMMAND.COM を
- * 最上位プログラムとして stage する。シェル (tools/dos_loader/shell.asm の blob) の末尾に
- * コマンド表を組んで COM として展開し、シェルが各コマンドを AH=4Bh EXEC する。子の TSR
- * (音源ドライバ等) は既存 AH=31h でそのまま常駐継続するので、driver→game→driver -r の
- * 同一セッション逐次実行 (= 実 DOS の COMMAND.COM /C batch 相当) が成立する。
- *   script = "PATH\tARGS\nPATH\tARGS\n…" (タブ=パス/引数、改行=コマンド区切り、ARGS 省略可)。
- *            PATH は /run 相対 (AH=4Bh が case-insensitive 解決して fopen する)。
- *            SJIS ダメ文字名を壊さないよう NUL 終端でなく len 指定の生バイトで渡す。
- *   name   = 表示/argv[0] 用 (例 "GAME")。NULL 可。
- * 子イメージのバイトは渡さない (展開済 /run から AH=4Bh が読む)。
- * 戻り値 0=OK、<0=エラー (-1 引数不正 / -2 0 コマンド / -11 image がシェル保持領域に収まらない)。 */
-int qb_dos_stage_script(const char *script, size_t len, const char *name);
-
-/* ③ if errorlevel / goto 入り .bat: JS (batscript.js buildStatements → serializeStatements) の
- * 直列化文列を stage する。文形式 (\n 区切り、フィールドは \t 区切り、TEXT/ARGS は生バイト):
+/* 起動 .bat の文インタプリタ: JS (batscript.js buildStatements → serializeStatements) の
+ * 直列化文列を「1 DOS セッション内で順に EXEC する」ミニ COMMAND.COM として stage する。
+ * シェル (tools/dos_loader/shell.asm の blob) の末尾に文字列プールを組んで COM として展開し、
+ * シェルが各コマンドを AH=4Bh EXEC する。子の TSR (音源ドライバ等) は既存 AH=31h でそのまま
+ * 常駐継続するので、driver→game→driver -r の同一セッション逐次実行 (= 実 DOS の
+ * COMMAND.COM /C batch 相当) が成立する。線形 .bat も cmd 文だけの列として同じ形で通る
+ * (2026-07-11 に旧 ② qb_dos_stage_script 経路を統合)。
+ * 文形式 (\n 区切り、フィールドは \t 区切り、TEXT/ARGS は生バイト — SJIS ダメ文字名を
+ * 壊さないよう NUL 終端でなく len 指定。PATH は /run 相対):
  *   C \t PATH \t ARGS      EXEC するコマンド (PATH は /run 相対)
  *   E \t TEXT              echo (tty へ表示、SJIS 可)
  *   G \t TARGET            無条件 goto (TARGET = 文 index、文数 = 終了)

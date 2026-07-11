@@ -74,20 +74,20 @@ const latin1 = (s) => { const u = new Uint8Array(s.length); for (let i = 0; i < 
         names.push(f);
     }
 
-    // ---- TWMIDI.BAT を解釈 → 逐次 EXEC 列 → stage_script (bridge.js stageAndRunScript と同形式) ----
+    // ---- TWMIDI.BAT を解釈 → 文列 → stage_batch (bridge.js stageAndRunBatch と同形式) ----
     const batFile = gameFiles.find(f => /^twmidi\.bat$/i.test(f));
     if (!batFile) skip('TWMIDI.BAT が無い');
     const recipe = bat.parse(new Uint8Array(fs.readFileSync(path.join(TMP, batFile))));
-    const seq = bat.resolveSequence(recipe, names, '');
-    if (!seq) { console.error('resolveSequence が null (制御フロー入り?)'); process.exit(1); }
-    console.log('twmidi 逐次列:', seq.map(c => `${c.name} ${c.args}`.trim()).join('  |  '));
-    const scriptStr = seq.map(c => c.name + '\t' + (c.args || '')).join('\n') + '\n';
-    const sbuf = latin1(scriptStr);
+    const stmts = bat.buildStatements(recipe, names, '');
+    if (!stmts) { console.error('buildStatements が null (未対応構文?)'); process.exit(1); }
+    const cmds = stmts.filter(s => s.op === 'cmd');
+    console.log('twmidi 逐次列:', cmds.map(c => `${c.name} ${c.args}`.trim()).join('  |  '));
+    const sbuf = latin1(bat.serializeStatements(stmts));
     const stageScript = () => {
         const sptr = M._malloc(sbuf.length); M.HEAPU8.set(sbuf, sptr);
-        const sr = M.ccall('np2kai_dos_stage_script', 'number', ['number', 'number', 'string'], [sptr, sbuf.length, 'twmidi']);
+        const sr = M.ccall('np2kai_dos_stage_batch', 'number', ['number', 'number', 'string'], [sptr, sbuf.length, 'twmidi']);
         M._free(sptr);
-        if (sr !== 0) { console.error('stage_script failed r=' + sr); process.exit(1); }
+        if (sr !== 0) { console.error('stage_batch failed r=' + sr); process.exit(1); }
     };
 
     // ---- 遅延 MIDI 有効化 (= bridge.js ensureMidiLoaded の C 呼び出し)。冪等。 ----

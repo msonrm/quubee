@@ -1,5 +1,26 @@
 # CHANGELOG
 
+## [一括テストランナー + 起動 .bat の ② 線形列経路を ③ 文インタプリタへ統合] — 2026-07-11
+
+**一括テストランナー `tools/run_tests.js` 新設**。headless 回帰は 69 本 (`tools/*_test.js`) に
+育っていたが全部を回す仕組みが無く、横断変更のたびに人がテストを選んでいた。1 コマンド・並列
+(既定 min(8,CPU))・個別タイムアウト (既定 300s、SIGKILL) で全実行し PASS/SKIP/FAIL/TIMEOUT に
+分類、FAIL は出力末尾を添えて exit 1。並列プールは bio100_triage の型を流用。フルラン実測
+**69/69 PASS・129 秒**。正典コマンドとして CLAUDE.md / docs/structure.md に記載。
+
+**起動 .bat の経路統一 (TODO「リファクタ予定」Exhibit B、正味 -102 行)**。.bat 起動が
+② `resolveSequence`→`qb_dos_stage_script` (線形列) と ③ `buildStatements`→`qb_dos_stage_batch`
+(文インタプリタ) に分岐していたのを、**② は ③ の部分集合**なので ③ に一本化し ② の実体を全撤去
+(batscript.js / bridge.js / emu-worker.js / bridge.c/h / dos_loader.c/h / CMakeLists export /
+② ワイヤ形式 `"PATH\tARGS\n"`)。Run の routing は従来同値 (単一 cmd で set/cd も分岐も無い .bat
+は従来どおり ① 単一起動 = サブディレクトリ CWD 代行維持)。② C API 直呼びのハーネス 8 本
+(pmd/fmp/adpcm_beepgain/midi_serial/exec_env/batch_done 各 test + bio100_triage +
+mouse_chain_probe) も stage_batch (`C\t…`) へ移行、batscript_test の ② 検証 5 件は同等の
+③ 検証へ置換。**意図した挙動差 2 点**: (a) 線形複数 cmd .bat の `echo` メッセージが表示される
+ようになった (実 DOS と同じ) (b) `call`/`for` 等入りは行 skip でなく ① 単一起動へ退避 (honest
+fallback)。検証 = 統合後の run_tests.js 全 69 本 PASS + bio100_triage --fresh ベースライン一致。
+ブラウザ実機 (線形複数 cmd .bat のゲーム起動) はユーザー確認待ち。
+
 ## [既定クロックを multiple=27 (≈66MHz) へ引き上げ] — 2026-07-11
 
 第 2 弾のブラウザ実機確認 (ユーザー): **Ray で multiple 38 まで音が持つ (39 からプチノイズ)**。

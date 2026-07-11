@@ -50,17 +50,17 @@ const ok = (cond, what, got) => {
     const exitPtr   = M._malloc(4);
     const getExit   = () => !!getExitFn(exitPtr);
 
-    // ---- stage: 1 コマンドだけの線形スクリプト ("名前\t引数" の行列) ----
+    // ---- stage: 1 cmd 文だけの文列 ("C\t名前\t引数" の行列) ----
     const stage = () => {
-        const prog = Buffer.from('T.COM\t\n', 'latin1');
+        const prog = Buffer.from('C\tT.COM\t\n', 'latin1');
         const p = M._malloc(prog.length); M.HEAPU8.set(prog, p);
-        const r = M.ccall('np2kai_dos_stage_script', 'number',
+        const r = M.ccall('np2kai_dos_stage_batch', 'number',
             ['number', 'number', 'string'], [p, prog.length, 'batch_done_test']);
         M._free(p);
         return r;
     };
 
-    ok(stage() === 0, 'stage_script が成功する');
+    ok(stage() === 0, 'stage_batch が成功する');
     ok(batchDone() === 0, 'stage 直後は batch_done=0', batchDone());
 
     M.FS.writeFile('/tmp/loader.d88', new Uint8Array(fs.readFileSync(LOADER)));
@@ -79,7 +79,7 @@ const ok = (cond, what, got) => {
     ok(!exitSeen, 'get_exit は立たない (シェルは .idle で常駐 TSR を生かす)');
 
     // ---- 新しい stage = 新セッション → 旗はクリアされる ----
-    ok(stage() === 0, '2 回目の stage_script が成功する');
+    ok(stage() === 0, '2 回目の stage_batch が成功する');
     ok(batchDone() === 0, '再 stage で batch_done=0 に戻る', batchDone());
 
     console.log(fails === 0

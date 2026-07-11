@@ -75,10 +75,10 @@ async function playPeak(chibi, songPath, frames) {
     for (const pv of PVIs) M.FS.writeFile('/run/' + path.basename(pv).toUpperCase(), new Uint8Array(fs.readFileSync(pv)));
     M.ccall('np2kai_insert_fdd', 'number', ['number', 'string', 'number', 'number'], [handle, '/tmp/loader.d88', 0, 0]);
 
-    const script = `FMP.COM\ts\nPLAY.COM\t${song}\n`;
+    const script = `C\tFMP.COM\ts\nC\tPLAY.COM\t${song}\n`;
     const bytes = Buffer.from(script, 'latin1');
     const ptr = M._malloc(bytes.length); M.HEAPU8.set(bytes, ptr);
-    M.ccall('np2kai_dos_stage_script', 'number', ['number', 'number', 'string'], [ptr, bytes.length, 'fmp_test']);
+    M.ccall('np2kai_dos_stage_batch', 'number', ['number', 'number', 'string'], [ptr, bytes.length, 'fmp_test']);
     M._free(ptr);
 
     const runFrame = M.cwrap('np2kai_run_frame', null, ['number']);

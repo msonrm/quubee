@@ -25,7 +25,7 @@
 // === 2026-06-07 改修 (GBOX.COM スモークで判明した 2 つの偽陰性を是正) ===
 //  ① .bat 入口解決: ランチャ型 (音源ドライバ TSR + 本体) は、従来「主 exe を裸でステージ」していたため
 //     ドライバ未常駐で早期終了し DEAD に見えていた。.bat があれば batscript.js でレシピを解釈し、
-//     ブラウザと同じ stage_script 経路 (ミニ COMMAND.COM が 1 セッション内で順次 EXEC) でステージする。
+//     ブラウザと同じ stage_batch 経路 (ミニ COMMAND.COM が 1 セッション内で順次 EXEC) でステージする。
 //  ② PC 位置の 3 分類: 従来 `pc ∈ [0xE8000,0xFFFFF]` を一律「BIOS クラッシュ」扱いしていたが、この範囲は
 //     dos_loader.h のトランポリンを含み、全く別の状態が混在する:
 //       EXIT  : 0xFEE30 = QB_TRAMP_HALT_LOOP (プログラム正常終了後の停止 HLT) → 健全な終了
@@ -121,20 +121,22 @@ function fbColors(M, getFB, handle, wP, hP, bP) {
     return { colors: set.size, hash };
 }
 
-// 起動方法を決める: .bat があり resolveSequence が通れば {kind:'script', seq, main}、
-// 無ければ {kind:'single', exe} (GAMES のフォールバック exe)。
+// 起動方法を決める: .bat があり buildStatements が通れば {kind:'script', stmts, main}、
+// 無ければ {kind:'single', exe} (GAMES のフォールバック exe)。ブラウザの Run と同じ
+// 文インタプリタ経路 (stage_batch。2026-07-11 に旧 ② 線形列経路を統合)。
 function planLaunch(dir, fallbackExe, fallbackArgs) {
     const names = fs.readdirSync(dir).filter((f) => fs.statSync(path.join(dir, f)).isFile());
     const bats = names.filter((n) => /\.bat$/i.test(n)).sort();
     for (const bat of bats) {
         const recipe = qbBatScript.parse(fs.readFileSync(path.join(dir, bat)));
-        const seq = qbBatScript.resolveSequence(recipe, names, '');   // userArgs 無し
-        if (seq && seq.length) {
-            const main = seq.find((c) => {
+        const stmts = qbBatScript.buildStatements(recipe, names, '');   // userArgs 無し
+        const cmds = stmts ? stmts.filter((s) => s.op === 'cmd') : [];
+        if (cmds.length) {
+            const main = cmds.find((c) => {
                 const key = c.name.toLowerCase().replace(/\.(com|exe|bat)$/, '');
                 return !qbBatScript.DRIVER_NAMES.has(key);
-            }) || seq[seq.length - 1];
-            return { kind: 'script', bat, seq, main: main.name, names };
+            }) || cmds[cmds.length - 1];
+            return { kind: 'script', bat, stmts, ncmd: cmds.length, main: main.name, names };
         }
     }
     // フォールバック: GAMES の主 exe (大小揺れ吸収)
@@ -163,16 +165,15 @@ async function runGame([archive, fallbackExe, fallbackArgs]) {
     try { M.FS.mkdir('/run'); } catch (_) {}
     for (const f of plan.names) M.FS.writeFile('/run/' + f, new Uint8Array(fs.readFileSync(path.join(dir, f))));
 
-    // --- ステージ (.bat シーケンス or 単一 exe) ---
+    // --- ステージ (.bat 文列 or 単一 exe) ---
     let sr, launchLabel;
     if (plan.kind === 'script') {
-        const scriptStr = plan.seq.map((c) => c.name + '\t' + (c.args || '')).join('\n') + '\n';
-        const bytes = Buffer.from(scriptStr, 'latin1');
+        const bytes = Buffer.from(qbBatScript.serializeStatements(plan.stmts), 'latin1');
         const ptr = M._malloc(bytes.length); M.HEAPU8.set(bytes, ptr);
-        sr = M.ccall('np2kai_dos_stage_script', 'number', ['number','number','string'],
+        sr = M.ccall('np2kai_dos_stage_batch', 'number', ['number','number','string'],
                      [ptr, bytes.length, 'SHELL.COM']);
         M._free(ptr);
-        launchLabel = `bat:${plan.bat}→${plan.main}${plan.seq.length > 1 ? '+drv' : ''}`;
+        launchLabel = `bat:${plan.bat}→${plan.main}${plan.ncmd > 1 ? '+drv' : ''}`;
     } else {
         const img = new Uint8Array(fs.readFileSync(path.join(dir, plan.exe)));
         const ptr = M._malloc(img.length); M.HEAPU8.set(img, ptr);

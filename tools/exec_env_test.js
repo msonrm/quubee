@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // exec_env_test.js — C1 (per-child env で argv[0] 正規化) の headless 検証。
-// ミニ COMMAND.COM (stage_script) が子 HELLO.COM を AH=4Bh EXEC する経路を走らせ、
+// ミニ COMMAND.COM (stage_batch) が子 HELLO.COM を AH=4Bh EXEC する経路を走らせ、
 // build_child_env が子固有 env に "A:\HELLO.COM" を argv[0] として書くことを確認する。
 // env は子終了で free されるがバイトは上書きまで残るので、conventional RAM を走査して
 // 文字列の有無で判定する (生きている間に捕まえる必要がない)。
@@ -27,11 +27,11 @@ const NP2KaiModule = require(path.join(WEB, 'np2kai_core.js'));
     const hello = new Uint8Array(fs.readFileSync(path.join(ROOT, 'tools/dos_loader/hello.com')));
     M.FS.writeFile('/run/HELLO.COM', hello);
 
-    // 1 行スクリプト = HELLO.COM を実行。シェル(親)が子をEXEC → build_child_env が走る
-    const script = 'HELLO.COM\r\n';
-    const r = M.ccall('np2kai_dos_stage_script', 'number',
+    // 1 文スクリプト = HELLO.COM を実行。シェル(親)が子をEXEC → build_child_env が走る
+    const script = 'C\tHELLO.COM\r\n';
+    const r = M.ccall('np2kai_dos_stage_batch', 'number',
         ['string', 'number', 'string'], [script, script.length, 'test']);
-    console.log('stage_script r =', r);
+    console.log('stage_batch r =', r);
 
     // Run フロー (bridge.js runStaged 相当): loader.d88 を A: に挿入 + reset → boot sector が
     // ローダトランポリン (0xFEE00) へ far jmp → loader-start が staged image を起動する。

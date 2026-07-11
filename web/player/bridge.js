@@ -261,7 +261,6 @@ async function makeWorkerEmu() {
         async setClockMultiple(m)    { return (await call({ type: 'call', fn: 'np2kai_set_clock_multiple', ret: 'number', argTypes: ['number'], args: [m] })).r; },
         async enableMidiNow()        { return (await call({ type: 'call', fn: 'np2kai_enable_midi_now', ret: 'number', argTypes: ['number'], prependHandle: true, args: [] })).r; },
         async stageImage(bytes, cmdline, path, isExe) { return (await call({ type: isExe ? 'stageExe' : 'stageCom', bytes, cmdline, path })).r; },
-        async stageScript(bytes, label) { return (await call({ type: 'stageScript', bytes, label })).r; },
         async stageBatch(bytes, label)  { return (await call({ type: 'stageBatch', bytes, label })).r; },
         async stageMusic()           { return (await call({ type: 'stageMusic' })).r; },
         async musicPlay(song)        { return (await call({ type: 'musicPlay', song })).r; },
@@ -1251,10 +1250,7 @@ async function makeWorkerEmu() {
                                   ['number', 'number', 'string', 'string']);
     const dosStageExe  = M.cwrap('np2kai_dos_stage_exe', 'number',
                                   ['number', 'number', 'string', 'string']);
-    // ② 起動 .bat の逐次実行 (ミニ COMMAND.COM)。script は生バイト (ptr,len) で渡す。
-    const dosStageScript = M.cwrap('np2kai_dos_stage_script', 'number',
-                                  ['number', 'number', 'string']);
-    // ③ if errorlevel/goto 入り .bat (C 側文インタプリタ)。直列化文列を生バイトで渡す。
+    // 起動 .bat (C 側文インタプリタ = ミニ COMMAND.COM)。直列化文列を生バイトで渡す。
     const dosStageBatch = M.cwrap('np2kai_dos_stage_batch', 'number',
                                   ['number', 'number', 'string']);
     // 音楽セッション (PMD .M を再起動なしで次々演奏)。stage_music で PMD86 常駐セッションを
@@ -1349,10 +1345,6 @@ async function makeWorkerEmu() {
             const ptr = M._malloc(bytes.length); M.HEAPU8.set(bytes, ptr);
             const r = (isExe ? dosStageExe : dosStageCom)(ptr, bytes.length, cmdline || '', path || '');
             M._free(ptr); return r;
-        },
-        async stageScript(bytes, label) {
-            const ptr = M._malloc(bytes.length); M.HEAPU8.set(bytes, ptr);
-            const r = dosStageScript(ptr, bytes.length, label || ''); M._free(ptr); return r;
         },
         async stageBatch(bytes, label) {
             const ptr = M._malloc(bytes.length); M.HEAPU8.set(bytes, ptr);
@@ -1710,20 +1702,11 @@ async function makeWorkerEmu() {
         await runStaged(label);
     }
 
-    // ② 起動 .bat の逐次実行: コマンド列をミニ COMMAND.COM に組んで stage する。
-    // 子イメージのバイトは渡さない (展開済 /run から AH=4Bh が読む)。
-    async function stageAndRunScript(seq, label) {
-        // "PATH\tARGS\n…" を latin1 (= FS キーと同じ符号化) で C へ。
-        const scriptStr = seq.map((c) => c.name + '\t' + (c.args || '')).join('\n') + '\n';
-        const bytes = new Uint8Array(scriptStr.length);
-        for (let i = 0; i < scriptStr.length; i++) bytes[i] = scriptStr.charCodeAt(i) & 0xff;
-        const r = await emu.stageScript(bytes, label);
-        if (r !== 0) throw new Error(`stage_script failed r=${r}`);
-        await runStaged(label);
-    }
-
-    // ③ if errorlevel/goto 入り .bat: buildStatements の文列を直列化して C 側文インタプリタへ。
-    // 分岐は実行中に errorlevel (EXEC 子の終了コード) で評価される。
+    // 起動 .bat の実行: buildStatements の文列を直列化して C 側文インタプリタ (ミニ COMMAND.COM)
+    // へ。複数コマンドは 1 DOS セッション内で順次 EXEC され (音源ドライバ TSR が本体に効く)、
+    // if errorlevel/goto の分岐は実行中に errorlevel (EXEC 子の終了コード) で評価される。
+    // 子イメージのバイトは渡さない (展開済 /run から AH=4Bh が読む)。文字列は latin1
+    // (= FS キーと同じ符号化) で C へ。
     async function stageAndRunBatch(stmts, label) {
         const progStr = qbBatScript.serializeStatements(stmts);
         const bytes = new Uint8Array(progStr.length);
@@ -1741,7 +1724,7 @@ async function makeWorkerEmu() {
 
     // ---- PMD (.M) FM 音楽の再生 ------------------------------------------------
     // 自前クリーンビルドの PMD エンジン (PMD86.COM 常駐 + PMP.COM 演奏) を assets から
-    // 遅延 fetch して /run へ注入し、既存のシーケンス起動経路 (stageAndRunScript) で
+    // 遅延 fetch して /run へ注入し、音楽セッション (stage_music、シェル共用) で
     // 「PMD86 → PMP <曲>」を 1 DOS セッションで走らせる。loader の sti+hlt アイドルで
     // 常駐 ISR (OPNA タイマ IRQ12) が刻み続ける = steady-state 演奏 (Path B 実証済)。
     let pmdEngineCache = null;   // { pmd86: Uint8Array, pmp: Uint8Array } — 一度 fetch すれば再利用
@@ -1907,36 +1890,30 @@ async function makeWorkerEmu() {
                 const ok = await ensureMidiLoaded();
                 if (!ok) runStatusEl.textContent = 'MIDI setup failed — launching without MIDI';
             }
-            // ②/③ .bat の逐次実行: 1 DOS セッション内で順次 EXEC する (音源ドライバ TSR が
-            // 本体に効く)。if errorlevel/goto 入り (③) は C 側文インタプリタが分岐を実行時評価、
-            // 制御フロー無し (②) は従来の線形列。どちらも未対応構文等で null なら ① 単一起動へ。
+            // .bat の実行は C 側文インタプリタ (stage_batch) に一本化 (2026-07-11、旧 ② 線形列
+            // 経路を統合)。複数コマンドは 1 DOS セッション内で順次 EXEC (音源ドライバ TSR が本体に
+            // 効く)。set は env を更新し以降の EXEC 子へ継承、cd はカレント移動 (環境変数でデータ
+            // 位置を知るソフト / 本体ディレクトリへ cd するレシピのため)。if errorlevel/goto は
+            // 実行時評価。未対応構文 (buildStatements=null) なら ① 単一起動へ。
             if (selectedRecipe) {
                 const names = loadedEntries.map((e) => e.name);
-                // 制御フロー (if/goto) か環境操作 (set/cd) を含む .bat は C 側文インタプリタ (③) で
-                // 実行する。set は env を更新し以降の EXEC 子へ継承、cd はカレントを移動する
-                // (環境変数でデータ位置を知るソフト / 本体ディレクトリへ cd するレシピのため)。
-                if (selectedRecipe.recipe.hasControlFlow || selectedRecipe.recipe.hasEnvOps) {
-                    const stmts = qbBatScript.buildStatements(
-                        selectedRecipe.recipe, names, userArgs);
-                    if (stmts) {
-                        const ncmd = stmts.filter((s) => s.op === 'cmd').length;
-                        const how = selectedRecipe.recipe.hasControlFlow
+                const stmts = qbBatScript.buildStatements(
+                    selectedRecipe.recipe, names, userArgs);
+                const r = selectedRecipe.recipe;
+                if (stmts) {
+                    const ncmd = stmts.filter((s) => s.op === 'cmd').length;
+                    // 単一 cmd で set/cd も分岐も無ければシェル不要 → 下の ① 単一起動へ
+                    // (画像バイト直 stage + サブディレクトリ CWD 代行の従来挙動を保つ)。
+                    if (r.hasControlFlow || r.hasEnvOps || ncmd > 1) {
+                        const how = r.hasControlFlow
                             ? `if/goto 分岐を実行時評価, ${ncmd} cmd`
-                            : `set/cd を逐次実行, ${ncmd} cmd`;
+                            : r.hasEnvOps
+                            ? `set/cd を逐次実行, ${ncmd} cmd`
+                            : `→ ${sjisName(baseName(selectedRecipe.targetEntry.name))} +${ncmd - 1} cmd`;
                         const label = `${sjisName(selectedEntry.name)} (${how})`;
                         runStatusEl.textContent = `Launching ${label}…`;
                         if (await stageAndRunBatch(stmts, label)) return;
                         // stage 失敗 (C 側上限超過) → 下の ① 単一起動へフォールスルー
-                    }
-                } else {
-                    const seq = qbBatScript.resolveSequence(
-                        selectedRecipe.recipe, names, userArgs);
-                    if (seq && seq.length > 1) {
-                        const label = `${sjisName(selectedEntry.name)} → `
-                            + `${sjisName(baseName(selectedRecipe.targetEntry.name))} (+${seq.length - 1} cmd)`;
-                        runStatusEl.textContent = `Launching ${label}…`;
-                        await stageAndRunScript(seq, label);
-                        return;
                     }
                 }
             }

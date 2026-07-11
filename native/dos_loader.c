@@ -603,16 +603,15 @@ int qb_dos_stage_exe(const uint8_t *image, size_t size, const char *cmdline,
     return 0;
 }
 
-/* ================= ②/③ ミニ COMMAND.COM + .bat 文インタプリタ =================
+/* ================= ミニ COMMAND.COM + .bat 文インタプリタ =================
  *
  * シェル (tools/dos_loader/shell.asm) は「C へ『次コマンド?』を far CALL (F000:EE90) で
  * 問い合わせ → 返ってきた (path_off, tail_off) を AH=4Bh EXEC」を繰り返すだけの EXEC 発行役。
  * どのコマンドを次に実行するかはホスト側の文テーブル (g_batch) を qb_dos_batch_next_hook()
- * が PC (文ポインタ) で解釈して決める:
- *   - 線形 .bat (制御フロー無し): qb_dos_stage_script が cmd 文だけの列に落とす (② 従来経路)
- *   - if errorlevel / goto 入り .bat: qb_dos_stage_batch が JS (batscript.js buildStatements)
- *     の直列化文列を受け取る (③)。errorlevel は EXEC 子の終了コード g_last_exit_code を
- *     分岐評価時に読む遅延評価 = 実 DOS の意味論 (並び順非依存・後方 goto ループも成立)。
+ * が PC (文ポインタ) で解釈して決める。qb_dos_stage_batch が JS (batscript.js buildStatements)
+ * の直列化文列を受け取る (線形 .bat も cmd 文だけの列として同じ形で通る — 2026-07-11 に
+ * 旧 ② qb_dos_stage_script 経路を統合)。errorlevel は EXEC 子の終了コード g_last_exit_code
+ * を分岐評価時に読む遅延評価 = 実 DOS の意味論 (並び順非依存・後方 goto ループも成立)。
  *
  * ゲスト側 (シェル COM image) に置くのはパス ASCIZ + DOS cmdtail の文字列プールだけ。
  * 文テーブル・echo テキストはホスト側に保持する (ゲストのメモリレイアウトは EXEC に必要な
@@ -674,7 +673,7 @@ static void build_env(uint16_t seg);
 
 typedef struct { const char *path; size_t plen; const char *args; size_t alen; } shell_cmd_t;
 
-/* シェル blob + 文字列プールを COM image に組んで stage する (②/③ 共用)。
+/* シェル blob + 文字列プールを COM image に組んで stage する (batch/music セッション共用)。
  * 成功時 path_offs/tail_offs[i] にシェルセグメント内オフセットを書いて 0 を返す。 */
 static int stage_shell_image(const shell_cmd_t *cmds, int n, const char *name,
                              uint16_t *path_offs, uint16_t *tail_offs) {
@@ -716,50 +715,6 @@ static int stage_shell_image(const shell_cmd_t *cmds, int n, const char *name,
      * よって name は stage に渡さず NULL でルート起動を保証する (ラベルは呼び出し側の UI 専用)。 */
     (void)name;
     return qb_dos_stage_com(img, pos, NULL, NULL);
-}
-
-int qb_dos_stage_script(const char *script, size_t len, const char *name) {
-    if (!script) return -1;
-
-    /* --- script を (path, args) コマンド列へ分解 (生バイト, len 境界で読む) --- */
-    shell_cmd_t cmds[QB_SHELL_MAX_CMDS];
-    int n = 0;
-    const char *p = script, *end = script + len;
-    while (p < end && n < QB_SHELL_MAX_CMDS) {
-        while (p < end && (*p == '\n' || *p == '\r')) p++;   /* 空行/改行スキップ */
-        if (p >= end) break;
-        const char *line = p;
-        while (p < end && *p != '\n' && *p != '\r') p++;     /* 行末まで */
-        const char *lend = p;
-        const char *tab = line;
-        while (tab < lend && *tab != '\t') tab++;            /* path \t args */
-        size_t plen = (size_t)(tab - line);
-        const char *args = (tab < lend) ? tab + 1 : lend;
-        size_t alen = (size_t)(lend - args);
-        if (plen == 0) continue;                             /* path 無し行は無視 */
-        cmds[n].path = line; cmds[n].plen = plen;
-        cmds[n].args = args; cmds[n].alen = alen;
-        n++;
-    }
-    if (n == 0) return -2;
-
-    uint16_t path_offs[QB_SHELL_MAX_CMDS], tail_offs[QB_SHELL_MAX_CMDS];
-    int r = stage_shell_image(cmds, n, name, path_offs, tail_offs);
-    if (r != 0) return r;
-
-    /* 線形列 = cmd 文だけの文プログラム */
-    for (int i = 0; i < n; i++) {
-        qb_batch_stmt_t *s = &g_batch_stmts[i];
-        memset(s, 0, sizeof(*s));
-        s->op = QB_BATCH_CMD;
-        s->path_off = path_offs[i];
-        s->tail_off = tail_offs[i];
-    }
-    g_batch_nstmts = n;
-    g_batch_pc     = 0;
-    g_batch_active = 1;
-    fprintf(stderr, "[dos_loader] staged SHELL: %d cmd(s)\n", n);
-    return 0;
 }
 
 /* 音楽セッションを stage する: シェルに PMD86(常駐) と PMP(曲は実行時に差し替え) を仕込む。
@@ -1025,7 +980,7 @@ void qb_dos_reset_state(void) {
     g_run.exited = 0;
     g_run.exit_code = 0;
     /* 新しい stage = 新しいセッション: 文インタプリタと errorlevel を初期化する。
-     * (②/③ のシェル stage は stage_com 経由でここを通った後に active を立て直す) */
+     * (batch/music のシェル stage は stage_com 経由でここを通った後に active を立て直す) */
     g_batch_active = 0;
     g_batch_done = 0;
     g_batch_pc = 0;
