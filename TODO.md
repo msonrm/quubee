@@ -48,8 +48,13 @@
   セットアップ/登録例 = `tools/mcp/README.md`。**計測器の流儀 = Y2K クランプ既定 OFF (実時計 2026)**
   — プレイヤーの保護 (1999 固定) は煙感知では煙隠しになるため (ユーザー判断 2026-07-11)。
   opt-in で戻せる (CLI `--y2k-clamp` / MCP boot `y2kClamp:true`)。観察条件は JSON に常に記録。
-  残 (v2 候補): セッションの snapshot/restore 公開 (暖機 40〜200 倍を外にも) / ディスクイメージ入力 /
-  quubee_run CLI の --json との整合レビュー。
+  **v2 (2026-07-12): ✓ INT 21h 診断** (classify に `int21Unimplemented`/`int21Calls`。C 側
+  `np2kai_debug_int21_unimpl` 新設・CLI は常時 + `--diag`。回帰 int21_diag_test) **✓ snapshot/restore**
+  (quubee_save/restore。zlib 圧縮・2 個/セッション・観察履歴ごと巻き戻し。回帰 mcp_server_test 18 項目)。
+  **MCP 計画 (ユーザー合意 2026-07-12)**: C・B1 を先に実装して自分たちで検証 → **A: npm 配布物化**
+  (ビルド済み wasm 同梱 `quubee-mcp`、`npx` 1 行で第三者が使える形。publish はユーザーの npm
+  アカウント) → B2: ディスクイメージ入力 (diskimage.js を stage.js に配線) → D: 利用例ドキュメント。
+  残 (小): quubee_run CLI と MCP の出力整合レビュー。
 
 **残**: ①既存 `tools/*.js` を machine.js へ寄せる (急がない。触るたびに 1 本ずつ)
 ②snapshot の圧縮 (いま 64MiB 生)。

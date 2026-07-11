@@ -3196,12 +3196,19 @@ static void int21_63_dbcs(void) {
 
 /* AH 別カウンタ + qbDebug.int21Stats() で読めるよう export */
 static int g_dbg_ah_count[256] = {0};
+/* 未実装 AH (dispatch の default = CF=1 で返した) のヒット数。煙感知の一級シグナル:
+ * 「動かない理由が AH=xx 未実装」を機械可読で外へ出す (quubee_run CLI / MCP classify)。 */
+static int g_dbg_unimpl_count[256] = {0};
 int qb_dos_dbg_ah_count(int ah) {
     if (ah < 0 || ah > 255) return -1;
     return g_dbg_ah_count[ah];
 }
+int qb_dos_dbg_unimpl_count(int ah) {
+    if (ah < 0 || ah > 255) return -1;
+    return g_dbg_unimpl_count[ah];
+}
 void qb_dos_dbg_ah_reset(void) {
-    for (int i = 0; i < 256; i++) g_dbg_ah_count[i] = 0;
+    for (int i = 0; i < 256; i++) { g_dbg_ah_count[i] = 0; g_dbg_unimpl_count[i] = 0; }
 }
 
 /* INT 21h 全コールトレース (qbDebug / 各 game のデバッグ用、既定 OFF)。
@@ -3309,6 +3316,7 @@ void qb_dos_int21_dispatch(void) {
     default:
         fprintf(stderr, "[int21h] UNIMPL AH=%02X (AX=%04X CS:IP=%04X:%04X)\n",
                 ah, (unsigned)CPU_AX, (unsigned)CPU_CS, (unsigned)CPU_IP);
+        g_dbg_unimpl_count[ah]++;
         CPU_AX = 0x0001;   /* DOS error 1 = invalid function (AX 全体に設定。AL のみだと AH が残る) */
         CPU_FLAG |= C_FLAG;
         break;

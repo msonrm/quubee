@@ -21,6 +21,8 @@
 //     --keys SPEC      キー投入 "RETURN@500,SPACE@1200" (NKEY 名@フレーム。6 フレーム保持)
 //     --y2k-clamp      RTC の Y2K クランプ (1999 固定) を ON にする。既定 OFF = 実時計
 //                      (2026 年の実機相当。計測器は Y2K バグの煙を隠さない。ブラウザは ON 相当)
+//     --diag           INT 21h の AH 別呼び出しヒストグラムを JSON に含める
+//                      (未実装 AH のヒットは --diag 無しでも常に int21Unimplemented に出る)
 //     --quiet          JSON 1 行のみ出力 (機械消費用)
 //
 // 制約 (v1):
@@ -56,6 +58,7 @@ function parseArgs(argv) {
         else if (a === '--audio') o.audio = +next();
         else if (a === '--keys') o.keys = next();
         else if (a === '--y2k-clamp') o.y2kClamp = true;
+        else if (a === '--diag') o.diag = true;
         else if (a === '--quiet') o.quiet = true;
         else if (a.startsWith('--')) usage('未知のオプション: ' + a);
         else rest.push(a);
@@ -138,6 +141,12 @@ function parseKeys(spec) {
             y2kClamp: opts.y2kClamp,
             note: NOTE,
         };
+        {
+            // INT 21h 診断: 未実装踏みは常時 (煙感知の一級シグナル)、全ヒストグラムは --diag で
+            const stats = m.int21Stats();
+            result.int21Unimplemented = stats.unimplemented;
+            if (opts.diag) result.int21Calls = stats.calls;
+        }
         if (opts.audio) {
             if (pcm) {
                 let sum = 0;

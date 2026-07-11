@@ -1,5 +1,24 @@
 # CHANGELOG
 
+## [MCP v2: INT 21h 診断 + snapshot/restore — 煙感知の精度と分岐探索] — 2026-07-12
+
+MCP 計画のトラック C・B1 (公開=npm 配布物化は後段。まず自分たちで検証する方針、ユーザー判断)。
+
+**INT 21h 診断**: dispatch の default (未実装 AH → CF=1) にカウンタを新設
+(`g_dbg_unimpl_count[256]`、export `np2kai_debug_int21_unimpl`)。machine.js に `int21Stats()`
+(AH 別呼び出し回数 + 未実装踏み、ゼロ省略)。**「動かない理由が AH=xx 未実装」を機械可読で返す** —
+CLI は `int21Unimplemented` を常時 + `--diag` で全ヒストグラム、MCP は classify に両方同梱。
+開発者には原因の即答、我々には corpus 外ソフトが踏む gap の自動収集になる。
+回帰 = 新設 `tools/int21_diag_test.js` (合成 COM が AH=5Eh を 2 回踏む→計上 2・実装済みは 0)。
+
+**snapshot/restore (quubee_save / quubee_restore)**: machine.js の snapshot (忠実性は
+snapshot_test で実証済み) をセッションに公開。zlib(level1) 圧縮でセッションあたり 2 個
+(同名上書き)、restore は `Machine.restore` で machine を差し替え、**classify の観察履歴も
+保存時点へ巻き戻す** (巻き戻し後に古い animated 判定が残る混線を防ぐ)。エージェントが
+「キーを試す → 駄目なら戻す」の分岐探索をできるようになる。
+回帰 = mcp_server_test を 18 項目に増強 (save→キー投入で animated=true→restore→frame 巻き戻り +
+animated=false 復元 + 無い snapshot の正直なエラー + classify の診断スキーマ)。
+
 ## [最上位 COM を実 DOS 相当の全メモリ所有に統一 — gaps §4-20 解消] — 2026-07-11
 
 ユーザー指摘が契機:「実機で公開されてきたソフトは実 DOS の淘汰 (self-shrink の作法) を必ず

@@ -206,6 +206,7 @@ set(EXPORTED_FUNCTIONS
     _np2kai_debug_get_palette
     _np2kai_debug_rtc_bcd
     _np2kai_debug_int21_count
+    _np2kai_debug_int21_unimpl
     _np2kai_debug_int21_reset
     _np2kai_dos_set_int21_trace
     _np2kai_debug_get_reg16

@@ -28,21 +28,26 @@ cd tools/mcp && npm install          # @modelcontextprotocol/sdk + zod
 claude mcp add quubee -- node /絶対パス/qb/tools/mcp/server.js
 ```
 
-## ツール (9)
+## ツール (11)
 
 | ツール | 何をする |
 |---|---|
-| `quubee_boot` | 書庫 (.lzh/.lha/.lzs/.zip) かディレクトリを起動しセッションを作る (exe/bat/args/multiple 指定可) |
+| `quubee_boot` | 書庫 (.lzh/.lha/.lzs/.zip) かディレクトリを起動しセッションを作る (exe/bat/args/multiple/y2kClamp 指定可) |
 | `quubee_run` | N フレーム進める (60 = エミュ 1 秒、上限 6000/コール)。state (WAIT/EXIT/BIOS/USER) を返す |
 | `quubee_key` | キー投入 (RETURN/SPACE/ESC/A-Z/D0-D9/矢印/F1-F10 等。次の run 中 holdFrames 保持) |
 | `quubee_screenshot` | 現画面の PNG |
 | `quubee_text` | テキスト VRAM 25 行 (ASCII のみ) |
 | `quubee_audio` | seconds 秒の音声 RMS (発音の煙感知) |
-| `quubee_classify` | 蓄積サンプルから tier 分類 (ALIVE/RENDER/BOOT/WAIT/EXIT/CRASH/BUSY)。CRASH は偽陰性ありうる |
+| `quubee_classify` | 蓄積サンプルから tier 分類 (ALIVE/RENDER/BOOT/WAIT/EXIT/CRASH/BUSY。CRASH は偽陰性ありうる) + **INT 21h 診断** (`int21Unimplemented` = 未実装 DOS コール踏み・`int21Calls` = AH 別回数) |
+| `quubee_save` | 現在の状態をスナップショット保存 (セッションあたり 2 個・同名上書き。zlib 圧縮) |
+| `quubee_restore` | スナップショットへ巻き戻す — 「キーを試す → 駄目なら戻す」の分岐探索 (観察履歴ごと戻る) |
 | `quubee_close` | セッション解放 (上限 3 並行) |
 | `quubee_gaps` | docs/dos_hle_gaps.md 全文 (実 DOS との差異の正典) |
 
-典型フロー: `boot` → `run(1500)` → `screenshot`/`text` → `key(RETURN)` → `run(300)` → `classify` → `close`。
+典型フロー: `boot` → `run(1500)` → `screenshot`/`text` → `save` → `key(RETURN)` → `run(300)` →
+`classify` → (駄目なら `restore` して別のキー) → `close`。
+「動かない」ときは `classify` の `int21Unimplemented` を見る — 未実装 DOS コールを踏んでいれば
+そこに AH と回数が出る (`quubee_gaps` の §1 と突き合わせる)。
 
 ## プレイヤーとの意図的な違い: Y2K クランプは既定 OFF (実時計)
 

@@ -279,9 +279,11 @@ void np2kai_reset(np2kai_handle h) {
 
 /* INT 21h AH 別呼び出し回数 (qbDebug.int21Stats 用)。dos_int21.c が更新する。 */
 extern int  qb_dos_dbg_ah_count(int ah);
+extern int  qb_dos_dbg_unimpl_count(int ah);
 extern void qb_dos_dbg_ah_reset(void);
-int  np2kai_debug_int21_count(int ah) { return qb_dos_dbg_ah_count(ah); }
-void np2kai_debug_int21_reset(void)   { qb_dos_dbg_ah_reset(); }
+int  np2kai_debug_int21_count(int ah)  { return qb_dos_dbg_ah_count(ah); }
+int  np2kai_debug_int21_unimpl(int ah) { return qb_dos_dbg_unimpl_count(ah); }
+void np2kai_debug_int21_reset(void)    { qb_dos_dbg_ah_reset(); }
 
 /* INT 21h 全コールトレース on/off (デバッグ用)。dos_int21.c の g_int21_trace を切替える。 */
 extern void qb_dos_set_int21_trace(int on);

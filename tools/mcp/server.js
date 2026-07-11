@@ -17,6 +17,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const zlib = require('zlib');
 const { McpServer } = require('@modelcontextprotocol/sdk/server/mcp.js');
 const { StdioServerTransport } = require('@modelcontextprotocol/sdk/server/stdio.js');
 const { z } = require('zod');
@@ -28,8 +29,9 @@ const { NOTE, stageInput, planLaunch } = require(path.join(ROOT, 'tools', 'lib',
 
 const MAX_SESSIONS = 3;          // Machine 1 台 ≈ 数十 MB の wasm heap。使い終わったら quubee_close
 const MAX_FRAMES_PER_CALL = 6000; // 1 コールの上限 (≈ エミュ 106 秒。ホスト実時間で最悪 ~2 分)
+const MAX_SNAPS_PER_SESSION = 2; // snapshot は圧縮しても MB オーダー。上書き保存で回す
 
-const sessions = new Map();      // id → { m, cleanup, samples: {maxColors, hashes[]}, launch }
+const sessions = new Map();      // id → { m, cleanup, samples: {maxColors, hashes[]}, launch, snaps: Map }
 let nextId = 1;
 
 function json(obj) { return { content: [{ type: 'text', text: JSON.stringify({ ...obj, note: NOTE }) }] }; }
@@ -91,7 +93,7 @@ server.tool(
                 });
                 const id = 's' + nextId++;
                 sessions.set(id, { m, cleanup: staged.cleanup, launch: plan.label,
-                    samples: { maxColors: 0, hashes: [] } });
+                    samples: { maxColors: 0, hashes: [] }, snaps: new Map() });
                 return json({ session: id, launch: plan.label, wasm: m.info().wasm.sha256.slice(0, 16),
                     multiple: a.multiple || 20, y2kClamp: !!a.y2kClamp, frame: 0,
                     hint: 'quubee_run で進める (例 frames=1500) → quubee_screenshot / quubee_text で観察' });
@@ -193,16 +195,66 @@ server.tool(
             const met = sample(s);
             const o = observe(s, met);
             const animated = new Set(s.samples.hashes.filter((x) => x !== 0)).size >= 2;
+            const stats = s.m.int21Stats();
             return json({ ...o,
                 tier: tier.classifyTier(o.state, s.samples.maxColors, animated),
                 maxColors: s.samples.maxColors, animated, launch: s.launch,
+                int21Unimplemented: stats.unimplemented,   // 未実装 DOS コール踏み = 一級の煙シグナル
+                int21Calls: stats.calls,
                 wasm: s.m.info().wasm.sha256.slice(0, 16) });
         } catch (e) { return jsonError(e.message || e); }
     });
 
 server.tool(
+    'quubee_save',
+    '現在の状態をスナップショットとして保存する (Wasm メモリ + ファイル + フレーム位置)。' +
+    'quubee_restore で巻き戻せるので「キーを試す → 駄目なら戻す」の分岐探索ができる。' +
+    `セッションあたり ${MAX_SNAPS_PER_SESSION} 個まで (同名は上書き)。`,
+    {
+        session: z.string(),
+        name: z.string().regex(/^[a-zA-Z0-9_-]{1,32}$/).optional().describe('スナップショット名 (既定 "snap")'),
+    },
+    async (a) => {
+        try {
+            const s = getSession(a.session);
+            const name = a.name || 'snap';
+            if (!s.snaps.has(name) && s.snaps.size >= MAX_SNAPS_PER_SESSION)
+                return jsonError(`スナップショット上限 (${MAX_SNAPS_PER_SESSION})。既存: ` +
+                    [...s.snaps.keys()].join(',') + ' (同名指定で上書き可)');
+            const buf = zlib.deflateSync(Machine.serialize(s.m.snapshot()), { level: 1 });
+            s.snaps.set(name, { buf, frame: s.m.frame,
+                samples: { maxColors: s.samples.maxColors, hashes: s.samples.hashes.slice() } });
+            return json({ saved: name, frame: s.m.frame,
+                compressedMB: +(buf.length / 1048576).toFixed(1),
+                snapshots: [...s.snaps.keys()] });
+        } catch (e) { return jsonError(e.message || e); }
+    });
+
+server.tool(
+    'quubee_restore',
+    '保存済みスナップショットへ巻き戻す。フレーム位置・画面・メモリ・ファイルすべてが保存時点に戻る' +
+    ' (classify の観察履歴も保存時点のものに戻る)。',
+    {
+        session: z.string(),
+        name: z.string().optional().describe('スナップショット名 (既定 "snap")'),
+    },
+    async (a) => {
+        try {
+            const s = getSession(a.session);
+            const name = a.name || 'snap';
+            const rec = s.snaps.get(name);
+            if (!rec) return jsonError('スナップショットが無い: ' + name +
+                ' (保存済み: ' + ([...s.snaps.keys()].join(',') || '無し') + ')');
+            s.m = await Machine.restore(zlib.inflateSync(rec.buf));
+            s.samples = { maxColors: rec.samples.maxColors, hashes: rec.samples.hashes.slice() };
+            return json({ restored: name, frame: s.m.frame,
+                hint: 'ここから quubee_run / quubee_key で別の分岐を試せる' });
+        } catch (e) { return jsonError(e.message || e); }
+    });
+
+server.tool(
     'quubee_close',
-    'セッションを閉じて資源 (wasm heap・一時ディレクトリ) を解放する。',
+    'セッションを閉じて資源 (wasm heap・一時ディレクトリ・スナップショット) を解放する。',
     { session: z.string() },
     async (a) => {
         try {

@@ -65,8 +65,8 @@ async function tool(name, args) {
 
     const tl = await rpc('tools/list', {});
     const names = (tl.result.tools || []).map((t) => t.name);
-    check('9 ツールが列挙される', names.length === 9 && names.includes('quubee_boot') && names.includes('quubee_gaps'),
-        names.join(','));
+    check('11 ツールが列挙される', names.length === 11 && names.includes('quubee_save') &&
+        names.includes('quubee_restore') && names.includes('quubee_gaps'), names.join(','));
 
     // 対話セッション一巡 (liotest T1: キー待ち → RETURN で描画が進む)
     const b = await tool('quubee_boot', { path: ZIP, exe: 'T1.EXE' });
@@ -82,12 +82,29 @@ async function tool(name, args) {
     const c1 = await tool('quubee_classify', { session: sid });
     check('キー無しは静止 (animated=false)', c1.json && c1.json.animated === false, JSON.stringify(c1.json));
 
+    // --- snapshot: キー投入で分岐する前に保存 ---
+    const sv = await tool('quubee_save', { session: sid });
+    check('save がスナップショットを返す', !sv.isError && sv.json.saved === 'snap' && sv.json.frame === 600,
+        JSON.stringify(sv.json));
+
     await tool('quubee_key', { session: sid, key: 'RETURN' });
     await tool('quubee_run', { session: sid, frames: 200 });
     await tool('quubee_key', { session: sid, key: 'RETURN' });
     await tool('quubee_run', { session: sid, frames: 200 });
     const c2 = await tool('quubee_classify', { session: sid });
     check('RETURN 投入で画面が進む (animated=true)', c2.json && c2.json.animated === true, JSON.stringify(c2.json));
+    check('classify に INT 21h 診断が載る', c2.json && typeof c2.json.int21Unimplemented === 'object' &&
+        typeof c2.json.int21Calls === 'object' && Object.keys(c2.json.int21Calls).length > 0,
+        JSON.stringify(c2.json && c2.json.int21Calls));
+
+    // --- restore: 保存時点 (キー投入前・静止) へ巻き戻る ---
+    const rs = await tool('quubee_restore', { session: sid });
+    check('restore でフレームが巻き戻る (600)', !rs.isError && rs.json.frame === 600, JSON.stringify(rs.json));
+    const c3 = await tool('quubee_classify', { session: sid });
+    check('restore 後は保存時点の観察 (animated=false) に戻る', c3.json && c3.json.animated === false,
+        JSON.stringify(c3.json));
+    const rs2 = await tool('quubee_restore', { session: sid, name: 'nope' });
+    check('無いスナップショットは正直なエラー', rs2.isError && /スナップショットが無い/.test(rs2.json.error || ''));
 
     const shot = await tool('quubee_screenshot', { session: sid });
     check('screenshot が PNG を返す', shot.imgBytes > 100, 'bytes=' + shot.imgBytes);

@@ -315,6 +315,21 @@ class Machine {
     }
 
     int21(ah) { return this._fn.int21(ah); }
+    /* INT 21h 診断: AH 別の呼び出し回数と「未実装 AH を踏んだ」回数 (煙感知の一級シグナル)。
+     * 戻り値 { calls: {"3D": n, ...}, unimplemented: {"5E": n, ...} } — ゼロは省く。 */
+    int21Stats() {
+        const c = this.M.cwrap('np2kai_debug_int21_count', 'number', ['number']);
+        const u = this.M.cwrap('np2kai_debug_int21_unimpl', 'number', ['number']);
+        const calls = {}, unimplemented = {};
+        for (let ah = 0; ah < 256; ah++) {
+            const hex = ah.toString(16).toUpperCase().padStart(2, '0');
+            const n = c(ah);
+            if (n > 0) calls[hex] = n;
+            const nu = u(ah);
+            if (nu > 0) unimplemented[hex] = nu;
+        }
+        return { calls, unimplemented };
+    }
     /* ゲストのメインループ周期の目安に使う (process_input が kbhit→getch を回すエンジン向け) */
     exited() { return !!this._fn.getExit(this._exitPtr); }
     batchDone() { return !!this._fn.batchDone(); }
