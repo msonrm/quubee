@@ -66,14 +66,17 @@ qb/
 │   ├── *_test.js ほか       # headless 回帰テスト群 (Node + Wasm 実ブート)。例:
 │   │                        #   batch_test (bat 分岐) / xms_test / sft_test / sgr_test /
 │   │                        #   find_sjis_test / exec_env_test / diskimage_test / lzh_l1ext_test /
-│   │                        #   bio100_triage (互換性ベースライン) / touhou_test / bench_frame (fps)
+│   │                        #   bio100_triage (互換性ベースライン) / touhou_test
+│   ├── bench_game.js        # CPU ベンチ (32bit PM = Suika3)。bench_ray.js = 16bit 実モード (Ray)。
+│   │                        #   最適化 A/B は両方で測る。bench_frame.js (boot.d88) は例外連発で
+│   │                        #   longjmp を測ってしまうため CPU 最適化には不適 (歴史的経緯で残置)
 │   ├── boot_hello/          # 最小自己起動ディスク (HELLO 表示)
 │   ├── vsync_test/          # VSYNC IRQ 配送パス確認用 boot disk
 │   ├── dos_loader/          # boot.asm + shell.asm (ミニ COMMAND.COM) + make_d88.py + build.sh
-│   ├── np2kai_patches/      # NP2kai 改変を patch 化 (build.sh が自動適用)
-│   │   ├── 01_dos_loader_hooks.patch  # bios.c: トランポリン install + biosfunc case + 合成 ROM 文字列
-│   │   ├── 02_font_reset_fix.patch    # pccore_reset の fontrom ゼロ埋め抑止
-│   │   └── 03_rtc_y2k_clamp.patch     # RTC 年を 1999 にクランプ (Y2K 系の固定幅年バグ対策)
+│   ├── np2kai_patches/      # NP2kai 改変を patch 化 (build.sh が自動適用)。一覧と詳細は
+│   │   │                    #   tools/np2kai_patches/README.md が正典。01=DOS ローダフック /
+│   │   ├── ...              #   02=font reset 抑止 / 03=RTC Y2K / 04=LIO gscreen / 05=LIO gcircle /
+│   │   └── 07_cpu_mem_fastpath.patch  # 06=BEEP ゲイン / 07=CPU fast path (メモリ/フェッチ/16bit 実モード)
 │   ├── font_build/          # font.bmp 再生成パイプライン (makefont.cjs=irori/np2-wasm BSD-3 +
 │   │                        #   東雲 BDF=PD + base.bmp=SimK 修正BSD。漢字の縦位置を正規化。ビルド時のみ)
 │   ├── gen_keisen_glyphs.py # font.bmp の JIS 区8 罫線を自前生成して注入 (font_build の 2 段目・意図的拡張)
@@ -111,7 +114,7 @@ qb/
 | 拡張メモリ | 数MB | 32MB (XMS 3.0 HLE で EMB として供給) |
 | グラフィック | 640×400 / 16色 | 同 + PEGC 256 色対応 |
 | サウンド | BEEP / 一部 FM | FM 音源 (OPNA / **fmgen** 既定) + BEEP + **ちびおと** (PC-9801-86 + ADPCM RAM = SOUND_SW 0x14、2026-06-27 に既定 ON。qbDebug.chibioto(0) で素の 86 へ) + **MIDI** (RS-MIDI / MPU-PC98 → TinySoundFont + SF2、レシピ検出時に on-demand 有効化) |
-| クロック倍率 | x1 (実機) | **multiple=20 固定** (≈ 486DX2-50、≈49MHz)。2026-06-26 に 27 (≈66MHz) へ上げたが、ちびおと既定 ON 後の FMDSP 等で音が詰まる実害を実機確認し 2026-06-27 に 20 へ差し戻し。適応オートクロックは既定 OFF (qbDebug.autoclock(1) でオプトイン) |
+| クロック倍率 | x1 (実機) | **multiple=27 固定** (≈66MHz、2026-07-11〜)。過去 2 回 (2026-06-14/27) は 27 で音が詰まり 20 (≈486DX2-50) に戻したが、真因はホスト律速で、patch 07 の CPU fast path (Suika3 1.39x / Ray 1.43x) により解消 — Ray 実機で 38 まで持つのを確認し 27 を再採用。適応オートクロックは既定 OFF (qbDebug.autoclock(1) でオプトイン) |
 
 ## CPU エミュレータ構成
 
