@@ -55,6 +55,14 @@
   (ビルド済み wasm 同梱 `quubee-mcp`、`npx` 1 行で第三者が使える形。publish はユーザーの npm
   アカウント) → B2: ディスクイメージ入力 (diskimage.js を stage.js に配線) → D: 利用例ドキュメント。
   残 (小): quubee_run CLI と MCP の出力整合レビュー。
+  - ✓ **INT 21h 診断の実地検証第 1 号 = FD ファイラ (2026-07-12・デプロイ済・実機確認済)**:
+    出射厚の FD Ver.3.13 (fd98_313) の「ドライブの指定が違います」停止を、診断
+    (int21_trace + int21Unimplemented) で INT 21h 4 穴と特定・解消。核心 = **A: をリモート
+    ドライブ扱い** (IOCTL AL=09=bit12 / AH=32 Get DPB=no-DPB) → FD が DOS ファンクション経路
+    (FindFirst) に切替→一覧描画。faithful (実 FAT 無し HLE-FS=network 相当)。AH=60 truename/
+    AH=37 switch char も汎用実装。triage ベースライン一致で corpus 無影響。正典 = dos_hle_gaps
+    §1・§2.5 / [[reference_fd_filer_remote_drive]] / [[project_mcp_server]]。「報告の質が症状→
+    機構に変わる」が自分たちの調査で実証された。
 
 **残**: ①既存 `tools/*.js` を machine.js へ寄せる (急がない。触るたびに 1 本ずつ)
 ②snapshot の圧縮 (いま 64MiB 生)。
