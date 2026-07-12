@@ -74,7 +74,8 @@ function planLaunch(dir, opts) {
         const f = names.find((n) => n.toLowerCase() === b.toLowerCase());
         if (!f) { if (opts.bat) throw new Error('--bat が見つからない: ' + b); continue; }
         const recipe = qbBatScript.parse(fs.readFileSync(path.join(dir, f)));
-        const stmts = qbBatScript.buildStatements(recipe, names, opts.args || '');
+        const readEntry = (n) => { try { return fs.readFileSync(path.join(dir, n)); } catch (_) { return null; } };
+        const stmts = qbBatScript.buildStatements(recipe, names, opts.args || '', readEntry);
         const cmds = stmts ? stmts.filter((s) => s.op === 'cmd') : [];
         if (cmds.length) {
             const main = cmds.find((c) => {

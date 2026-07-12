@@ -450,7 +450,9 @@ class Machine {
         const batName = o.bat || names.find((n) => /\.bat$/i.test(n));
         if (!batName) throw new Error('.bat が見つからない (bat: を指定してください)');
         const bat = require(path.join(WEB, 'player', 'batscript.js'));
-        const stmts = bat.buildStatements(bat.parse(M.FS.readFile('/run/' + batName)), names, o.args || '');
+        // readEntry: `call X.BAT` のインライン展開が呼び先を読むのに使う (ブラウザと同じ契約)
+        const readEntry = (n) => { try { return M.FS.readFile('/run/' + n); } catch (_) { return null; } };
+        const stmts = bat.buildStatements(bat.parse(M.FS.readFile('/run/' + batName)), names, o.args || '', readEntry);
         if (!stmts) throw new Error('buildStatements が null');
         const prog = Buffer.from(bat.serializeStatements(stmts), 'latin1');
         const ptr = M._malloc(prog.length); M.HEAPU8.set(prog, ptr);

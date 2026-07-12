@@ -287,4 +287,83 @@ function mainOf(recipe, entries) {
     ok(!bat.usesMidi(rf), 'amelfm: usesMidi=false (FM 専用は MIDI ロードしない)');
 }
 
+// ---- 21. ③ call インライン展開 — NP21/W 開発者報告の bat そのままの形 (2026-07-12) ----
+// 「NPCNGCLK 8 / KANI / PWOFF / CALL END」+ END.BAT。旧 ② は CALL 行を黙殺して線形実行、
+// 7/11 の ②→③ 統合で CALL が null → ① 退避 → NPCNGCLK 単体実行に化けた (KANI が起動しない)
+// 回帰。call 対応後は 3 cmd + END.BAT の cls/echo が 1 列に並ぶのが正。
+{
+    const files = { 'END.BAT': batBytes(['ECHO OFF', 'CLS', 'ECHO プログラムは終了しました']) };
+    const readEntry = (n) => files[n.toUpperCase()] || null;
+    const r = bat.parse(batBytes(['NPCNGCLK 8', 'KANI', 'PWOFF', 'CALL END']));
+    const entries = ['NPCNGCLK.EXE', 'KANI.EXE', 'PWOFF.COM', 'END.BAT', 'TEST.BAT'];
+    const st = bat.buildStatements(r, entries, '', readEntry);
+    ok(st !== null, 'call: 開発者 bat が null にならない (① 退避しない)');
+    eq(st.map((s) => s.op), ['cmd', 'cmd', 'cmd', 'cls', 'echo'],
+        'call: NPCNGCLK→KANI→PWOFF→(END.BAT: cls→echo) の 1 列');
+    eq(st.filter((s) => s.op === 'cmd').map((s) => s.name), ['NPCNGCLK.EXE', 'KANI.EXE', 'PWOFF.COM'],
+        'call: cmd 3 本の順序 (KANI が起動列に居る = 回帰の本丸)');
+    eq(st[0].args, '8', 'call: NPCNGCLK の引数 8 保持');
+}
+
+// ---- 22. ③ call の正直な読み飛ばし (実 DOS は missing コマンドでも続行する) ----
+{
+    const origWarn = console.warn; console.warn = () => {};   // 意図的スキップの警告を黙らせる
+    try {
+        const r = bat.parse(batBytes(['call NOTHERE', 'game']));
+        const st = bat.buildStatements(r, ['game.exe'], '', () => null);
+        ok(st !== null && st.length === 1 && st[0].name === 'game.exe',
+            'call: 呼び先が束に無い → その行だけスキップして続行');
+        // readEntry 未指定 (旧シグネチャ呼び出し) でも同じく行スキップ = 後方互換
+        const r2 = bat.parse(batBytes(['call SUB', 'game']));
+        const st2 = bat.buildStatements(r2, ['sub.bat', 'game.exe'], '');
+        ok(st2 !== null && st2.filter((s) => s.op === 'cmd').length === 1,
+            'call: readEntry 無し → スキップ (旧呼び出し互換)');
+        // 循環 call (A→A) は 1 段だけ展開して循環ガードで打ち切る (無限展開しない)。
+        // 展開列 = [子コピーの game, 親の game] の 2 cmd (実 DOS の再帰 1 段目と同じ形)。
+        const files = { 'LOOP.BAT': batBytes(['call LOOP', 'game']) };
+        const r3 = bat.parse(files['LOOP.BAT']);
+        const st3 = bat.buildStatements(r3, ['loop.bat', 'game.exe'], '', (n) => files[n.toUpperCase()] || null);
+        ok(st3 !== null && st3.filter((s) => s.op === 'cmd').length === 2,
+            'call: 循環 call は 1 段で打ち切り (無限展開しない)');
+    } finally { console.warn = origWarn; }
+}
+
+// ---- 23. ③ call の .com/.exe 透過 (実 DOS: CALL はバッチ以外にはただの実行) ----
+{
+    const r = bat.parse(batBytes(['call setup -x', 'game']));
+    const st = bat.buildStatements(r, ['setup.com', 'game.exe'], '', () => null);
+    eq(st.filter((s) => s.op === 'cmd').map((s) => [s.name, s.args]),
+        [['setup.com', '-x'], ['game.exe', '']],
+        'call: .com 透過 (引数付き通常 cmd)');
+}
+
+// ---- 24. ③ call のラベル空間はバッチ単位でローカル (同名 :END の衝突が起きない) ----
+// 実 DOS: GOTO は現在実行中のバッチファイル内だけを探す。呼び元と呼び先の同名ラベルは
+// それぞれ独立解決 — フラット展開でも target index が交差しないことを厳密に守る。
+{
+    const files = { 'SUB.BAT': batBytes(['goto END', 'echo CHILD-SKIP', ':END', 'echo CHILD-TAIL']) };
+    const r = bat.parse(batBytes(['call SUB', 'goto END', 'echo PARENT-SKIP', ':END', 'game']));
+    const st = bat.buildStatements(r, ['sub.bat', 'game.exe'], '', (n) => files[n.toUpperCase()] || null);
+    // 展開列: [0]=goto(子) [1]=echo CHILD-SKIP [2]=echo CHILD-TAIL [3]=goto(親) [4]=echo PARENT-SKIP [5]=cmd game
+    eq(st.map((s) => s.op), ['goto', 'echo', 'echo', 'goto', 'echo', 'cmd'], 'call ラベル: 展開列の形');
+    eq(st[0].target, 2, 'call ラベル: 子の goto END → 子の :END (=2、CHILD-TAIL へ)');
+    eq(st[3].target, 5, 'call ラベル: 親の goto END → 親の :END (=5、game へ)');
+}
+
+// ---- 25. ③ call の位置パラメータ伝播 (call SUB %1 X → 呼び先の %1 %2) ----
+{
+    const files = { 'SUB.BAT': batBytes(['game %1 %2']) };
+    const r = bat.parse(batBytes(['call SUB %1 X']));
+    const st = bat.buildStatements(r, ['sub.bat', 'game.exe'], 'AAA', (n) => files[n.toUpperCase()] || null);
+    eq(st[0] && st[0].args, 'AAA X', 'call 引数: 親 %1 置換 → 子の %1 %2 に届く');
+}
+
+// ---- 26. ③ for/choice/shift は依然 null (call だけを解禁した回帰ガード) + cls 直列化 ----
+{
+    ok(bat.buildStatements(bat.parse(batBytes(['for %%i in (a) do game', 'game'])), ['game.exe'], '', () => null) === null,
+        'for は依然 null → ① 退避');
+    const st = bat.buildStatements(bat.parse(batBytes(['cls', 'game'])), ['game.exe'], '');
+    eq(bat.serializeStatements(st), 'L\nC\tgame.exe\t\n', 'serializeStatements: cls は "L" 行');
+}
+
 console.log(`\nbatscript_test: pass=${pass} fail=${fail}`);

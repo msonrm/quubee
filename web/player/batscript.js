@@ -6,9 +6,10 @@
 // を取り出し、フロントのエントリ自動検出に橋渡しする (ゲームごとの手書き起動テーブルを不要にする)。
 //
 // 実行は 2 段構え: ① 単一起動 (resolveMain — 単一 cmd で set/cd も分岐も無い .bat と素の COM/EXE) /
-// ③ 文インタプリタ (buildStatements — 複数コマンド・set/cd・if errorlevel/goto。ドライバ TSR の常駐
-// mdrv98 → game → mdrv98 -r を 1 DOS セッション内で保ち、分岐は C 側が errorlevel で実行時評価)。
-// 未対応構文 (for/call/if exist 等) は null を返し ① へ退避する (honest fallback)。
+// ③ 文インタプリタ (buildStatements — 複数コマンド・set/cd・if errorlevel/goto・call/cls。ドライバ TSR
+// の常駐 mdrv98 → game → mdrv98 -r を 1 DOS セッション内で保ち、分岐は C 側が errorlevel で実行時評価。
+// call は呼び先 .bat を bat 単位のローカルラベル空間でインライン展開)。
+// 未対応構文 (for/if exist 等) は null を返し ① へ退避する (honest fallback)。
 // かつて存在した ② 線形列経路 (resolveSequence → qb_dos_stage_script) は ③ の部分集合であり
 // 2026-07-11 に ③ へ統合・撤去した。
 //
@@ -137,72 +138,133 @@
     //   { op:'echo',  text }             作者メッセージ (生バイト文字列、実行時に tty へ流す)
     //   { op:'goto',  target }           無条件ジャンプ (target = 文 index、末尾超え = 終了)
     //   { op:'iferr', n, neg, target }   if [not] errorlevel n goto target (実行時 (code>=n) を neg で反転)
+    //   { op:'cls' }                     画面クリア (実 DOS の CLS = ESC[2J 相当)
     // ラベルは文にせず「直後の文 index」へ解決する。`if "%N"=="..."` はユーザ引数が起動時に既知なので
     // 静的に畳む (真→無条件 goto / 偽→捨てる)。未対応の if (then が goto 以外・if exist) や
-    // for/call/choice/shift が出たら null を返し、フロントは ① 単一起動へ退避する (honest fallback)。
-    const CONTROL_KEYWORDS = new Set(['for', 'call', 'choice', 'shift']);
-    function buildStatements(recipe, entryNames, userArgs) {
+    // for/choice/shift が出たら null を返し、フロントは ① 単一起動へ退避する (honest fallback)。
+    //
+    // `call X` は実 DOS 同様に対応する (2026-07-12、NP21/W 開発者報告の bat が契機):
+    //   - X が .com/.exe → 通常の cmd 文 (実 DOS の CALL はバッチ以外には透過)。
+    //   - X が .bat → readEntry で読んでその場にインライン展開。ラベル空間は bat ごとに
+    //     ローカル (実 DOS: GOTO は現在実行中のバッチファイル内だけを探す) なので、呼び元と
+    //     呼び先に同名ラベルがあっても互いに独立に解決される。呼び先の位置パラメータ %N は
+    //     call の引数 (呼び元の %N を先に置換)。深さ上限 4 + 循環ガード。
+    //   - X が束に無い / readEntry が無い・読めない → その行だけ読み飛ばして続行
+    //     (実 DOS も missing コマンドはエラー表示して続行する。console.warn で診断可能に)。
+    const CONTROL_KEYWORDS = new Set(['for', 'choice', 'shift']);
+    const CALL_DEPTH_MAX = 4;
+    function buildStatements(recipe, entryNames, userArgs, readEntry) {
         const find = entryFinder(entryNames);
-        const pos = (userArgs || '').trim().split(/\s+/).filter(Boolean);
+        const batByBase = new Map();              // 素の basename → .bat 実エントリ名 (CALL 先解決用)
+        for (const n of entryNames) {
+            const b = lcBase(n);
+            if (/\.bat$/.test(b) && !batByBase.has(b)) batByBase.set(b, n);
+        }
         const stmts = [];
-        const labelIndex = Object.create(null);   // label(小文字) -> 直後の文 index
-        const pend = [];                          // {i, name}: goto/iferr の target 解決待ち
+        const callStack = new Set();              // 循環 call ガード (実エントリ名)
         let sawMain = false;
+        const warn = (m) => { try { console.warn('[batscript] ' + m); } catch (_) { /* console 無し環境 */ } };
 
-        for (const l of recipe.lines) {
-            if (l.kind === 'command') {
-                const key = l.base.toLowerCase().replace(/\.(com|exe|bat)$/, '');
-                if (CONTROL_KEYWORDS.has(key)) return null;   // for/call 等は線形化不能 → ①
-                const hit = find(l.base);
-                if (!hit) continue;                           // 束に無い → skip (現挙動踏襲, best-effort)
-                if (!DRIVER_NAMES.has(key)) sawMain = true;
-                stmts.push({ op: 'cmd', name: hit, args: buildCmdline(l.args, userArgs) });
-                continue;
-            }
-            if (l.kind === 'set') { stmts.push({ op: 'set', text: l.text }); continue; }
-            if (l.kind === 'cd')  { stmts.push({ op: 'cd',  path: l.path }); continue; }
-            const t = l.text;
-            const lc = t.toLowerCase();
-            if (t[0] === ':') {                               // :label
-                const name = t.slice(1).trim().split(/\s+/)[0].toLowerCase();
-                if (name) labelIndex[name] = stmts.length;
-                continue;
-            }
-            if (/^goto(\s|$)/.test(lc)) {                     // goto label
-                const name = t.slice(4).trim().split(/\s+/)[0].toLowerCase();
-                if (!name) return null;
-                pend.push({ i: stmts.length, name });
-                stmts.push({ op: 'goto', target: -1 });
-                continue;
-            }
-            if (lc === 'if' || lc.startsWith('if ')) {        // 条件分岐
-                const cond = parseIf(t, pos);
-                if (!cond) return null;                       // 未対応 if → ① へ退避
-                if (cond.kind === 'err') {
-                    pend.push({ i: stmts.length, name: cond.label });
-                    stmts.push({ op: 'iferr', n: cond.n, neg: cond.neg, target: -1 });
-                } else if (cond.kind === 'str' && cond.taken) {   // 静的に畳む (偽は捨てる)
-                    pend.push({ i: stmts.length, name: cond.label });
-                    stmts.push({ op: 'goto', target: -1 });
+        // 1 つの .bat (最上位 or CALL 先) の行列を stmts へ追記する。labelIndex/pend を
+        // 呼び出しごとのローカルに持つ = ラベル空間が bat 単位で独立 (文 index は共有配列の
+        // 絶対値なので衝突しない)。末尾ラベルは「この bat の直後 = 呼び元の次の文」に自然に
+        // 解決される。戻り値 true=OK / false=線形化不能 (全体を null → ① へ)。
+        function appendLines(lines, userArgsStr, depth) {
+            const pos = (userArgsStr || '').trim().split(/\s+/).filter(Boolean);
+            const labelIndex = Object.create(null);   // label(小文字) -> 直後の文 index
+            const pend = [];                          // {i, name}: goto/iferr の target 解決待ち
+
+            for (const l of lines) {
+                if (l.kind === 'command') {
+                    const key = l.base.toLowerCase().replace(/\.(com|exe|bat)$/, '');
+                    if (CONTROL_KEYWORDS.has(key)) return false;  // for/choice/shift は線形化不能 → ①
+                    if (key === 'call') {
+                        if (!appendCall(l, pos, depth)) return false;
+                        continue;
+                    }
+                    const hit = find(l.base);
+                    if (!hit) continue;                           // 束に無い → skip (現挙動踏襲, best-effort)
+                    if (!DRIVER_NAMES.has(key)) sawMain = true;
+                    stmts.push({ op: 'cmd', name: hit, args: buildCmdline(l.args, userArgsStr) });
+                    continue;
                 }
-                continue;
+                if (l.kind === 'set') { stmts.push({ op: 'set', text: l.text }); continue; }
+                if (l.kind === 'cd')  { stmts.push({ op: 'cd',  path: l.path }); continue; }
+                const t = l.text;
+                const lc = t.toLowerCase();
+                if (t[0] === ':') {                               // :label
+                    const name = t.slice(1).trim().split(/\s+/)[0].toLowerCase();
+                    if (name) labelIndex[name] = stmts.length;
+                    continue;
+                }
+                if (/^goto(\s|$)/.test(lc)) {                     // goto label
+                    const name = t.slice(4).trim().split(/\s+/)[0].toLowerCase();
+                    if (!name) return false;
+                    pend.push({ i: stmts.length, name });
+                    stmts.push({ op: 'goto', target: -1 });
+                    continue;
+                }
+                if (lc === 'if' || lc.startsWith('if ')) {        // 条件分岐
+                    const cond = parseIf(t, pos);
+                    if (!cond) return false;                      // 未対応 if → ① へ退避
+                    if (cond.kind === 'err') {
+                        pend.push({ i: stmts.length, name: cond.label });
+                        stmts.push({ op: 'iferr', n: cond.n, neg: cond.neg, target: -1 });
+                    } else if (cond.kind === 'str' && cond.taken) {   // 静的に畳む (偽は捨てる)
+                        pend.push({ i: stmts.length, name: cond.label });
+                        stmts.push({ op: 'goto', target: -1 });
+                    }
+                    continue;
+                }
+                if (lc === 'cls') { stmts.push({ op: 'cls' }); continue; }
+                if (lc.startsWith('echo')) {                      // 作者メッセージ
+                    if (lc === 'echo on' || lc === 'echo off') continue;  // コマンドエコー指令 (我々は元から非表示)
+                    let text = t.slice(4);
+                    if (text[0] === '.') text = text.slice(1);    // "echo." = 空行 / "echo.X" = X
+                    else if (text[0] === ' ') text = text.slice(1);  // "echo X" の先頭1空白を除去
+                    stmts.push({ op: 'echo', text });
+                    continue;
+                }
+                // rem / pause / prompt / path → 無視 (errorlevel も変えない、実 DOS と一致)
             }
-            if (lc.startsWith('echo')) {                      // 作者メッセージ
-                if (lc === 'echo on' || lc === 'echo off') continue;  // コマンドエコー指令 (我々は元から非表示)
-                let text = t.slice(4);
-                if (text[0] === '.') text = text.slice(1);    // "echo." = 空行 / "echo.X" = X
-                else if (text[0] === ' ') text = text.slice(1);  // "echo X" の先頭1空白を除去
-                stmts.push({ op: 'echo', text });
-                continue;
+
+            for (const p of pend) {
+                if (!(p.name in labelIndex)) return false;        // 未知ラベルへの goto → ①
+                stmts[p.i].target = labelIndex[p.name];
             }
-            // rem / cls / pause / set / prompt / path → 無視 (errorlevel も変えない、実 DOS と一致)
+            return true;
         }
 
-        if (!sawMain) return null;                            // 本体が無い → ①
-        for (const p of pend) {
-            if (!(p.name in labelIndex)) return null;         // 未知ラベルへの goto → ①
-            stmts[p.i].target = labelIndex[p.name];
+        // `call X [args...]` 1 行の処理 (appendLines から)。戻り値 false = 全体を ① へ。
+        function appendCall(l, pos, depth) {
+            const rawTgt = l.args[0];
+            if (!rawTgt) return true;                             // 裸の "call" は無視
+            const tgt = substArg(rawTgt, pos);
+            const base = programBasename(tgt);
+            const callArgs = l.args.slice(1).map((a) => substArg(a, pos)).join(' ');
+            const exe = find(base);
+            if (exe) {                                            // .com/.exe → 通常 cmd (実 DOS 準拠)
+                const key = base.toLowerCase().replace(/\.(com|exe|bat)$/, '');
+                if (!DRIVER_NAMES.has(key)) sawMain = true;
+                stmts.push({ op: 'cmd', name: exe, args: callArgs });
+                return true;
+            }
+            const b = base.toLowerCase();
+            const bat = /\.bat$/.test(b) ? batByBase.get(b) : batByBase.get(b + '.bat');
+            if (!bat) { warn('call ' + tgt + ': 束に見つからないため読み飛ばし (実 DOS も続行する)'); return true; }
+            if (!readEntry) { warn('call ' + tgt + ': readEntry 未指定のため読み飛ばし'); return true; }
+            if (depth >= CALL_DEPTH_MAX) { warn('call ' + tgt + ': 深さ上限 ' + CALL_DEPTH_MAX + ' 超過のため読み飛ばし'); return true; }
+            if (callStack.has(bat)) { warn('call ' + tgt + ': 循環 call のため読み飛ばし'); return true; }
+            const data = readEntry(bat);
+            if (data == null) { warn('call ' + tgt + ': 読めないため読み飛ばし'); return true; }
+            callStack.add(bat);
+            const ok = appendLines(parse(data).lines, callArgs, depth + 1);
+            callStack.delete(bat);
+            return ok;
         }
+
+        if (!appendLines(recipe.lines, userArgs || '', 0)) return null;
+        if (!sawMain) return null;                            // 本体が無い → ①
         return stmts;
     }
 
@@ -257,7 +319,7 @@
     // buildStatements の文列 → C (qb_dos_stage_batch) へ渡す直列化文字列。1 文 1 行、
     // フィールドは \t 区切り (SJIS の lead/trail に \t \n は現れないので生バイトと衝突しない):
     //   C \t PATH \t ARGS   /   E \t TEXT   /   S \t VAR=VALUE   /   D \t PATH
-    //   G \t TARGET         /   I \t N \t NEG \t TARGET
+    //   G \t TARGET         /   I \t N \t NEG \t TARGET          /   L (cls)
     function serializeStatements(stmts) {
         return stmts.map((s) => {
             if (s.op === 'cmd')  return 'C\t' + s.name + '\t' + (s.args || '');
@@ -265,6 +327,7 @@
             if (s.op === 'set')  return 'S\t' + s.text;
             if (s.op === 'cd')   return 'D\t' + s.path;
             if (s.op === 'goto') return 'G\t' + s.target;
+            if (s.op === 'cls')  return 'L';
             return 'I\t' + s.n + '\t' + (s.neg ? 1 : 0) + '\t' + s.target;   // iferr
         }).join('\n') + '\n';
     }

@@ -642,6 +642,7 @@ int qb_dos_stage_exe(const uint8_t *image, size_t size, const char *cmdline,
 #define QB_BATCH_IFERR 3   /* if [not] errorlevel n goto target */
 #define QB_BATCH_SET   4   /* set VAR=VALUE (echo_off/len = "VAR=VALUE" 生バイト) */
 #define QB_BATCH_CD    5   /* cd PATH (echo_off/len = 生 DOS パス、バックスラッシュ可) */
+#define QB_BATCH_CLS   6   /* cls — 画面クリア (ESC[2J、実 DOS の CLS と同じくカーソルはホームへ) */
 
 #define QB_BATCH_MAX_STMTS 96
 #define QB_BATCH_ECHO_POOL 2048
@@ -772,8 +773,8 @@ int qb_dos_music_play(const char *song) {
     return 0;
 }
 
-/* ③ 直列化文列 ("C\tPATH\tARGS" / "E\tTEXT" / "G\tTARGET" / "I\tN\tNEG\tTARGET" の \n 区切り、
- * batscript.js serializeStatements が生成) をパースして stage する。
+/* ③ 直列化文列 ("C\tPATH\tARGS" / "E\tTEXT" / "G\tTARGET" / "I\tN\tNEG\tTARGET" / "L"=cls の
+ * \n 区切り、batscript.js serializeStatements が生成) をパースして stage する。
  * 戻り値 0=OK / -1 引数不正 / -2 cmd 文ゼロ / -11 image 超過 / -12 文数超過 /
  * -13 不正 target / -14 echo プール超過 / -15 構文不正。 */
 int qb_dos_stage_batch(const char *prog, size_t len, const char *name) {
@@ -844,6 +845,8 @@ int qb_dos_stage_batch(const char *prog, size_t len, const char *name) {
                 s->neg = (uint8_t)v[1];
                 s->target = (int16_t)v[2];
             }
+        } else if (op == 'L') {                /* L = cls (フィールド無し) */
+            s->op = QB_BATCH_CLS;
         } else {
             return -15;
         }
@@ -907,6 +910,12 @@ int qb_dos_batch_next_hook(void) {
         case QB_BATCH_ECHO:
             qb_dos_tty_write((const uint8_t *)g_batch_echo + s->echo_off, (int)s->echo_len);
             qb_dos_tty_write((const uint8_t *)"\r\n", 2);
+            g_batch_pc++;
+            break;
+        case QB_BATCH_CLS:
+            /* 実 DOS の CLS = 画面クリア + カーソルホーム。tty の ESC[2J がその契約
+             * (echo 文と違い CRLF は付けない — CLS 後の echo は 1 行目から始まるのが正)。 */
+            qb_dos_tty_write((const uint8_t *)"\x1b[2J", 4);
             g_batch_pc++;
             break;
         case QB_BATCH_SET:

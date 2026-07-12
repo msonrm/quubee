@@ -264,9 +264,13 @@ TODO.md「プリンタ出力 → ブラウザ」参照。
   起動 .bat のコマンドを 1 セッション内で順に `AH=4Bh` EXEC する（ドライバ TSR 常駐 →
   game → -r 解除）専用シェルで、汎用シェルではない。**対話プロンプト・環境変数展開・リダイレクトは
   非対応**（`cd`/`set` は文インタプリタが対応）。制御フロー（`:label`/`goto`/`if errorlevel`/`if "%N"==`）は
-  ✅ 2026-06-10 の errorlevel 分岐インタプリタで対応（`IF ERRORLEVEL == N` の `=` 区切り変種も可）。それ以外の構文
-  （`for`/`call`/`choice`/`shift`、then 節が goto 以外）は単一主プログラム起動にフォールバック。プログラム以外の
-  行（`echo`/`rem`/`pause` 等）は echo 表示以外読み飛ばす。シェル経由の子の `argv[0]` は **子自身のパスに正規化される**
+  ✅ 2026-06-10 の errorlevel 分岐インタプリタで対応（`IF ERRORLEVEL == N` の `=` 区切り変種も可）。
+  `call X` は ✅ 2026-07-12 に対応（.bat はインライン展開・ラベル空間は bat 単位ローカル =
+  実 DOS の「GOTO は現在のバッチ内だけを探す」準拠、%N は call 引数で置換、深さ 4 + 循環ガード。
+  .com/.exe への call は通常実行に透過。呼び先が無い時はその行だけ読み飛ばして続行 = 実 DOS 同様）。
+  `cls` も ✅ 同日対応（文 op 'L' → ESC[2J）。それ以外の構文（`for`/`choice`/`shift`、then 節が
+  goto 以外）は単一主プログラム起動にフォールバック。プログラム以外の行（`echo`/`rem`/`pause` 等）は
+  echo 表示以外読み飛ばす。シェル経由の子の `argv[0]` は **子自身のパスに正規化される**
   （C1 解消済、2026-06-04。`build_child_env` で子固有 env を確保）。
 - **環境変数は `COMSPEC=A:\COMMAND.COM` と `PATH=A:\` の 2 つだけ**（`build_env`、2026-06-11 に COMSPEC 追加）。
   COMSPEC は実 DOS が必ず設定する変数で、存在チェックして起動拒否するソフトがある（Canvas-98 は無いと exit 5）。
@@ -406,10 +410,11 @@ TODO.md「プリンタ出力 → ブラウザ」参照。
 30. **INT 33h fn5/6 (MS) の BX=2（中ボタン）が右ボタン扱い**— 実 7.06 は存在しない
     中ボタンとして空カウンタを返すはず（2 ボタン前提の PC-98 では実害ほぼ無し。
     真理値表とコードの突合はこれ以外全項目一致）。
-31. **ミニ COMMAND.COM（batscript.js）の追加乖離**: ②線形シーケンス経路が `call` /
-    `for` / `choice` / `shift` を**無言スキップ**（③は honest fallback するのと非対称）/
+31. **ミニ COMMAND.COM（batscript.js）の追加乖離**: `call` は ✅ 2026-07-12 対応済
+    （`for`/`choice`/`shift` は依然 null → ① 退避 = honest fallback）/
     リダイレクト `> nul` がトークンとして子の command tail に漏れる（実 COMMAND.COM は
-    剥がす。`echo x > file` もファイルを作らず画面表示）/ tail 再構成で連続空白・タブが
+    剥がす。`echo x > file` もファイルを作らず画面表示。corpus 実測では実利用は life98 の
+    `<`/`|` のみ = 1/136 書庫、2026-07-12 調査）/ tail 再構成で連続空白・タブが
     単一空白に潰れる（実 DOS は raw tail を PSP:80h へ）/ goto ラベル照合が完全一致
     （実 DOS は先頭 8 文字有意）/ `if "%1"==FM` の非対称 quote が実 DOS と逆判定。
 

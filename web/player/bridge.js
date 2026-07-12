@@ -1897,8 +1897,13 @@ async function makeWorkerEmu() {
             // 実行時評価。未対応構文 (buildStatements=null) なら ① 単一起動へ。
             if (selectedRecipe) {
                 const names = loadedEntries.map((e) => e.name);
+                // readEntry: `call X.BAT` のインライン展開が呼び先の中身を読むのに使う
+                const readEntry = (n) => {
+                    const e = loadedEntries.find((x) => x.name === n);
+                    return e ? e.data : null;
+                };
                 const stmts = qbBatScript.buildStatements(
-                    selectedRecipe.recipe, names, userArgs);
+                    selectedRecipe.recipe, names, userArgs, readEntry);
                 const r = selectedRecipe.recipe;
                 if (stmts) {
                     const ncmd = stmts.filter((s) => s.op === 'cmd').length;

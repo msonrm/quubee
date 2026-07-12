@@ -1,5 +1,40 @@
 # CHANGELOG
 
+## [起動 .bat の CALL 対応 + CLS — NP21/W 開発者報告「NPCNGCLK が動かない」の根治] — 2026-07-12
+
+NP21/W 開発者さん報告「以前は動いていた NPCNGCLK が動かなくなった。エラーコードを返すと BAT 処理が
+止まるように変わった?」。報告 bat は `NPCNGCLK 8 / KANI / PWOFF / CALL END`（+ END.BAT = ECHO
+OFF/CLS/ECHO メッセージ）。
+
+**真因はエラーコードではなく `CALL END` 行**。旧 ② 線形列（resolveSequence）は CALL 行を「束に無い
+コマンド」として黙殺し残り 3 本を線形実行していた（= 以前は動いていた）。2026-07-11 の ②→③ 統合
+（a87038e、Exhibit B）で全 bat が buildStatements を通るようになり、`call` が CONTROL_KEYWORDS に
+該当 → **bat 全体が null → ① 単一起動へ退避 → 先頭の NPCNGCLK 単体実行**に化けて KANI が起動しなく
+なった。NPCNGCLK は正常でも現在倍率を終了コードに返す仕様（`return atoi(clkret)`）のため、UI の
+「exited (code 8)」表示が「エラーコードで打ち切られた」ように見えた（非ゼロ errorlevel で bat を
+止める経路はどこにも無いことは headless で実証済み — errorlevel は if 分岐評価にのみ使用）。
+
+対応（案 C = faithful なインライン展開 + 正直な読み飛ばし）:
+1. **`call X` 対応** (batscript.js): X が .bat なら readEntry で読んで**その場にインライン展開**。
+   ラベル空間は bat 単位ローカル（実 DOS の「GOTO は現在実行中のバッチ内だけを探す」準拠 —
+   呼び元/呼び先の同名ラベルが衝突しない。フラット展開でも解決だけスコープ分割）。呼び先の %N は
+   call 引数（呼び元の %N を先に置換）。深さ上限 4 + 循環ガード。.com/.exe への call は通常実行に
+   透過（実 DOS 準拠）。呼び先が束に無い/読めない時は**その行だけ読み飛ばして続行**（実 DOS も
+   missing コマンドはエラー表示して続行。console.warn で診断可能）。呼び出し元 (bridge.js /
+   machine.js / stage.js) は readEntry コールバックを渡す（未指定の旧呼び出しは従来どおりスキップ）。
+2. **`cls` 対応**: 文 op 'L' を新設（serializeStatements → C `QB_BATCH_CLS` → ESC[2J、CRLF 無し =
+   カーソルホーム）。END.BAT 型の「CLS してお別れメッセージ」が忠実に出る。
+3. 回帰: `tools/call_bat_test.js` 新設（報告 bat と同型の合成 fixture で end-to-end 5 項目 —
+   exit code 8 で後続が止まらない/EXEC 3 本/CLS クリア/echo 表示/完走）+ batscript_test に
+   call 6 ケース追加（インライン・ラベル独立・%N 伝播・.com 透過・循環/欠落スキップ・for は依然 null）。
+   **スイート全 76 本 PASS**。実物 NPCNGCLK.EXE + 報告 bat そのまま（KANI はスタブ）でも完走確認。
+   実物 KANI（games/bio_100/KANI123.LZH）でのブラウザ実機確認は後回し（ユーザー判断）。
+
+調査の副産物: リダイレクト `<`/`>`/`|` の corpus 実測（136 書庫 48 bat 中、実利用は life98 のみ =
+`LBMP <FPENT`・`RANDOM | LBMP` 等 5 行 + kiss218 の `pause >nul`）。実装は life98 級の実需要が出る
+まで見送り、TEXTTEST の `echo ESC[>1l`（NEC 私的 CSI）を素朴な redirect パースが壊す罠も記録
+（docs/dos_hle_gaps.md §31）。
+
 ## [ファイラ FD Ver.3.13 (出射厚) がブラウズ可能に — A: をリモートドライブ化] — 2026-07-12
 
 ユーザー依頼「FD（ファイル管理ツール、fd98_313）が動くと嬉しい」。MCP v2 で入れた **INT 21h 診断が
