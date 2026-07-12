@@ -28,7 +28,8 @@ OFF/CLS/ECHO メッセージ）。
    exit code 8 で後続が止まらない/EXEC 3 本/CLS クリア/echo 表示/完走）+ batscript_test に
    call 6 ケース追加（インライン・ラベル独立・%N 伝播・.com 透過・循環/欠落スキップ・for は依然 null）。
    **スイート全 76 本 PASS**。実物 NPCNGCLK.EXE + 報告 bat そのまま（KANI はスタブ）でも完走確認。
-   実物 KANI（games/bio_100/KANI123.LZH）でのブラウザ実機確認は後回し（ユーザー判断）。
+   **報告者（NP21/W 開発者さん）本人のブラウザ実機確認済み（2026-07-12）: 動作するようになったとのこと**
+   → デプロイ済み・クローズ。
 
 調査の副産物: リダイレクト `<`/`>`/`|` の corpus 実測（136 書庫 48 bat 中、実利用は life98 のみ =
 `LBMP <FPENT`・`RANDOM | LBMP` 等 5 行 + kiss218 の `pause >nul`）。実装は life98 級の実需要が出る
