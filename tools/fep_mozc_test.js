@@ -6,7 +6,7 @@
 //   - フォールバック変換 (convert=null → カナ巡回)
 //   - in-flight 無効化 (変換待ち中に打鍵 → 古い結果を捨てる)
 //   - 文節移動 (←→)・文節別候補 (Space/↑↓)・Enter で結合確定
-// Part B (web/assets/mozc_qb.* + mozc.data がある時のみ): 実 Mozc で
+// Part B (web/assets/hechima-wasm.* + mozc.data がある時のみ): 実 Mozc で
 //   "kyouhaiitenkidesune" → 変換 → 確定が「今日はいい天気ですね」になること。
 //
 // 使い方: node tools/fep_mozc_test.js
@@ -116,17 +116,17 @@ function makeHarness(convert) {
     }
 
     // ---- Part B (実 Mozc) ----
-    const QBJS  = path.join(WEB, 'assets', 'mozc_qb.js');
+    const QBJS  = path.join(WEB, 'assets', 'hechima-wasm.js');
     const QDATA = path.join(WEB, 'assets', 'mozc.data');
     if (!fs.existsSync(QBJS) || !fs.existsSync(QDATA)) {
-        console.log('skip 実 Mozc 統合 (web/assets/mozc_qb.js / mozc.data 不在 — ビルドは ~/development/mozc-wasm-build/README.md)');
+        console.log('skip 実 Mozc 統合 (web/assets/hechima-wasm.js / mozc.data 不在 — 成果物は logical-layout-labo の hechima-wasm Release)');
     } else {
         const M = await require(QBJS)();
         M.FS.writeFile('/mozc.data', new Uint8Array(fs.readFileSync(QDATA)));
-        const r = M.ccall('mozc_qb_init', 'number', ['string'], ['/mozc.data']);
-        ok(r === 0, `mozc_qb_init = 0 (got ${r})`);
+        const r = M.ccall('hechima_init', 'number', ['string'], ['/mozc.data']);
+        ok(r === 0, `hechima_init = 0 (got ${r})`);
         const mozcConvert = (yomi) => {
-            const json = M.ccall('mozc_qb_convert', 'string', ['string', 'number'], [yomi, 9]);
+            const json = M.ccall('hechima_convert', 'string', ['string', 'number'], [yomi, 9]);
             try { const p = JSON.parse(json); return Promise.resolve(p.segments || null); }
             catch (_) { return Promise.resolve(null); }
         };

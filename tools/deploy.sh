@@ -25,10 +25,10 @@ mkdir -p "$DIST"
 cp -rL web/. "$DIST/"                                    # -L: symlink は実体化 (現状 web/ に無し)
 find "$DIST" -name '*.map' -delete
 
-# HLE FEP の Mozc-Wasm (mozc_qb.js/.wasm + 辞書 mozc.data ~19MB、gitignore)。無いまま deploy すると
-# 本番 FEP がカナ変換のみに縮退する (MIDI の soundfont と同じ罠)。ビルドは ~/development/mozc-wasm-build/README.md。
-# mozc.data は 25MiB 未満なので分割不要。
-for f in assets/mozc_qb.js assets/mozc_qb.wasm assets/mozc.data; do
+# HLE FEP の hechima-wasm (hechima-wasm.js/.wasm + 辞書 mozc.data ~19MB、gitignore)。無いまま deploy すると
+# 本番 FEP がカナ変換のみに縮退する (MIDI の soundfont と同じ罠)。成果物は logical-layout-labo の
+# hechima-wasm Release から取得 (BUILD_INFO.txt に pin 版)。mozc.data は 25MiB 未満なので分割不要。
+for f in assets/hechima-wasm.js assets/hechima-wasm.wasm assets/mozc.data; do
     [ -f "$DIST/$f" ] || echo "⚠ 警告: web/$f が無い — 本番 FEP のかな漢字変換が無効になります"
 done
 

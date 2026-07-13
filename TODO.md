@@ -121,7 +121,7 @@ docs/dos_hle_gaps.md を機械可読で添える。
 遅延 fetch・専用 Worker・watchdog 自己回復・複数文節・句読点即確定・行末折り返し・
 タイムゾーン注入・「あ」ボタン + Ctrl+J・進捗トースト・設定 FEP Style)。
 経緯の詳細 = CHANGELOG 2026-07-07/08、知見の正典 = memory/project_fep_hle.md、
-Mozc ビルドレシピ = `~/development/mozc-wasm-build/README.md` (**ラッパー -DNDEBUG 必須の罠**)。
+ビルドと正典 = logical-layout-labo の `hechima-wasm/` へ移管済 (2026-07-13。成果物は GitHub Release から pin。**ラッパー -DNDEBUG 必須の罠**)。
 回帰 = `tools/fep_test.js` (VZ 実地) + `tools/fep_mozc_test.js` (状態機械 + 実 Mozc E2E)。
 
 **新配列 (薙刀式/NICOLA/月配列…) 統合 — 実装ほぼ完了 (2026-07-08、labo と分業)**

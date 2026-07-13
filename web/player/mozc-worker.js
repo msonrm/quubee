@@ -1,9 +1,10 @@
-// Mozc-Wasm を専用 Worker で動かす — HLE FEP のかな漢字変換バックエンド。
+// hechima-wasm を専用 Worker で動かす — HLE FEP のかな漢字変換バックエンド。
 //
-// mozc_qb.wasm (fcitx-contrib/fcitx5-mozc 由来のビルド、BSD-3。レシピは
-// ~/development/mozc-wasm-build/README.md) は -pthread ビルドなので SharedArrayBuffer
-// (COOP/COEP) が必須 — QuuBee は音声 Worker のため配信済み。pthread pool の再スポーンは
-// mainScriptUrlOrBlob で mozc_qb.js 自身を指す (importScripts 環境では自動解決できない)。
+// hechima-wasm.wasm (fcitx-contrib/fcitx5-mozc 由来のビルド、BSD-3。powered by Mozc。
+// ビルド/正典は logical-layout-labo の hechima-wasm/、成果物は同リポの GitHub Release)
+// は -pthread ビルドなので SharedArrayBuffer (COOP/COEP) が必須 — QuuBee は音声 Worker の
+// ため配信済み。pthread pool の再スポーンは mainScriptUrlOrBlob で hechima-wasm.js 自身を
+// 指す (importScripts 環境では自動解決できない)。
 //
 // main とのプロトコル:
 //   ← {type:'init'}                       辞書 fetch + module 構築。progress を随時送る
@@ -13,10 +14,13 @@
 //   → {type:'result', id, segments}       segments = [{key, candidates:[...]}] / null=変換失敗
 //
 // 辞書 mozc.data (~19MB) は初回 init でのみ fetch (FEP を使わないユーザーは一切取得しない)。
+//
+// pin 版 (labo hechima-wasm-v0.1.0, BUILD_INFO.txt より): fcitx5-mozc 8b3d34c /
+// mozc 0651fbc / emsdk 3.1.69。成果物差し替え時はこの版も更新する。
 
 'use strict';
 
-importScripts('../assets/mozc_qb.js');
+importScripts('../assets/hechima-wasm.js');
 
 let M = null;
 
@@ -56,14 +60,14 @@ async function init() {
     const tzAbs = Math.abs(offMin);
     const tzName = `Fixed/UTC${tzSign}${String(Math.floor(tzAbs / 60)).padStart(2, '0')}:${String(tzAbs % 60).padStart(2, '0')}:00`;
     const mod = {
-        mainScriptUrlOrBlob: new URL('../assets/mozc_qb.js', self.location.href).href,
+        mainScriptUrlOrBlob: new URL('../assets/hechima-wasm.js', self.location.href).href,
         locateFile: (p) => new URL('../assets/' + p, self.location.href).href,
     };
     mod.preRun = [() => { mod.ENV.TZ = tzName; }];   // ENV は EXPORTED_RUNTIME_METHODS で公開済み
-    M = await self.MozcQbModule(mod);
+    M = await self.HechimaModule(mod);
     M.FS.writeFile('/mozc.data', buf);
-    const r = M.ccall('mozc_qb_init', 'number', ['string'], ['/mozc.data']);
-    if (r !== 0) throw new Error('mozc_qb_init failed (r=' + r + ')');
+    const r = M.ccall('hechima_init', 'number', ['string'], ['/mozc.data']);
+    if (r !== 0) throw new Error('hechima_init failed (r=' + r + ')');
 }
 
 onmessage = (ev) => {
@@ -75,7 +79,7 @@ onmessage = (ev) => {
     } else if (m.type === 'convert') {
         let segments = null;
         try {
-            const json = M.ccall('mozc_qb_convert', 'string',
+            const json = M.ccall('hechima_convert', 'string',
                 ['string', 'number'], [m.kana, m.maxCands | 0]);
             const parsed = JSON.parse(json);
             if (parsed && Array.isArray(parsed.segments) && parsed.segments.length) {

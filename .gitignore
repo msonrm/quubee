@@ -61,11 +61,12 @@ Thumbs.db
 # debug/作業用スクリーンショット (ユーザ共有のため一時的に置く)
 /Screenshot*.png
 
-# Mozc-Wasm (HLE FEP のかな漢字変換エンジン、BSD-3)。~/development/mozc-wasm-build/ でビルド
-# (レシピは同ディレクトリ README.md)。辞書 mozc.data は fcitx-contrib/fcitx5-mozc release 由来。
-# ブラウザは FEP 初回 ON 時に遅延 fetch。deploy.sh が dist へ同梱する
-/web/assets/mozc_qb.js
-/web/assets/mozc_qb.wasm
+# hechima-wasm (HLE FEP のかな漢字変換エンジン、BSD-3・powered by Mozc)。ビルドと正典は
+# logical-layout-labo の hechima-wasm/、成果物は同リポの GitHub Release から取得 (pin 版は
+# BUILD_INFO.txt)。辞書 mozc.data は fcitx-contrib/fcitx5-mozc release 由来。ブラウザは FEP
+# 初回 ON 時に遅延 fetch。deploy.sh が dist へ同梱する
+/web/assets/hechima-wasm.js
+/web/assets/hechima-wasm.wasm
 /web/assets/mozc.data
 /tools/mcp/node_modules/
 /tools/mcp/package-lock.json
