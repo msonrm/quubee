@@ -1,5 +1,44 @@
 # CHANGELOG
 
+## [Mozc-Wasm を hechima-wasm へ移管 — 変換エンジンを logical-layout-labo の独立資産に] — 2026-07-13
+
+HLE FEP のかな漢字変換 wasm のビルドを、これまで QuuBee 開発機のローカル作業ディレクトリ
+(`~/development/mozc-wasm-build/`、どのリポジトリにも入っていない属人的な環境) でしか焼けなかった
+状態から、**logical-layout-labo (別リポジトリ) の管理下へ移管**した。狙いは、配列エンジン
+(KeymapEngine) と配列定義 JSON が既にある labo に変換エンジンも集約し、「配列 × Web × クライアント
+完結変換」の入力スタック一式を一つの屋根に揃えること。これにより QuuBee だけでなく、新配列の試打
+サイト (打鍵が外に一切出ない変換)・OS 非依存のオンラインエディタもこのスタックの消費者になれる。
+fcitx5-js (フル IME をブラウザに載せる) とも azooKey (Swift 製・wasm 版なし) とも被らない空きポジション。
+
+**命名 = hechima** (msonrm と決定)。由来はへちまの語源 (糸瓜→とうり→「と」がいろは順で「へ」と
+「ち」の間だから「へち間」) で、かな順の言葉遊びが名前そのもの = labo の主題と一致。加えて IM
+(input method) が `h-e-c-h-[im]-a` に隠れているので野暮な `-ime` は付けない。流派は「和の日用品」
+(Mozc=もずく / azooKey=小豆 の食べ物・道具系の隣の空き棚)。パッケージは React/Vite 型 (屋号は短く
+一意、パッケージは用途別): `hechima` (変換本体) / `hechima-keymap` (配列) / `hechima-wasm` (この wasm
+ビルド)。帰属は powered by Mozc。被り実測で npm/GitHub とも空き (ただし GitHub org @hechima は
+2013 作成の休眠アカウントが取得済で不可)。
+
+移管作業:
+- **labo 側** (依頼書 docs/hechima_handoff.md → labo が実施、PR #652 / Release hechima-wasm-v0.1.0):
+  hechima-wasm/ に hechima_wasm.cc (ラッパー) / link.sh / hechima_wasm_test.js / patches/data_manager.patch
+  (fcitx5-mozc の oss_data_manager.cc 除外 = 48MB の埋め込み .inc を焼かず CreateFromFile 方式にする
+  自前パッチ) / README (レシピ + NDEBUG の罠)。CI = .github/workflows/hechima-wasm.yml (workflow_dispatch、
+  clone→パッチ→ビルド→テストまで緑)。成果物は GitHub Release に添付。以後の再ビルドは labo で
+  workflow を dispatch するだけ。
+- **QuuBee 側** (このコミット): Release から成果物 3 点 (hechima-wasm.js / .wasm / mozc.data) を
+  web/assets へ pin して vendoring (旧 mozc_qb.* 撤去)。リネーム追随 = mozc-worker.js /
+  fep_mozc_test.js で `MozcQbModule`→`HechimaModule`、C シンボル `mozc_qb_init/convert`→
+  `hechima_init/convert`、ファイル名を hechima-wasm.* へ (辞書 mozc.data は Mozc への帰属を保つため
+  据え置き)。deploy.sh の同梱リスト・.gitignore・ビルド正典ポインタ (CLAUDE.md / docs/deploy.md /
+  TODO.md を labo へ向け直し) も追随。pin 版 = fcitx5-mozc 8b3d34c / mozc 0651fbc / emsdk 3.1.69
+  (mozc-worker.js ヘッダに明記)。
+
+検証: 回帰 fep_mozc_test が実 hechima-wasm 込みで PASS (`hechima_init=0`、E2E で
+「kyouhaiitenkidesune」→「今日はいい天気ですね」)。ブラウザ実機でも FEP 変換成立を確認 (ユーザー)。
+本番 quubee.pages.dev にデプロイ済 (worker が新名を掴み、hechima-wasm.js/.wasm/mozc.data を配信)。
+挙動不変 (変換品質は同一ビルド由来)。**残 (別タスク)**: 変換セッション層の labo 切り出し (試打サイト・
+エディタでの変換 UI 再利用) / 薙刀式の編集キー拡張 (T/Y カーソル・U=BS)。
+
 ## [起動 .bat の CALL 対応 + CLS — NP21/W 開発者報告「NPCNGCLK が動かない」の根治] — 2026-07-12
 
 NP21/W 開発者さん報告「以前は動いていた NPCNGCLK が動かなくなった。エラーコードを返すと BAT 処理が
