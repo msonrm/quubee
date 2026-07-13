@@ -1,5 +1,36 @@
 # CHANGELOG
 
+## [変換セッション層を labo の hechima へ移管 — hechima スタック 3 層が QuuBee に揃う] — 2026-07-14
+
+HLE FEP の「セッション」ロジック (よみ入力 → 非同期変換 → 複数文節の候補選択 → 確定 → 編集キー
+二重経路) を、QuuBee 内蔵の `web/player/fep.js` から **labo の `hechima` パッケージへ移管** し、成果物を
+vendoring する消費者になった (keymap-engine / hechima-wasm と同じ差し替えモデル)。これで
+**hechima スタック 3 層** (配列=KeymapEngine 1.1.0 / セッション=hechima 0.1.0 / 変換 wasm=hechima-wasm
+0.1.0) が QuuBee 側にも全部乗った。狙い = 試打サイト・OS 非依存エディタが同じ 3 層を再利用できる。
+
+背景: fep.js は最初から「DOM も emu も知らない純状態機械・依存注入」で書いてあり、QuuBee 固有物は
+全部 bridge.js の cb 実装に外出し済みだった (donor 分業が最初から効くよう設計)。だから labo は
+fep.js をほぼそのまま `hechima` に移せた (依頼書 docs/hechima_session_handoff.md、labo PR #653)。
+
+QuuBee 側の追随 (このコミット):
+- `web/assets/hechima.js` を vendoring (Release hechima-v0.1.0、グローバル `Hechima`、UMD 12KB)。
+  `web/player/fep.js` を撤去 (セッション核は hechima が正典)。cb 実装 (VRAM show / SJIS commit /
+  PC-98 hostKey / mozc-worker convert) だけ bridge.js に残す。
+- keymap-engine.js を **v1.0.0 → v1.1.0** に更新 (InputEngine に `onHostAction` 追加)。薙刀式編集キーの
+  ホスト委譲が正式 API 経由になり、**Task 2 (2026-07-13) の暫定 onSpecialAction wrap は fep.js ごと撤去**。
+  cb 契約と公開 API は labo の docs/hechima-session-embedding.md + hechima.d.ts で明文化。
+- index.html: `player/fep.js` → `assets/hechima.js`。bridge: `window.qbFepCreate` → `Hechima.createFep`。
+- テスト追随: fep_mozc / fep_layout / fep_naginata_edit を hechima 経由へ、keymap_engine を v1.1.0 へ。
+  fep_naginata_edit は onHostAction 直叩き + 「合成中は委譲 (false)」の契約検証へ書き換え。
+
+依頼書との意図的差分 (labo 判断): お願い 3 の「confirmComposition を先に済ませてから onHostAction」は
+同依頼書の「合成中 + moveLeft → composingKana 不変」と矛盾するため、QuuBee 実証済み wrap と同形の
+**pre-hook + bool 返し**として正式化。副次的に composing 中の実 ←→ キーは「確定して変換開始」→「飲む」
+(実 IME 寄り) に変わった。
+
+検証: 全 77 本 PASS (keymap_engine 16 / fep_layout 17 / fep_naginata_edit 15 / fep_mozc + 実 Mozc E2E)。
+ブラウザ実機で変換・候補ナビ・薙刀式編集キー・句読点即確定を確認 (ユーザー)。本番デプロイ済。
+
 ## [薙刀式の編集キー (T/Y=カーソル・U=BS) を二重経路で配線] — 2026-07-13
 
 薙刀式の「別タスク」だった編集二重経路に着手。T=左カーソル / Y=右カーソル / U=BS
