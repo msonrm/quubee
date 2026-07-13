@@ -1,5 +1,33 @@
 # CHANGELOG
 
+## [薙刀式の編集キー (T/Y=カーソル・U=BS) を二重経路で配線] — 2026-07-13
+
+薙刀式の「別タスク」だった編集二重経路に着手。T=左カーソル / Y=右カーソル / U=BS
+(いずれも naginata JSON の specialActions に既定義: T→moveLeft / Y→moveRight / U→deleteBack)
+がゲスト (PC-98) の実カーソル/BS へ効くようにした。
+
+**真因**: labo keymap-engine の InputEngine は編集アクションを「自分が全テキストを所有する
+エディタ」前提で処理していた — moveLeft/moveRight は confirmComposition を呼ぶだけ (カーソルは
+動かさず、ホストにも伝えない)、deleteBack は engine 内部テキストを消すだけ。ところが QuuBee の
+「文書」は PC-98 ゲスト画面で engine はそれを所有していないため、空バッファ時の T は「ゲストへ
+実 ArrowLeft を注入」でなければならないのに、engine にその委譲を表現する口が無い。物理 ArrowLeft
+を拾う既存の二重経路 (HOST_NAV_KEYS) も、T/Y/U が文字キーなので発火しない。
+
+**対応 (QuuBee 側暫定配線。vendored keymap-engine.js は無改変 = 再 vendoring 可)**:
+- `fep.setEngine` が engine.chordBuffer.onSpecialAction を wrap し、editSegment を除く
+  moveLeft/moveRight/deleteBack を `handleEngineAction` で横取り (非対象は inner へ素通し)。
+- 状態別の振り分け: 空バッファ → `cb.hostKey` でゲストへ実キー 1 打 (ArrowLeft/ArrowRight/
+  Backspace)。Phase 2 (Mozc 候補中) → 文節フォーカス移動 / 取消。変換前よみ合成中 → deleteBack は
+  engine 既定 (composingKana 削除) へ委ね、moveLeft/moveRight は飲む (よみ中のカーソルは無し)。
+- bridge に `cb.hostKey(name)` = `PC98_KEYMAP[name]` → `emu.keyDown/keyUp`。
+
+検証: 回帰 `fep_naginata_edit_test` 15/15 (実 T 打鍵を fep.feed に通し chord 窓経由で ArrowLeft
+注入まで到達する E2E 含む)。全スイート 77/77 PASS。ブラウザ実機で T/Y/U のカーソル/BS を確認 (ユーザー)。
+本番デプロイ済。**据え置き (別タスク)**: `space+T`/`space+Y` (editSegmentLeft/Right = 文節伸縮) は
+Mozc の ResizeSegment が要り hechima-wasm ラッパー未公開のため。**将来の正道**: この委譲を labo の
+InputEngine に onHostAction 等の正式 API として上げれば、試打サイト/エディタも同 API で恩恵を受け、
+engine 内部プロパティへの依存 (今回の wrap) を解消できる。
+
 ## [Mozc-Wasm を hechima-wasm へ移管 — 変換エンジンを logical-layout-labo の独立資産に] — 2026-07-13
 
 HLE FEP のかな漢字変換 wasm のビルドを、これまで QuuBee 開発機のローカル作業ディレクトリ
