@@ -2339,6 +2339,10 @@ async function makeWorkerEmu() {
         hide()       { emu.fepHide(); },
         commit(text) { emu.fepHide(); emu.injectText(encodeSjis(text)); },
         convert(yomi) { return mozcConvert(yomi, 9); },   // Mozc 未ロード時は null → カナ巡回
+        hostKey(name) {                                   // 薙刀式編集キー: ゲストへ実キー 1 打 (BS/カーソル)
+            const code = PC98_KEYMAP[name];
+            if (code !== undefined) { emu.keyDown(code); emu.keyUp(code); }
+        },
     }) : null;
 
     // FEP の ON/OFF を一元化: ボタン / Ctrl+Space / Ctrl+J / qbDebug.fep が全部ここを通る。

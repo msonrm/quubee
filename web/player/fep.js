@@ -8,6 +8,9 @@
 //   cb.show(segments)  segments = [{text, kind}] kind='yomi'(未確定よみ)/'focus'(注目=候補表示中)
 //   cb.hide()          表示消去 (バッファが空になった)
 //   cb.commit(text)    確定 (呼び元が hide → SJIS 注入の順で処理する)
+//   cb.hostKey(name)   ゲスト (PC-98) へ実キーを 1 打注入する (name = 'ArrowLeft' 等の
+//                      KeyboardEvent.code 名)。薙刀式の編集キー (T/Y=カーソル・U=BS) を
+//                      バッファが空のときに実カーソル/BS へ橋渡しするための口。省略可。
 //
 // 変換エンジンは convert() 1 点で差し替え可能に分離してある。M1 のスタブは
 // [ひらがな, カタカナ] の巡回のみ (Mozc-Wasm が後日この点に入る)。
@@ -230,6 +233,35 @@
             return engineDown(tap);    // …その打鍵で新しい合成を始める
         }
 
+        // 薙刀式など chord 配列が発火する編集/移動アクション (specialAction) を二重経路へ橋渡し。
+        // engine 単体は moveLeft/moveRight を confirmComposition に、deleteBack を自前バッファ削除に
+        // 倒すだけで「ホスト側の文書 (= PC-98 ゲスト画面) の編集」を表現できない。そこで bridge が
+        // setEngine 経由で engine.chordBuffer.onSpecialAction を本関数に配線し、ここで横取りする。
+        //   Phase 2 (Mozc 候補中) → 文節フォーカス移動 / 取消
+        //   変換前よみを engine が保持中 → deleteBack だけ engine 既定 (composingKana 削除) へ委ねる
+        //   空バッファ → ゲストへ実キー注入 (cb.hostKey: カーソル/BS)
+        // 戻り値 true = 横取りした (engine 既定を走らせない)。false = engine 既定へ流す。
+        function handleEngineAction(action) {
+            const t = action && action.type;
+            if (t !== 'moveLeft' && t !== 'moveRight' && t !== 'deleteBack') return false;
+            if (segs) {                                     // Phase 2 (候補表示中)
+                if (t === 'deleteBack') { clear(); if (engine) engine.reset(); cb.hide(); return true; }
+                if (segs.length > 1) focus = (focus + (t === 'moveRight' ? 1 : segs.length - 1)) % segs.length;
+                render();
+                return true;
+            }
+            if (engine && engine.getState().isComposing) { // 変換前よみを engine が保持中
+                if (t === 'deleteBack') return false;       // engine の handleDeleteBack に委ねる
+                return true;                                // moveLeft/moveRight は飲む (よみ中はカーソル無し)
+            }
+            // 空 = ゲスト (PC-98) へ実キー注入 (カーソル移動 / BS)。
+            if (cb.hostKey) {
+                cb.hostKey(t === 'deleteBack' ? 'Backspace'
+                    : (t === 'moveRight' ? 'ArrowRight' : 'ArrowLeft'));
+            }
+            return true;
+        }
+
         // engine 経路の keydown。true = 飲んだ (ゲストへ送らない・bridge が preventDefault)。
         function engineDown(tap) {
             if (segs) return navCandidates(tap);                        // Phase 2
@@ -353,6 +385,18 @@
                 clear(); cb.hide();
                 engine = eng || null;
                 engineKeyOf = keyOf || null;
+                // chord 配列の specialAction (薙刀式 T/Y/U など編集キー) を二重経路へ横取りする。
+                // engine 内部ハンドラ (executeAction + onStateChange) は inner として温存し、
+                // 横取りしなかったアクション (confirm/cancel/switch/deleteBack合成中…) はそのまま流す。
+                const cbuf = engine && engine.chordBuffer;
+                if (cbuf && !cbuf._qbHostWrapped) {
+                    const inner = cbuf.onSpecialAction;
+                    cbuf.onSpecialAction = (action) => {
+                        if (handleEngineAction(action)) return;
+                        if (inner) inner(action);
+                    };
+                    cbuf._qbHostWrapped = true;
+                }
             },
             pumpEngine,             // engine.onStateChange (chord 窓満了) から呼ぶ
             reset() { clear(); if (engine) { try { engine.reset(); } catch (_) {} } },
