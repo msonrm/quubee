@@ -15,8 +15,7 @@ const path = require('path');
 const fs   = require('fs');
 
 const WEB = path.join(__dirname, '..', 'web');
-require(path.join(WEB, 'player', 'fep.js'));   // globalThis.qbFepCreate
-const qbFepCreate = globalThis.qbFepCreate;
+const qbFepCreate = require(path.join(WEB, 'assets', 'hechima.js')).createFep;   // labo hechima (UMD)
 
 let fails = 0;
 const ok = (cond, label) => {

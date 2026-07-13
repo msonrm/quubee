@@ -2325,7 +2325,10 @@ async function makeWorkerEmu() {
         atok: { yomi: 0xE5, focus: 0xC5, other: 0xE1 },   // ATOK 風: 反転主体、非注目=素
     };
     let fepStyleName = 'wx';
-    const fep = window.qbFepCreate ? window.qbFepCreate({
+    // 変換セッション層 = labo の hechima (web/assets/hechima.js、グローバル Hechima)。
+    // かつては QuuBee 内蔵の fep.js だったが、hechima パッケージへ移管し vendoring する消費者に
+    // なった (keymap-engine / hechima-wasm と同じ差し替えモデル)。cb 実装だけが QuuBee 固有。
+    const fep = window.Hechima ? window.Hechima.createFep({
         show(segments) {
             const bytes = [], attrs = [];
             const style = FEP_STYLES[fepStyleName] || FEP_STYLES.wx;

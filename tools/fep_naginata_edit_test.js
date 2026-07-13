@@ -14,9 +14,8 @@ const path = require('path');
 const fs   = require('fs');
 
 const WEB = path.join(__dirname, '..', 'web');
-require(path.join(WEB, 'player', 'fep.js'));   // globalThis.qbFepCreate
-const qbFepCreate = globalThis.qbFepCreate;
-const K = require(path.join(WEB, 'assets', 'keymap-engine.js'));
+const qbFepCreate = require(path.join(WEB, 'assets', 'hechima.js')).createFep;   // labo hechima (UMD)
+const K = require(path.join(WEB, 'assets', 'keymap-engine.js'));                  // v1.1.0 (onHostAction)
 
 let fails = 0;
 const ok = (cond, label) => { console.log((cond ? 'ok   ' : 'FAIL ') + label); if (!cond) fails++; };
@@ -37,9 +36,10 @@ function harness(convert) {
     eng.onStateChange = () => fep.pumpEngine();
     fep.setEngine(eng, (tap) => K.keyEventFromBrowser(tap));
     fep.setActive(true);
-    // fep.setEngine が engine.chordBuffer.onSpecialAction を wrap 済み。chord 窓のタイミングに
-    // 依存せず二重経路ロジックを叩くため、specialAction を直接発火させる。
-    const fire = (type) => eng.chordBuffer.onSpecialAction({ type });
+    // hechima の setEngine が engine.onHostAction を配線済み (v1.1.0 の正式 API)。chord 窓の
+    // タイミングに依存せず二重経路ロジックを叩くため、ホスト委譲を直接発火させる。
+    // 返り値 = hechima の handleEngineAction の bool (true=横取り / false=engine 既定へ委譲)。
+    const fire = (type) => eng.onHostAction({ type });
     const lastShow = () => log.shows[log.shows.length - 1];
     return { fep, eng, log, fire, lastShow };
 }
@@ -82,17 +82,20 @@ function harness(convert) {
         ok(h.log.hostKeys.length === 0, 'Phase2: deleteBack も実キーを注入しない');
     }
 
-    // ---- Part A3: 変換前よみ合成中 → engine 既定 (composingKana 削除) ----
+    // ---- Part A3: 変換前よみ合成中 → engine 既定へ委譲 (onHostAction が false を返す) ----
+    // ※ 直接 onHostAction を叩くので engine 内部の executeAction フォールバック (composingKana
+    //   削除そのもの) は走らない。ここで検証するのは QuuBee 側の関心事 =「合成中は委譲を選び
+    //   実キーを注入しない」こと。実際の削除は engine (labo golden) の責務。
     {
         const h = harness(null);
         h.eng.composingKana = 'かな';
         ok(h.eng.getState().isComposing, 'setup: engine が composingKana="かな" を保持');
-        h.fire('deleteBack');
-        ok(h.eng.composingKana === 'か', '合成中 + deleteBack(U) → engine が末尾を削除 (かな→か)');
-        ok(h.log.hostKeys.length === 0, '合成中: deleteBack は実キーを注入しない (engine 既定)');
-        h.fire('moveLeft');
-        ok(h.eng.composingKana === 'か' && h.log.hostKeys.length === 0,
-           '合成中 + moveLeft(T) → 飲む (composingKana 不変・実キーなし)');
+        const rDel = h.fire('deleteBack');
+        ok(rDel === false, '合成中 + deleteBack(U) → engine 既定へ委譲 (onHostAction=false)');
+        ok(h.log.hostKeys.length === 0, '合成中: deleteBack は実キーを注入しない');
+        const rMove = h.fire('moveLeft');
+        ok(rMove === true && h.log.hostKeys.length === 0,
+           '合成中 + moveLeft(T) → 飲む (onHostAction=true・実キーなし)');
     }
 
     // ---- Part B: 実 T 打鍵 (end-to-end: naginata JSON T→moveLeft + chord 窓 + 配線) ----

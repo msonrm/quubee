@@ -7,8 +7,7 @@
 // 内蔵ローマ字経路のゼロ回帰は fep_test.js / fep_mozc_test.js が別途担保。
 const path = require('path');
 const WEB = path.join(__dirname, '..', 'web');
-require(path.join(WEB, 'player', 'fep.js'));            // globalThis.qbFepCreate
-const qbFepCreate = globalThis.qbFepCreate;
+const qbFepCreate = require(path.join(WEB, 'assets', 'hechima.js')).createFep;   // labo hechima (UMD)
 const K = require(path.join(WEB, 'assets', 'keymap-engine.js'));
 const fs = require('fs');
 

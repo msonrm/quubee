@@ -1161,7 +1161,7 @@
 	}
 	//#endregion
 	//#region src/engine/version.ts
-	const ENGINE_VERSION = "1.0.0";
+	const ENGINE_VERSION = "1.1.0";
 	//#endregion
 	//#region src/engine/key-router.ts
 	/** Route a KeyEvent to a KeyAction based on the expanded keymap */
@@ -1761,6 +1761,7 @@
 			this.buffer = new SequentialBuffer();
 			this.chordBuffer = null;
 			this.onStateChange = null;
+			this.onHostAction = null;
 			this.keymap = keymap;
 			this.buffer.setMappings(keymap.inputMappings, keymap.prefixSet);
 			this.setupChordBuffer(keymap);
@@ -1925,6 +1926,7 @@
 					this.cancelComposition();
 					break;
 				case "deleteBack":
+					if (this.onHostAction?.(action)) break;
 					this.handleDeleteBack();
 					break;
 				case "toggleInputMode":
@@ -1971,6 +1973,7 @@
 				case "moveDown":
 				case "editSegmentLeft":
 				case "editSegmentRight":
+					if (this.onHostAction?.(action)) break;
 					this.confirmComposition();
 					break;
 				case "pass": break;

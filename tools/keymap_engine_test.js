@@ -14,7 +14,7 @@ const K = require(path.join(WEB, 'keymap-engine.js'));
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log('ok  ', m); } else { fail++; console.log('FAIL', m); } };
 
-ok(K.version === '1.0.0', `engine version = 1.0.0 (got ${K.version})`);
+ok(K.version === '1.1.0', `engine version = 1.1.0 (got ${K.version})`);
 
 // 1) 全配列が decode + 構築できる (chord フラグも既知配列と一致)
 const CHORD = { naginata_jis: true, naginata_us: true, nicola_jis: true, nicola_us: true };
