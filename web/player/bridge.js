@@ -2299,20 +2299,22 @@ async function makeWorkerEmu() {
         mozcState = 'none';
         ensureMozcLoaded();   // 再スポーン (辞書は HTTP キャッシュから)
     }
-    function mozcConvert(kana, maxCands) {
+    function mozcRequest(msg) {   // convert / resize 共通 (watchdog 込み)
         return new Promise((resolve) => {
-            if (mozcState !== 'ready') { resolve(null); return; }   // fep.js がフォールバック
+            if (mozcState !== 'ready') { resolve(null); return; }   // hechima がフォールバック
             const id = ++mozcSeq;
             const timer = setTimeout(() => {
                 if (mozcPending.delete(id)) {
                     resolve(null);
-                    restartMozcWorker(`convert timeout (${MOZC_CONVERT_TIMEOUT_MS}ms)`);
+                    restartMozcWorker(`${msg.type} timeout (${MOZC_CONVERT_TIMEOUT_MS}ms)`);
                 }
             }, MOZC_CONVERT_TIMEOUT_MS);
             mozcPending.set(id, (segments) => { clearTimeout(timer); resolve(segments); });
-            mozcWorker.postMessage({ type: 'convert', id, kana, maxCands });
+            mozcWorker.postMessage(Object.assign({ id }, msg));
         });
     }
+    function mozcConvert(kana, maxCands) { return mozcRequest({ type: 'convert', kana, maxCands }); }
+    function mozcResize(segIdx, offset)  { return mozcRequest({ type: 'resize', segIdx, offset, maxCands: 9 }); }
 
     // ---- HLE FEP (ホスト側日本語入力、未確定文字列をゲスト画面内へインライン表示) ----
     // fep.js の純状態機械を emu へ配線する。キーはアプリより上流 (下の keydown) で飲み、
@@ -2342,6 +2344,8 @@ async function makeWorkerEmu() {
         hide()       { emu.fepHide(); },
         commit(text) { emu.fepHide(); emu.injectText(encodeSjis(text)); },
         convert(yomi) { return mozcConvert(yomi, 9); },   // Mozc 未ロード時は null → カナ巡回
+        // 文節伸縮 (薙刀式 space+T/Y → Mozc ResizeSegment)。null 解決 = 伸縮不能 → hechima が現状維持
+        resize(segIdx, offset) { return mozcResize(segIdx, offset); },
         hostKey(name) {                                   // 薙刀式編集キー: ゲストへ実キー 1 打 (BS/カーソル)
             const code = PC98_KEYMAP[name];
             if (code !== undefined) { emu.keyDown(code); emu.keyUp(code); }

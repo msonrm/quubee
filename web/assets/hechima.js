@@ -3,7 +3,7 @@
 })(this, function(exports) {
 	Object.defineProperty(exports, Symbol.toStringTag, { value: "Module" });
 	//#region src/hechima/version.ts
-	const HECHIMA_VERSION = "0.1.0";
+	const HECHIMA_VERSION = "0.3.0";
 	//#endregion
 	//#region src/hechima/session.ts
 	const ROMAJI = {
@@ -339,10 +339,31 @@
 				render();
 			}).catch(() => {});
 		}
+		function startResize(offset) {
+			if (!segs || !cb.resize) return;
+			const idx = focus;
+			const gen = ++genId;
+			Promise.resolve(cb.resize(idx, offset)).then((result) => {
+				if (gen !== genId || !segs) return;
+				if (!result || !result.length) return;
+				segs = result.map((s) => ({
+					key: s.key,
+					candidates: s.candidates && s.candidates.length ? s.candidates : [s.key],
+					idx: 0
+				}));
+				focus = Math.min(idx, segs.length - 1);
+				render();
+			}).catch(() => {});
+		}
 		let engine = null;
 		let engineKeyOf = null;
 		function pumpEngine() {
-			if (!engine || segs) return;
+			if (!engine) return;
+			if (segs) {
+				const st = engine.getState();
+				if (!st.isComposing && !st.confirmedText) return;
+				commit(joined());
+			}
 			const confirmed = engine.takeConfirmedText();
 			if (confirmed) {
 				if (engine.getState().inputMode === "english") {
@@ -375,13 +396,11 @@
 				cb.hide();
 				return true;
 			}
-			if (k === " ") {
-				const s = cur[focus];
-				s.idx = (s.idx + 1) % s.candidates.length;
-				render();
-				return true;
-			}
 			if (k === "ArrowLeft" || k === "ArrowRight") {
+				if (tap.shiftKey) {
+					if (cb.resize) startResize(k === "ArrowRight" ? 1 : -1);
+					return true;
+				}
 				if (cur.length > 1) focus = (focus + (k === "ArrowRight" ? 1 : cur.length - 1)) % cur.length;
 				render();
 				return true;
@@ -392,11 +411,26 @@
 				render();
 				return true;
 			}
-			commit(joined());
-			return engineDown(tap);
+			return true;
 		}
 		function handleEngineAction(action) {
 			const t = action.type;
+			if (t === "editSegmentLeft" || t === "editSegmentRight") {
+				if (segs && cb.resize) startResize(t === "editSegmentRight" ? 1 : -1);
+				return true;
+			}
+			if (t === "convert" || t === "confirm" || t === "insertAndConfirm") {
+				if (!segs) return false;
+				if (t === "convert") {
+					const s = segs[focus];
+					s.idx = (s.idx + 1) % s.candidates.length;
+					render();
+					return true;
+				}
+				commit(joined());
+				if (action.type === "insertAndConfirm") cb.commit(action.text);
+				return true;
+			}
 			if (t !== "moveLeft" && t !== "moveRight" && t !== "deleteBack") return false;
 			if (segs) {
 				if (t === "deleteBack") {
@@ -416,9 +450,33 @@
 			if (cb.hostKey) cb.hostKey(t === "deleteBack" ? "Backspace" : t === "moveRight" ? "ArrowRight" : "ArrowLeft");
 			return true;
 		}
+		const PHASE2_NAV_KEYS = /* @__PURE__ */ new Set([
+			"Enter",
+			"Escape",
+			"Backspace",
+			"ArrowLeft",
+			"ArrowRight",
+			"ArrowUp",
+			"ArrowDown"
+		]);
 		function engineDown(tap) {
 			if (!engine) return false;
-			if (segs) return navCandidates(tap);
+			if (segs) {
+				if (tap.ctrlKey || tap.altKey || tap.metaKey) {
+					commit(joined());
+					return false;
+				}
+				if (tap.repeat) return true;
+				if (PHASE2_NAV_KEYS.has(tap.key)) return navCandidates(tap);
+				const kev = engineKeyOf ? engineKeyOf(tap) : null;
+				if (!kev) {
+					commit(joined());
+					return false;
+				}
+				engine.processKey(kev);
+				pumpEngine();
+				return true;
+			}
 			if (tap.ctrlKey || tap.altKey || tap.metaKey) return false;
 			if (tap.repeat) return true;
 			if (!engine.getState().isComposing && tap.code !== void 0 && HOST_NAV_KEYS.has(tap.code)) return false;
@@ -474,6 +532,10 @@
 			}
 			if (k === "ArrowLeft" || k === "ArrowRight") {
 				if (!composing()) return false;
+				if (segs && e.shiftKey) {
+					if (cb.resize) startResize(k === "ArrowRight" ? 1 : -1);
+					return true;
+				}
 				if (segs && segs.length > 1) {
 					focus = (focus + (k === "ArrowRight" ? 1 : segs.length - 1)) % segs.length;
 					render();

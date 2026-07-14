@@ -1161,7 +1161,7 @@
 	}
 	//#endregion
 	//#region src/engine/version.ts
-	const ENGINE_VERSION = "1.1.0";
+	const ENGINE_VERSION = "1.2.0";
 	//#endregion
 	//#region src/engine/key-router.ts
 	/** Route a KeyEvent to a KeyAction based on the expanded keymap */
@@ -1920,6 +1920,7 @@
 					this.handlePrintable(action.char);
 					break;
 				case "confirm":
+					if (this.onHostAction?.(action)) break;
 					this.confirmComposition();
 					break;
 				case "cancel":
@@ -1944,6 +1945,7 @@
 					this.inputMode = "japanese";
 					break;
 				case "insertAndConfirm":
+					if (this.onHostAction?.(action)) break;
 					this.composingKana += action.text;
 					this.confirmComposition();
 					break;
@@ -1955,6 +1957,7 @@
 					else this.confirmedText += " ";
 					break;
 				case "convert":
+					if (this.onHostAction?.(action)) break;
 					if (this.composingKana.length > 0 || !this.buffer.isEmpty) this.confirmComposition();
 					else this.confirmedText += this.inputMode === "japanese" ? "　" : " ";
 					break;

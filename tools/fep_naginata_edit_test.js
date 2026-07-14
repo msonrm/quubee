@@ -15,7 +15,7 @@ const fs   = require('fs');
 
 const WEB = path.join(__dirname, '..', 'web');
 const qbFepCreate = require(path.join(WEB, 'assets', 'hechima.js')).createFep;   // labo hechima (UMD)
-const K = require(path.join(WEB, 'assets', 'keymap-engine.js'));                  // v1.1.0 (onHostAction)
+const K = require(path.join(WEB, 'assets', 'keymap-engine.js'));                  // v1.2.0 (onHostAction は v1.1.0〜)
 
 let fails = 0;
 const ok = (cond, label) => { console.log((cond ? 'ok   ' : 'FAIL ') + label); if (!cond) fails++; };

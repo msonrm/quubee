@@ -1,5 +1,68 @@
 # CHANGELOG
 
+## [hechima v0.3.0 追随 — Phase 2 chord 修正で文節伸縮が実打鍵で解禁 + Shift+←→] — 2026-07-14
+
+v0.2.0 追随の追記で報告した「実打鍵の space+T/Y が即確定になる」(Phase 2 で keydown が engine に
+渡らない routing 穴) の **labo 修正版に追随** (指示書 = labo docs/hechima_v030_quubee_handoff.md、
+報告書 docs/hechima_v020_phase2_chord_feedback.md への返信)。labo は報告の A 案で修正 — ナビキーだけ
+セッション直処理、印字キー・SandS シフトは engine へ流し chord 解決の結果 (specialAction /
+convert / confirm / insertAndConfirm / かな出力) で解釈する。
+
+- **差し替え = 2 ファイルセットのみ** (見込みどおり QuuBee コード変更なし): hechima.js
+  **0.2.0 → 0.3.0** (Release hechima-v0.3.0 / labo 8970116) + keymap-engine.js **1.1.0 → 1.2.0**
+  (labo main 同コミット。`onHostAction` が convert/confirm/insertAndConfirm も転送)。
+  **セット必須** — hechima 0.3.0 + engine 1.1.0 は Phase 2 の space 単打が全角スペースに化ける。
+  hechima-wasm / mozc.data / naginata JSON は v0.2.0 追随のまま変更なし。
+- これで Phase 2 (候補選択中) の実打鍵が全部正道化: **space+T/Y = 文節伸縮 (三重奏解消)** /
+  space 単打 = 次候補 (engine の SandS 判定経由に正道化・見た目同じ) / M+V = 結合確定 /
+  space+M/V = 現候補確定+句読点 / **Shift+←→ = 文節伸縮 (新規・標準 IME 互換・配列を問わず
+  内蔵ローマ字でも効く)**。
+- 検証: 報告書付録の再現スクリプトが修正後期待値 `{commits:[], resizes:[[0,-1]], hostKeys:[]}` に
+  一致。**fep_resize_test に実打鍵 E2E を追加** (space+T → resize / 三重奏 3 点の再発防止アサート /
+  space 単打 → 次候補 / Shift+←→ を engine 経路・内蔵ローマ字経路の両方で) — fire 直叩きだけでは
+  routing 穴を素通りした教訓の恒久化。keymap_engine_test の版アサートを 1.2.0 へ。全 78 本 PASS。
+- CREDITS.md の pin 記載を 0.3.0 / 1.2.0 へ更新 (セット必須の互換性注意も明記)。
+- **ブラウザ実機確認済 (同日)**: 薙刀式の space+T/Y と、他配列 (Shift+←→) の文節切り直しが動作。
+
+## [hechima v0.2.0 追随 — 文節伸縮 (薙刀式 space+T/Y → Mozc ResizeSegment) + 薙刀式 v18] — 2026-07-14
+
+labo 側で実装された**文節伸縮**に追随 (指示書 = labo の docs/hechima_v020_quubee_handoff.md)。
+据え置きだった editSegmentLeft/Right (薙刀式 **space+T / space+Y**) が Phase 2 (候補選択中) で
+Mozc の `ResizeSegment` まで通貫でつながり、文節境界をよみ 1 文字ずつ動かして再変換できる。
+
+- **成果物差し替え (GitHub Release から pin)**: hechima-wasm **v0.1.0 → v0.2.0** (labo 29b6271 /
+  fcitx5-mozc 8b3d34c は同一 / emsdk 3.1.69。新 C API `hechima_resize(segIdx, offset, maxCands)` —
+  伸縮不能・変換状態なし・範囲外は空文字列 = 呼び元は現状維持) / hechima **v0.1.0 → v0.2.0**
+  (`cb.resize` + editSegment* の意味論: Phase 2 = resize・よみ合成中/空バッファ = 飲む・未実装 = 後方互換で飲む・
+  in-flight は世代トークン破棄・結合で文節が減ったら focus clamp)。mozc.data と keymap-engine.js (v1.1.0) は
+  据え置き。
+- **mozc-worker.js**: `resize` RPC を追加 (convert と同形・戻りパース共通化 `parseSegments`)。
+  機能検出 `typeof M._hechima_resize === 'function'` で古い wasm が残っていても無害に null
+  (labo golden ランナーと同方式)。pin 版コメントを v0.2.0 へ。
+- **bridge.js**: convert の watchdog (タイムアウト → worker 再起動) を `mozcRequest` に共通化し、
+  cb に `resize(segIdx, offset)` を 1 点追加。wrap は増やしていない (editSegment* も
+  `InputEngine.onHostAction` → hechima 経由で届く)。
+- **薙刀式 v18** (作者 大岡俊彦氏 発表): naginata_{jis,us}.json を labo main (cf57718) から差し替え。
+  変更はシフト面の **め⇔ね 入れ替えのみ** (space+W = ね / space+R = め)。keymaps/index.json の
+  description も v18 表記へ追随。**ブラウザ実機確認済 (同日)**。
+- **回帰**: 既存 fep_test / fep_mozc_test / fep_naginata_edit_test / fep_layout_test は**無変更で緑**。
+  新規 `tools/fep_resize_test.js` — stub でセッション層の意味論 (resize 呼び出し・focus clamp・
+  null 現状維持・飲む 3 態・in-flight 破棄) + 実 Mozc ラウンドトリップ
+  (「きょうはいいてんきですね」→ resize(0,-1) で「きょうは」→「きょう」→ resize(0,+1) で第 1 候補列が
+  完全復元 / 「あい」は -1→+1 で初期分節に依らず 1 文節に収束 = labo golden と同じ決定的アサート)。
+- CREDITS.md に HLE FEP 変換スタック (hechima / hechima-wasm) の pin 記載の節を新設、
+  keymap-engine の版記載も 1.1.0 + v18 keymaps に追随。
+
+**追記 (同日ブラウザ実機確認で発覚)**: 実打鍵の space+T/Y は文節伸縮にならず「押した途端に確定」
+(msonrm 実機報告)。真因 = hechima セッション層の Phase 2 キー routing (`engineDown` が segs あり時に
+全 keydown を navCandidates へ直行させ `engine.processKey` に渡さない → 同時打鍵が engine 内で
+成立しえず editSegment* は実打鍵で構造的に到達不能。golden も回帰も onHostAction 直叩きだったため
+双方素通り)。headless で決定的再現 — 実際は「space で次候補に化ける → その候補で即確定 → 余剰
+ArrowLeft がゲストへ」の三重奏 (v0.1.0 以来の挙動で今回のリグレッションではない)。QuuBee 側では
+修正不能 (wrap 禁止の契約どおり cb に手なし) のため labo へ報告書
+**docs/hechima_v020_phase2_chord_feedback.md** (再現スクリプト・設計案 A/B・golden 追加依頼) を発行。
+QuuBee の追随物は据え置きで無害・修正版 hechima.js の差し替えだけで動く見込み。
+
 ## [変換セッション層を labo の hechima へ移管 — hechima スタック 3 層が QuuBee に揃う] — 2026-07-14
 
 HLE FEP の「セッション」ロジック (よみ入力 → 非同期変換 → 複数文節の候補選択 → 確定 → 編集キー

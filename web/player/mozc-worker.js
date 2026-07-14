@@ -12,11 +12,13 @@
 //   → {type:'ready'} / {type:'error', message}
 //   ← {type:'convert', id, kana, maxCands}
 //   → {type:'result', id, segments}       segments = [{key, candidates:[...]}] / null=変換失敗
+//   ← {type:'resize', id, segIdx, offset, maxCands}   文節伸縮 (Mozc ResizeSegment)
+//   → {type:'result', id, segments}       convert と同形 / null=伸縮不能 (呼び元は現状維持)
 //
 // 辞書 mozc.data (~19MB) は初回 init でのみ fetch (FEP を使わないユーザーは一切取得しない)。
 //
-// pin 版 (labo hechima-wasm-v0.1.0, BUILD_INFO.txt より): fcitx5-mozc 8b3d34c /
-// mozc 0651fbc / emsdk 3.1.69。成果物差し替え時はこの版も更新する。
+// pin 版 (labo hechima-wasm-v0.2.0, BUILD_INFO.txt より): labo 29b6271 /
+// fcitx5-mozc 8b3d34c / mozc 0651fbc / emsdk 3.1.69。成果物差し替え時はこの版も更新する。
 
 'use strict';
 
@@ -81,13 +83,36 @@ onmessage = (ev) => {
         try {
             const json = M.ccall('hechima_convert', 'string',
                 ['string', 'number'], [m.kana, m.maxCands | 0]);
-            const parsed = JSON.parse(json);
-            if (parsed && Array.isArray(parsed.segments) && parsed.segments.length) {
-                segments = parsed.segments;
-            }
+            segments = parseSegments(json);
         } catch (e) {
             console.warn('[mozc-worker] convert failed:', e);
         }
         postMessage({ type: 'result', id: m.id, segments });
+    } else if (m.type === 'resize') {
+        // 文節伸縮: 直近の convert 結果の m.segIdx 文節 (0 起点) のよみを m.offset (よみ文字数 ±)
+        // だけ伸縮し再変換する。空文字列 = 伸縮不能 (境界/変換状態なし/範囲外) → null で現状維持。
+        // 機能検出: 古い v0.1.0 の wasm が残っていたら resize を無効化 (labo golden ランナーと同方式)。
+        let segments = null;
+        try {
+            if (typeof M._hechima_resize === 'function') {
+                const json = M.ccall('hechima_resize', 'string',
+                    ['number', 'number', 'number'], [m.segIdx | 0, m.offset | 0, m.maxCands | 0]);
+                segments = parseSegments(json);
+            }
+        } catch (e) {
+            console.warn('[mozc-worker] resize failed:', e);
+        }
+        postMessage({ type: 'result', id: m.id, segments });
     }
 };
+
+// convert / resize 共通の戻りパース: "" やパース失敗・空 segments は null。
+function parseSegments(json) {
+    try {
+        const parsed = JSON.parse(json);
+        if (parsed && Array.isArray(parsed.segments) && parsed.segments.length) {
+            return parsed.segments;
+        }
+    } catch (_) {}
+    return null;
+}

@@ -223,11 +223,35 @@ PC-98 のフリーソフト/同人 CG 文化で標準的に使われた 2 大画
   `web/src/engine` を rolldown で 1 ファイルに UMD バンドルした単体成果物 (`npm run build:engine` の出力
   `web/public/engine/keymap-engine.js`)。**QuuBee は fork せず成果物 1 ファイルを vendoring** する
   (mozc.data と同じ「差し替えで取り込む」方針)。エンジンの正しさの正典は labo の golden テスト。
-- **取り込みバージョン**: `KeymapEngine.version` = **1.0.0** / labo commit **f350dc9** / keymap-format **1.0**。
+- **取り込みバージョン**: `KeymapEngine.version` = **1.2.0** (labo main **8970116** = hechima-v0.3.0
+  タグ時点。1.1.0 で `onHostAction` 追加、1.2.0 で convert/confirm/insertAndConfirm も転送 —
+  **hechima 0.3.0 とセット必須**。組み合わせ違いは Phase 2 の space 単打が全角スペースに化ける) /
+  keymap-format **1.0**。keymaps は labo main **cf57718** 時点 (**薙刀式 v18** = space+W/R の め⇔ね
+  入れ替え。作者 大岡俊彦氏 発表)。
   更新時は labo で `npm run build:engine` → `web/public/engine/keymap-engine.js` と `web/public/keymaps/*.json`
   を本ディレクトリへコピーし、本項の version/commit を更新する。受け入れ検査 = `tools/keymap_engine_test.js`。
 - 依存: React/DOM/Next 非依存の純ロジック (ブラウザ `<script>` / Worker `importScripts` / node `require` 対応)。
 - 帰属: keymap-format / InputEngine © 2026 Narumi Masao (MIT)。QuuBee は改変せず同梱のみ。
+
+---
+
+## HLE FEP の変換スタック — `web/assets/hechima.js` + `web/assets/hechima-wasm.{js,wasm}` + `web/assets/mozc.data`
+
+日本語入力 (HLE FEP) の変換セッション層とかな漢字変換エンジン。ビルド・正典はどちらも
+`msonrm/logical-layout-labo` にあり、**QuuBee は同リポの GitHub Release から成果物を pin して
+vendoring** する (keymap-engine と同じ差し替えモデル)。QuuBee 固有物は bridge.js の cb 実装のみ。
+
+- **hechima.js** (変換セッション層): Copyright © 2026 Narumi Masao、**MIT**。UMD 単体成果物
+  (グローバル `Hechima`)。取り込み = **`Hechima.version` 0.3.0** (Release **hechima-v0.3.0** / labo
+  **8970116**。0.2.0 で文節伸縮 `cb.resize` + editSegmentLeft/Right、0.3.0 で Phase 2 の chord
+  routing 修正 + Shift+←→ 伸縮。**keymap-engine 1.2.0 とセット必須**)。
+- **hechima-wasm.{js,wasm} + mozc.data** (かな漢字変換エンジン): fcitx-contrib/fcitx5-mozc 由来の
+  Emscripten ビルド、**BSD-3・powered by Mozc** (mozc 本体 = Google、BSD-3)。取り込み = Release
+  **hechima-wasm-v0.2.0** (labo **29b6271** / fcitx5-mozc **8b3d34c** / mozc **0651fbc** / emsdk 3.1.69。
+  0.2.0 で `hechima_resize` = Mozc ResizeSegment 追加)。辞書 mozc.data (~19MB) は FEP 初回 ON で
+  遅延 fetch。
+- 更新時は Release 添付の BUILD_INFO.txt と本項・`web/player/mozc-worker.js` 冒頭の pin 記載を揃える。
+  受け入れ検査 = `tools/fep_mozc_test.js` / `tools/fep_resize_test.js`。
 
 ---
 
