@@ -12,10 +12,11 @@ const fs = require('fs');
 const path = require('path');
 
 const ROOT = path.resolve(__dirname, '..');
-const SRV = path.join(ROOT, 'tools', 'mcp', 'server.js');
+// QB_MCP_SERVER で被検体を差し替えられる (npm 配布物 dist/quubee-mcp の server.js を同じ回帰で検証する用)
+const SRV = process.env.QB_MCP_SERVER || path.join(ROOT, 'tools', 'mcp', 'server.js');
 const ZIP = path.join(ROOT, 'games', 'liotest.zip');
 
-if (!fs.existsSync(path.join(ROOT, 'tools', 'mcp', 'node_modules'))) {
+if (!process.env.QB_MCP_SERVER && !fs.existsSync(path.join(ROOT, 'tools', 'mcp', 'node_modules'))) {
     console.log('SKIP — tools/mcp/node_modules 不在 (cd tools/mcp && npm install)'); process.exit(0);
 }
 if (!fs.existsSync(ZIP)) { console.log('SKIP — games/liotest.zip 不在 (ローカル限定素材)'); process.exit(0); }

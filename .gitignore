@@ -70,3 +70,4 @@ Thumbs.db
 /web/assets/mozc.data
 /tools/mcp/node_modules/
 /tools/mcp/package-lock.json
+/tools/mcp/dist/

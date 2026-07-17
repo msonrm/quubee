@@ -1,5 +1,36 @@
 # CHANGELOG
 
+## [MCP トラック A — npm 配布物 `quubee-mcp` 0.2.0 (組み立て・検証完了、publish はユーザー作業)] — 2026-07-17
+
+MCP 計画 (ユーザー合意 2026-07-12) の **A: npm 配布物化**。これまで clone + Emscripten ビルド前提の
+「社内ツール」だった MCP サーバ/CLI を、`npx` 1 行で第三者が使えるパッケージにした。
+事前確認 (ユーザー質問への回答): **コスト = ゼロ** (サーバはローカル stdio 実行・npm 公開パッケージは
+無料ホスティング)。**ライセンス = 問題なし** (同梱物は CREDITS.md 整理済みの寛容集合体・GPL なし。
+fmgen の「フリーソフト配布限定」は無償 npm 公開で満たす。同一バイナリは既に Cloudflare Pages で公開
+配布済みなので npm 公開は新しい法的行為ではない)。
+
+- **`tools/mcp/make_package.js` 新設**: リポジトリのサブセットを**同じ相対構造**で
+  `tools/mcp/dist/quubee-mcp/` に集めて `npm pack`。相対構造の写像により tools/lib の
+  ROOT 解決 (`__dirname/../..`) が無変更で動くのが肝。同梱 = server.js / quubee_run.js /
+  tools/lib 3 本 / np2kai_core.{js,wasm} / batscript・archive.js / font.bmp / loader.d88 /
+  docs/dos_hle_gaps.md + **CREDITS.md / LICENSE / LICENSE-MIT / licenses/** (公開 web ビルドと
+  同じ同梱の流儀・剥がすの禁止)。tgz 693KB・展開 3.6MB・28 ファイル。
+- **bin 2 本**: `quubee-mcp` (MCP サーバ) と `quubee-run` (ワンショット CLI)。package.json の
+  license は MIT 単独ではないので `SEE LICENSE IN CREDITS.md`。
+- **version の正 = tools/mcp/package.json (0.1.0→0.2.0)**: server.js は package.json から名乗る
+  (開発時 = `__dirname`、配布時 = パッケージ root。ハードコード撤去)。
+- **配布物そのものを回帰にかけた**: mcp_server_test に `QB_MCP_SERVER` 差し替えフックを新設し、
+  tgz を scratchpad へ実 `npm install` (依存 94 パッケージ) した server.js で **18 PASS / 0 FAIL**。
+  CLI も実書庫 (liotest.zip `--exe T1.EXE`) で JSON 報告 (note・wasm SHA・int21 診断込み) を確認。
+  initialize 応答が 0.2.0 を名乗るのも確認。wasm は現行 0f0c8ed5 (bfc9417 CALL 修正込みを
+  mcp_server_test 18 + call_bat_test 5 PASS で裏取り・リビルド不要)。
+- **ドキュメント整合**: README の CLI 例 `--json` は実在しないオプションだった → 削除 (JSON が既定)。
+  quubee_run.js の usage に欠けていた `--y2k-clamp` / `--diag` を追記。npm 用 `README.npm.md` 新設
+  (not-real-DOS の位置づけ・登録 1 行・ツール表・Y2K 既定 OFF・ライセンス内訳を npm 利用者にも明記)。
+- **npm レジストリで `quubee-mcp` は未使用 (404) を確認済**。残る作業 = publish のみ
+  (ユーザーの npm アカウントで `cd tools/mcp/dist/quubee-mcp && npm publish`)。
+  次 = B2: ディスクイメージ入力 (diskimage.js を stage.js に配線) → D: 利用例ドキュメント。
+
 ## [hechima v0.3.0 追随 — Phase 2 chord 修正で文節伸縮が実打鍵で解禁 + Shift+←→] — 2026-07-14
 
 v0.2.0 追随の追記で報告した「実打鍵の space+T/Y が即確定になる」(Phase 2 で keydown が engine に

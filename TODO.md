@@ -51,9 +51,15 @@
   **v2 (2026-07-12): ✓ INT 21h 診断** (classify に `int21Unimplemented`/`int21Calls`。C 側
   `np2kai_debug_int21_unimpl` 新設・CLI は常時 + `--diag`。回帰 int21_diag_test) **✓ snapshot/restore**
   (quubee_save/restore。zlib 圧縮・2 個/セッション・観察履歴ごと巻き戻し。回帰 mcp_server_test 18 項目)。
-  **MCP 計画 (ユーザー合意 2026-07-12)**: C・B1 を先に実装して自分たちで検証 → **A: npm 配布物化**
-  (ビルド済み wasm 同梱 `quubee-mcp`、`npx` 1 行で第三者が使える形。publish はユーザーの npm
-  アカウント) → B2: ディスクイメージ入力 (diskimage.js を stage.js に配線) → D: 利用例ドキュメント。
+  **MCP 計画 (ユーザー合意 2026-07-12)**: C・B1 を先に実装して自分たちで検証 (✓ 済) →
+  **✓ A: npm 配布物化 — 組み立て・検証完了 (2026-07-17)**: `tools/mcp/make_package.js` が
+  リポジトリのサブセットを同じ相対構造で `dist/quubee-mcp/` へ集めて npm pack (bin =
+  `quubee-mcp` サーバ + `quubee-run` CLI。tgz 693KB。license = `SEE LICENSE IN CREDITS.md`・
+  CREDITS/LICENSE/licenses 同梱 = 寛容集合体・GPL なし)。検証 = tgz を実 npm install →
+  mcp_server_test **18 PASS** (`QB_MCP_SERVER` で被検体差し替え) + CLI 実書庫起動 JSON 報告。
+  レジストリで名前未使用 (404) 確認済。**残 = publish のみ (ユーザーの npm アカウントで
+  `cd tools/mcp/dist/quubee-mcp && npm publish`)**
+  → B2: ディスクイメージ入力 (diskimage.js を stage.js に配線) → D: 利用例ドキュメント。
   残 (小): quubee_run CLI と MCP の出力整合レビュー。
   - ✓ **INT 21h 診断の実地検証第 1 号 = FD ファイラ (2026-07-12・デプロイ済・実機確認済)**:
     出射厚の FD Ver.3.13 (fd98_313) の「ドライブの指定が違います」停止を、診断

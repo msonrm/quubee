@@ -38,7 +38,7 @@ function usage(msg) {
     if (msg) console.error('ERROR: ' + msg);
     console.error('usage: node tools/quubee_run.js <game.lzh|.zip|dir> [--bat N] [--exe N] [--args S]');
     console.error('       [--frames N] [--multiple N] [--screenshot F] [--text] [--audio SEC]');
-    console.error('       [--keys "RETURN@500,SPACE@1200"] [--quiet]');
+    console.error('       [--keys "RETURN@500,SPACE@1200"] [--y2k-clamp] [--diag] [--quiet]');
     process.exit(2);
 }
 

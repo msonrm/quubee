@@ -18,15 +18,41 @@ PC-98 homebrew / フリーソフトの開発者やエージェントが、書庫
 
 ## セットアップ
 
+**利用者 (npm 配布物)**: 登録だけで使える (Node 18+):
+
+```bash
+claude mcp add quubee -- npx -y quubee-mcp
+```
+
+**開発 (このリポジトリから)**:
+
 ```bash
 cd tools/mcp && npm install          # @modelcontextprotocol/sdk + zod
-```
-
-登録 (Claude Code の例):
-
-```bash
 claude mcp add quubee -- node /絶対パス/qb/tools/mcp/server.js
 ```
+
+## npm 配布物の組み立てと publish
+
+`make_package.js` がリポジトリのサブセット (server.js + CLI + tools/lib + wasm +
+font.bmp/loader.d88 + dos_hle_gaps.md + CREDITS/LICENSE/licenses) を**同じ相対構造**で
+`dist/quubee-mcp/` に集めて `npm pack` する (相対構造の写像により ROOT 解決が無変更で動く):
+
+```bash
+node tools/mcp/make_package.js       # → tools/mcp/dist/quubee-mcp-<ver>.tgz
+# 配布物そのものを回帰にかける (18 項目):
+QB_MCP_SERVER=/path/to/dist/quubee-mcp/tools/mcp/server.js node tools/mcp_server_test.js
+```
+
+version の正 = `tools/mcp/package.json` (開発用・private。server.js もここから名乗る)。
+publish は人間の作業 (npm アカウント):
+
+```bash
+cd tools/mcp/dist/quubee-mcp && npm publish   # 要 npm login
+```
+
+ライセンス: 同梱物は寛容ライセンスの集合体・GPL なし (正典 = CREDITS.md / LICENSE)。
+package.json の license は `SEE LICENSE IN CREDITS.md`。CREDITS/LICENSE/licenses の同梱は
+剥がさないこと。fmgen の「フリーソフト配布限定」条件は無償公開の npm パッケージで満たす。
 
 ## ツール (11)
 
@@ -59,7 +85,7 @@ claude mcp add quubee -- node /絶対パス/qb/tools/mcp/server.js
 ## 実装メモ
 
 - セッション = サーバ内に生きた `Machine` を保持 (対話型)。ワンショットで良ければ
-  CLI `node tools/quubee_run.js game.lzh --json` の方が軽い。
+  CLI `node tools/quubee_run.js game.lzh` の方が軽い (報告は stdout に JSON)。
 - 起動解決・書庫展開は CLI と同じ共有部品 (`tools/lib/stage.js`)。展開は本番と同じ archive.js。
 - 分類は `tools/lib/tier.js` (bio100_triage と同じメトリクス)。
 - 回帰 = `node tools/mcp_server_test.js` (SDK 未インストール / 素材不在なら SKIP)。

@@ -64,7 +64,18 @@ function observe(s, met) {
     };
 }
 
-const server = new McpServer({ name: 'quubee', version: '0.1.0' });
+// version の正 = package.json (開発時 = tools/mcp/package.json、npm 配布時 = パッケージ root)
+const VERSION = (() => {
+    for (const p of [path.join(__dirname, 'package.json'), path.join(ROOT, 'package.json')]) {
+        try {
+            const j = JSON.parse(fs.readFileSync(p, 'utf8'));
+            if (j.name === 'quubee-mcp') return j.version;
+        } catch (_) {}
+    }
+    return '0.0.0';
+})();
+
+const server = new McpServer({ name: 'quubee', version: VERSION });
 
 server.tool(
     'quubee_boot',
