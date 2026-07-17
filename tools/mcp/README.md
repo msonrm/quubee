@@ -1,8 +1,9 @@
-# QuuBee MCP サーバ — 煙感知器と計測器
+# QuuBee MCP サーバ — スモークテストと計測
 
 QuuBee の headless 実行 (`tools/lib/machine.js`) を MCP (Model Context Protocol) で外に出す。
-PC-98 homebrew / フリーソフトの開発者やエージェントが、書庫をドロップして「動く兆候・落ちる兆候」を
-機械可読で観察できる。
+PC-98 homebrew / フリーソフトの開発者やエージェントが、書庫やディスクイメージを渡して
+「動く兆候・落ちる兆候」を機械可読で観察できる。
+(内部ドキュメント (CHANGELOG/メモリ) ではこの道具を「煙感知器と計測器」とも呼ぶ — 同じもの。)
 
 ## ⚠ 位置づけ (最重要)
 
@@ -13,7 +14,7 @@ PC-98 homebrew / フリーソフトの開発者やエージェントが、書庫
 - 「QuuBee で動かない」≠ 実機で動かない (HLE の未実装の可能性。gaps を当たる)
 - 全ツール応答の JSON に `note` としてこの注意書きが入る。**剥がして転送しないこと**
 
-用途は**煙感知器** (起動する/描画する/音が鳴る/入力に反応する、の検出) と**計測器**
+用途は**スモークテスト** (起動する/描画する/音が鳴る/入力に反応する、の検出) と**計測**
 (スクリーンショット・テキスト VRAM・音声 RMS・PC 状態分類) まで。
 
 ## セットアップ
@@ -58,12 +59,12 @@ package.json の license は `SEE LICENSE IN CREDITS.md`。CREDITS/LICENSE/licen
 
 | ツール | 何をする |
 |---|---|
-| `quubee_boot` | 書庫 (.lzh/.lha/.lzs/.zip) かディレクトリを起動しセッションを作る (exe/bat/args/multiple/y2kClamp 指定可) |
+| `quubee_boot` | 書庫 (.lzh/.lha/.lzs/.zip)・ディスクイメージ (.d88/.hdm/.fdi 等 — ブートせず FAT12/16 の中身を取り出す)・ディレクトリを起動しセッションを作る (exe/bat/args/multiple/y2kClamp 指定可) |
 | `quubee_run` | N フレーム進める (60 = エミュ 1 秒、上限 6000/コール)。state (WAIT/EXIT/BIOS/USER) を返す |
 | `quubee_key` | キー投入 (RETURN/SPACE/ESC/A-Z/D0-D9/矢印/F1-F10 等。次の run 中 holdFrames 保持) |
 | `quubee_screenshot` | 現画面の PNG |
 | `quubee_text` | テキスト VRAM 25 行 (ASCII のみ) |
-| `quubee_audio` | seconds 秒の音声 RMS (発音の煙感知) |
+| `quubee_audio` | seconds 秒の音声 RMS (発音のスモークテスト) |
 | `quubee_classify` | 蓄積サンプルから tier 分類 (ALIVE/RENDER/BOOT/WAIT/EXIT/CRASH/BUSY。CRASH は偽陰性ありうる) + **INT 21h 診断** (`int21Unimplemented` = 未実装 DOS コール踏み・`int21Calls` = AH 別回数) |
 | `quubee_save` | 現在の状態をスナップショット保存 (セッションあたり 2 個・同名上書き。zlib 圧縮) |
 | `quubee_restore` | スナップショットへ巻き戻す — 「キーを試す → 駄目なら戻す」の分岐探索 (観察履歴ごと戻る) |

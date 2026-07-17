@@ -1,15 +1,15 @@
 #!/usr/bin/env node
-// quubee_run.js — 書庫/ディレクトリを 1 コマンドで起動し、観察結果を JSON で報告する headless CLI。
+// quubee_run.js — 書庫/ディスクイメージ/ディレクトリを 1 コマンドで起動し、観察結果を JSON で報告する headless CLI。
 //
 // bio100_triage.js の「1 本走らせて分類する」部分の一般化 + machine.js の観測
 // (スクリーンショット/テキスト VRAM/音声 RMS)。MCP アダプタ (「目と耳」を渡す) の土台。
 //
 // ⚠ 位置づけ: QuuBee の HLE-DOS は実 DOS ではない (差異の正典 = docs/dos_hle_gaps.md)。
-//   この出力は「実機/実 DOS で動く」ことの証明ではなく、煙感知器と計測器 (動く兆候・
-//   落ちる兆候の検出) として使うこと。JSON の note フィールドにも常にこの旨を含める。
+//   この出力は「実機/実 DOS で動く」ことの証明ではなく、スモークテスト (動く兆候・
+//   落ちる兆候の検出) と計測に使うこと。JSON の note フィールドにも常にこの旨を含める。
 //
 // 使い方:
-//   node tools/quubee_run.js <game.lzh|.lha|.lzs|.zip|ディレクトリ> [options]
+//   node tools/quubee_run.js <game.lzh|.lha|.lzs|.zip|.d88/.hdm/.fdi 等|ディレクトリ> [options]
 //     --bat NAME       起動 .bat を明示 (既定: 自動解決 — buildStatements が通る .bat を採用)
 //     --exe NAME       起動実行ファイルを明示 (.bat 解決より優先。単一 .exe/.com なら自動)
 //     --args "..."     コマンドライン引数 (.bat の %1.. / 単一起動の cmdline)
@@ -17,7 +17,7 @@
 //     --multiple N     クロック倍率 (既定 20 = headless 正典。回帰の暖機前提と同じ)
 //     --screenshot F   終了時点の画面を PNG で保存
 //     --text           テキスト VRAM 25 行を JSON に含める
-//     --audio SEC      末尾 SEC 秒の音声を汲んで RMS を測る (発音の煙感知)
+//     --audio SEC      末尾 SEC 秒の音声を汲んで RMS を測る (発音のスモークテスト)
 //     --keys SPEC      キー投入 "RETURN@500,SPACE@1200" (NKEY 名@フレーム。6 フレーム保持)
 //     --y2k-clamp      RTC の Y2K クランプ (1999 固定) を ON にする。既定 OFF = 実時計
 //                      (2026 年の実機相当。計測器は Y2K バグの煙を隠さない。ブラウザは ON 相当)
@@ -26,8 +26,8 @@
 //     --quiet          JSON 1 行のみ出力 (機械消費用)
 //
 // 制約 (v1):
-//   - 書庫のサブディレクトリは /run に持ち込まない (トップレベルのファイルのみ。triage と同じ)
-//   - ディスクイメージ (.d88/.fdi 等) 入力は未対応 (diskimage.js 統合は次段)
+//   - 書庫/ディスクイメージのサブディレクトリは /run に持ち込まない (トップレベルのファイル
+//     のみ。triage と同じ。ディスクイメージはブートせず FAT12/16 の中身を取り出す = 本番同型)
 //   - キー入力は投入のみ (対話ループは MCP 段で)
 
 const { Machine, NKEY } = require('./lib/machine');
@@ -36,7 +36,7 @@ const { NOTE, stageInput, planLaunch } = require('./lib/stage');
 
 function usage(msg) {
     if (msg) console.error('ERROR: ' + msg);
-    console.error('usage: node tools/quubee_run.js <game.lzh|.zip|dir> [--bat N] [--exe N] [--args S]');
+    console.error('usage: node tools/quubee_run.js <game.lzh|.zip|.hdm|.d88|dir> [--bat N] [--exe N] [--args S]');
     console.error('       [--frames N] [--multiple N] [--screenshot F] [--text] [--audio SEC]');
     console.error('       [--keys "RETURN@500,SPACE@1200"] [--y2k-clamp] [--diag] [--quiet]');
     process.exit(2);
@@ -142,7 +142,7 @@ function parseKeys(spec) {
             note: NOTE,
         };
         {
-            // INT 21h 診断: 未実装踏みは常時 (煙感知の一級シグナル)、全ヒストグラムは --diag で
+            // INT 21h 診断: 未実装踏みは常時 (スモークテストの一級シグナル)、全ヒストグラムは --diag で
             const stats = m.int21Stats();
             result.int21Unimplemented = stats.unimplemented;
             if (opts.diag) result.int21Calls = stats.calls;

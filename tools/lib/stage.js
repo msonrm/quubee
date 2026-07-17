@@ -3,7 +3,7 @@
 // web/player/archive.js、起動解決は bio100_triage.js の planLaunch と同じ考え方。
 //
 // ⚠ 位置づけ (全消費者共通): QuuBee の HLE-DOS は実 DOS ではない (docs/dos_hle_gaps.md)。
-//   観察結果は煙感知器と計測器であって、実機互換の証明ではない。NOTE を必ず応答に同梱する。
+//   観察結果はスモークテストと計測であって、実機互換の証明ではない。NOTE を必ず応答に同梱する。
 
 const fs = require('fs');
 const os = require('os');
@@ -12,9 +12,10 @@ const ROOT = path.resolve(__dirname, '..', '..');
 const WEB = path.join(ROOT, 'web');
 const qbBatScript = require(path.join(WEB, 'player', 'batscript.js'));
 const qbArchive = require(path.join(WEB, 'player', 'archive.js'));
+const qbDiskImage = require(path.join(WEB, 'player', 'diskimage.js'));
 
 const NOTE = 'QuuBee HLE-DOS is not real DOS (see docs/dos_hle_gaps.md). ' +
-    'Treat results as smoke detection + instrumentation, not real-machine compatibility proof.';
+    'Treat results as smoke-test signals + instrumentation, not real-machine compatibility proof.';
 
 /* --- 書庫/ディレクトリ → 一時作業ディレクトリ。名前は SJIS 生バイトの latin1 写像のまま扱う
  *     (MEMFS 正準形)。区切りは '/' のみ (0x5C は SJIS 2 バイト目と衝突するため区切りにしない)。
@@ -36,8 +37,15 @@ async function stageInput(input) {
         let entries;
         if (/\.(lzh|lha|lzs)$/i.test(input)) entries = qbArchive.parseLzh(new Uint8Array(buf));
         else if (/\.zip$/i.test(input)) entries = await qbArchive.parseZip(new Uint8Array(buf));
-        else throw new Error('未対応の入力形式 (対応: .lzh/.lha/.lzs/.zip/ディレクトリ): ' + input);
-        if (!entries || !entries.length) throw new Error('書庫からエントリを取り出せなかった: ' + input);
+        else if (qbDiskImage.isDiskImageName(input)) {
+            // ディスクイメージはブートせず FAT12/16 の中身だけ取り出す (本番 bridge.js の
+            // ドロップ経路と同型)。自己起動ディスク (非 FAT) は reason 込みの正直な失敗。
+            const res = qbDiskImage.extractDiskImage(new Uint8Array(buf), path.basename(String(input)));
+            if (!res.ok) throw new Error('ディスクイメージから取り出せない: ' + res.reason + ' — ' + input);
+            entries = res.files;
+        }
+        else throw new Error('未対応の入力形式 (対応: .lzh/.lha/.lzs/.zip/ディスクイメージ .d88/.hdm/.fdi 等/ディレクトリ): ' + input);
+        if (!entries || !entries.length) throw new Error('入力からエントリを取り出せなかった: ' + input);
         for (const e of entries) {
             if (!e.data) continue;
             const parts = e.name.split('/').filter((p) => p && p !== '.' && p !== '..');

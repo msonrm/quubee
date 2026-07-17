@@ -1,5 +1,34 @@
 # CHANGELOG
 
+## [MCP B2+D — ディスクイメージ入力 + 利用例ドキュメント + 外向き文面のスモークテスト化 = quubee-mcp 0.3.0] — 2026-07-17
+
+MCP 計画の残り 2 段 (B2・D) と、ユーザー指摘の用語修正をまとめて 0.3.0 に載せた
+(publish はユーザー作業。0.2.0 は同日 publish 済・レジストリ版検証済)。
+
+- **B2: ディスクイメージ入力**: `tools/lib/stage.js` の stageInput に diskimage.js を配線。
+  .d88/.hdm/.fdi 等はブートせず FAT12/16 の中身を取り出して起動する (本番 bridge.js の
+  ドロップ経路と同型)。自己起動ディスク (非 FAT) は reason 込みの正直な失敗。CLI/MCP の
+  説明・usage も更新 (v1 制約の「ディスクイメージ未対応」を解消)。
+  **回帰 = stage_diskimage_test 新設 (8 項目)**: 実 FAT12 .hdm (np2tool/npmouse =
+  サブディレクトリ再帰・既知サイズ一致) / planLaunch 連携 (hstdrvnt) / 負例 loader.d88 /
+  **E2E = 実 VZ.COM (BSD-3) を載せた合成 FAT12 2HD .hdm から Machine.boot で VZ が起動**
+  (FAT12 書き込みは reader の fatEntry と厳密に対)。
+- **外向き文面: 「煙感知器」→「スモークテスト」 (ユーザー指摘 2026-07-17)**: 煙感知器は
+  内輪の造語で初見に通じない。npm README・package.json description (smoke detector →
+  smoke-testing)・server.js ツール説明・stage.js NOTE 英文 (smoke detection → smoke-test
+  signals。回帰の note アサートは "not real DOS" のみ要求 = 非破壊)・quubee_run.js を
+  標準用語へ。**内部記録 (CHANGELOG/メモリ/TODO) は据え置き** — repo README に
+  「内部では煙感知器とも呼ぶ」の橋渡しを 1 行だけ残す。
+- **D: 利用例ドキュメント**: npm README に「利用例」章を新設 — MCP 対話フローの典型列
+  (boot→run→save→key→classify→restore)・int21Unimplemented の読み方 (FD ファイラ根治の
+  実話)・CLI 実出力 JSON (liotest / vzdisk.hdm、**どちらも実採取・捏造なし**)・
+  ディスクイメージ対応拡張子一覧。
+- **検証**: stage_diskimage_test 8 PASS / tgz を実 npm install → mcp_server_test 18 PASS +
+  配布物 CLI で .hdm 起動 / 全体回帰スイート PASS (下記)。
+- 発見したドキュメントバグ修正: quubee_run.js の usage に --y2k-clamp/--diag が欠けていた
+  (0.2.0 の回で修正済)。npmouse.hdm はルートが README.TXT のみ (Windows ドライバディスク)
+  で起動例には不適 — CLI は候補列挙つきで正直に失敗する (仕様どおり)。
+
 ## [MCP トラック A — npm 配布物 `quubee-mcp` 0.2.0 (組み立て・検証完了、publish はユーザー作業)] — 2026-07-17
 
 MCP 計画 (ユーザー合意 2026-07-12) の **A: npm 配布物化**。これまで clone + Emscripten ビルド前提の

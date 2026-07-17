@@ -60,7 +60,13 @@
   **✓ publish 済 (2026-07-17、ユーザーの npm アカウント)**: レジストリ実体
   (registry.npmjs.org の quubee-mcp 0.2.0) を install → 回帰 18 PASS で検証済。第三者は
   `claude mcp add quubee -- npx -y quubee-mcp` の 1 行で使える。**トラック A クローズ**。
-  → 次 = B2: ディスクイメージ入力 (diskimage.js を stage.js に配線) → D: 利用例ドキュメント。
+  **✓ B2: ディスクイメージ入力 (2026-07-17)**: stageInput に diskimage.js 配線 (.d88/.hdm/
+  .fdi 等はブートせず FAT12/16 取り出し・非 FAT は正直な失敗)。回帰 stage_diskimage_test
+  (8 項目、E2E = VZ.COM 入り合成 FAT12 .hdm から実ブート)。
+  **✓ D: 利用例ドキュメント (2026-07-17)**: npm README に利用例章 (MCP フロー典型列・CLI 実
+  出力 JSON・ディスクイメージ例・int21 診断の読み方)。**外向き文面は「煙感知器」→
+  「スモークテスト」へ統一 (ユーザー指摘)。0.3.0 として組み立て・検証済 = 残る MCP 計画は
+  publish (ユーザー) のみ**。
   残 (小): quubee_run CLI と MCP の出力整合レビュー。
   - ✓ **INT 21h 診断の実地検証第 1 号 = FD ファイラ (2026-07-12・デプロイ済・実機確認済)**:
     出射厚の FD Ver.3.13 (fd98_313) の「ドライブの指定が違います」停止を、診断

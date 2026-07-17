@@ -2,8 +2,8 @@
 // server.js — QuuBee headless MCP サーバ (stdio)。他の開発者/エージェントに「目と耳」を渡す。
 //
 // ⚠ 位置づけ (docs/dos_hle_gaps.md が正典): QuuBee の HLE-DOS は実 DOS ではない。
-//   このサーバは「参照プラットフォーム」ではなく**煙感知器と計測器** — 動く兆候・落ちる兆候を
-//   検出する道具であって、実機/実 DOS 互換の証明にはならない。全ツール応答の JSON に
+//   このサーバは「参照プラットフォーム」ではなく**スモークテスト+計測の道具** — 動く兆候・
+//   落ちる兆候を検出する道具であって、実機/実 DOS 互換の証明にはならない。全ツール応答の JSON に
 //   note フィールドとしてこの注意書きを必ず同梱する (剥がさないこと)。
 //
 // 形 = 対話セッション型: quubee_boot が起動中の Machine (tools/lib/machine.js) をサーバ内に保持し、
@@ -79,11 +79,12 @@ const server = new McpServer({ name: 'quubee', version: VERSION });
 
 server.tool(
     'quubee_boot',
-    'PC-98 フリーソフトの書庫 (.lzh/.lha/.lzs/.zip) かディレクトリを QuuBee (HLE-DOS + NP2kai Wasm) で起動し、' +
+    'PC-98 フリーソフトの書庫 (.lzh/.lha/.lzs/.zip)・ディスクイメージ (.d88/.hdm/.fdi 等はブートせず ' +
+    'FAT12/16 の中身を取り出す)・ディレクトリを QuuBee (HLE-DOS + NP2kai Wasm) で起動し、' +
     '対話セッションを作る。起動解決は exe 明示 > .bat 自動 > 単一実行ファイル。' +
-    '注意: QuuBee は実 DOS ではない。結果は煙感知器 (動く/落ちる兆候) であり実機互換の証明ではない。',
+    '注意: QuuBee は実 DOS ではない。結果はスモークテスト (動く/落ちる兆候の検出) であり実機互換の証明ではない。',
     {
-        path: z.string().describe('書庫かディレクトリの絶対パス'),
+        path: z.string().describe('書庫/ディスクイメージ/ディレクトリの絶対パス'),
         exe: z.string().optional().describe('起動実行ファイルを明示 (例 GAME.EXE)'),
         bat: z.string().optional().describe('起動 .bat を明示'),
         args: z.string().optional().describe('コマンドライン引数'),
@@ -181,7 +182,7 @@ server.tool(
 
 server.tool(
     'quubee_audio',
-    '音声を seconds 秒ぶん汲んで RMS を返す (発音の煙感知。フレームはその分進む)。',
+    '音声を seconds 秒ぶん汲んで RMS を返す (発音のスモークテスト。フレームはその分進む)。',
     { session: z.string(), seconds: z.number().min(0.1).max(3).optional().describe('既定 0.5') },
     async (a) => {
         try {
@@ -210,7 +211,7 @@ server.tool(
             return json({ ...o,
                 tier: tier.classifyTier(o.state, s.samples.maxColors, animated),
                 maxColors: s.samples.maxColors, animated, launch: s.launch,
-                int21Unimplemented: stats.unimplemented,   // 未実装 DOS コール踏み = 一級の煙シグナル
+                int21Unimplemented: stats.unimplemented,   // 未実装 DOS コール踏み = スモークテストの一級シグナル
                 int21Calls: stats.calls,
                 wasm: s.m.info().wasm.sha256.slice(0, 16) });
         } catch (e) { return jsonError(e.message || e); }

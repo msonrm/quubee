@@ -34,6 +34,7 @@ const FILES = [
     'web/np2kai_core.wasm',
     'web/player/batscript.js',
     'web/player/archive.js',
+    'web/player/diskimage.js',
     'web/assets/font.bmp',
     'web/assets/loader.d88',
     'docs/dos_hle_gaps.md',
@@ -64,7 +65,7 @@ const devPkg = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 
 const pkg = {
     name: 'quubee-mcp',
     version: devPkg.version,
-    description: 'QuuBee headless MCP server + CLI — smoke detector & instrumentation for ' +
+    description: 'QuuBee headless MCP server + CLI — smoke-testing & instrumentation for ' +
         'PC-98 freeware (HLE-DOS + NP2kai Wasm; NOT real DOS, not a reference platform)',
     bin: { 'quubee-mcp': 'tools/mcp/server.js', 'quubee-run': 'tools/quubee_run.js' },
     license: 'SEE LICENSE IN CREDITS.md',
