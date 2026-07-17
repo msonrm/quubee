@@ -27,9 +27,11 @@ fmgen の「フリーソフト配布限定」は無償 npm 公開で満たす。
 - **ドキュメント整合**: README の CLI 例 `--json` は実在しないオプションだった → 削除 (JSON が既定)。
   quubee_run.js の usage に欠けていた `--y2k-clamp` / `--diag` を追記。npm 用 `README.npm.md` 新設
   (not-real-DOS の位置づけ・登録 1 行・ツール表・Y2K 既定 OFF・ライセンス内訳を npm 利用者にも明記)。
-- **npm レジストリで `quubee-mcp` は未使用 (404) を確認済**。残る作業 = publish のみ
-  (ユーザーの npm アカウントで `cd tools/mcp/dist/quubee-mcp && npm publish`)。
-  次 = B2: ディスクイメージ入力 (diskimage.js を stage.js に配線) → D: 利用例ドキュメント。
+- **同日 publish 完了 (ユーザーの npm アカウント、2FA = パスキー + TOTP 併用で設定)**。
+  レジストリ実体 (registry.npmjs.org / quubee-mcp 0.2.0 / maintainer msonrm) を install し
+  直して回帰 **18 PASS** — 第三者が `npx -y quubee-mcp` で使う経路そのものを検証。
+  **トラック A クローズ**。次 = B2: ディスクイメージ入力 (diskimage.js を stage.js に配線)
+  → D: 利用例ドキュメント。
 
 ## [hechima v0.3.0 追随 — Phase 2 chord 修正で文節伸縮が実打鍵で解禁 + Shift+←→] — 2026-07-14
 

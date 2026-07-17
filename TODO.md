@@ -57,9 +57,10 @@
   `quubee-mcp` サーバ + `quubee-run` CLI。tgz 693KB。license = `SEE LICENSE IN CREDITS.md`・
   CREDITS/LICENSE/licenses 同梱 = 寛容集合体・GPL なし)。検証 = tgz を実 npm install →
   mcp_server_test **18 PASS** (`QB_MCP_SERVER` で被検体差し替え) + CLI 実書庫起動 JSON 報告。
-  レジストリで名前未使用 (404) 確認済。**残 = publish のみ (ユーザーの npm アカウントで
-  `cd tools/mcp/dist/quubee-mcp && npm publish`)**
-  → B2: ディスクイメージ入力 (diskimage.js を stage.js に配線) → D: 利用例ドキュメント。
+  **✓ publish 済 (2026-07-17、ユーザーの npm アカウント)**: レジストリ実体
+  (registry.npmjs.org の quubee-mcp 0.2.0) を install → 回帰 18 PASS で検証済。第三者は
+  `claude mcp add quubee -- npx -y quubee-mcp` の 1 行で使える。**トラック A クローズ**。
+  → 次 = B2: ディスクイメージ入力 (diskimage.js を stage.js に配線) → D: 利用例ドキュメント。
   残 (小): quubee_run CLI と MCP の出力整合レビュー。
   - ✓ **INT 21h 診断の実地検証第 1 号 = FD ファイラ (2026-07-12・デプロイ済・実機確認済)**:
     出射厚の FD Ver.3.13 (fd98_313) の「ドライブの指定が違います」停止を、診断
