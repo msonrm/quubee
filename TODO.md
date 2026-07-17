@@ -68,7 +68,10 @@
   「スモークテスト」へ統一 (ユーザー指摘)。✓ 0.3.0 publish 済 (2026-07-17、latest=0.3.0
   をレジストリから install し直して回帰 18 PASS + .hdm 起動確認) = MCP 計画
   (A/B1/B2/C/D) 全段完了**。
-  残 (小): quubee_run CLI と MCP の出力整合レビュー。
+  **✓ 出力整合レビュー (2026-07-17 = 0.4.0)**: CLI `frames`→`frame` 改名 (到達位置で MCP と
+  同義)・CLI `int21Calls` 常時掲載 (`--diag` は no-op 受理)・MCP classify に `xms`・MCP audio
+  `seconds`→`audioSeconds`。意図差 (tier=classify のみ等) は README に明記。0.4.0 組み立て・
+  tgz 検証済 = **残る作業は 0.4.0 の publish (ユーザー) のみ**。
   - ✓ **INT 21h 診断の実地検証第 1 号 = FD ファイラ (2026-07-12・デプロイ済・実機確認済)**:
     出射厚の FD Ver.3.13 (fd98_313) の「ドライブの指定が違います」停止を、診断
     (int21_trace + int21Unimplemented) で INT 21h 4 穴と特定・解消。核心 = **A: をリモート

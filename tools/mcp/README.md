@@ -65,7 +65,7 @@ package.json の license は `SEE LICENSE IN CREDITS.md`。CREDITS/LICENSE/licen
 | `quubee_screenshot` | 現画面の PNG |
 | `quubee_text` | テキスト VRAM 25 行 (ASCII のみ) |
 | `quubee_audio` | seconds 秒の音声 RMS (発音のスモークテスト) |
-| `quubee_classify` | 蓄積サンプルから tier 分類 (ALIVE/RENDER/BOOT/WAIT/EXIT/CRASH/BUSY。CRASH は偽陰性ありうる) + **INT 21h 診断** (`int21Unimplemented` = 未実装 DOS コール踏み・`int21Calls` = AH 別回数) |
+| `quubee_classify` | 蓄積サンプルから tier 分類 (ALIVE/RENDER/BOOT/WAIT/EXIT/CRASH/BUSY。CRASH は偽陰性ありうる) + **INT 21h 診断** (`int21Unimplemented` = 未実装 DOS コール踏み・`int21Calls` = AH 別回数) + XMS 使用量 (`xms`) |
 | `quubee_save` | 現在の状態をスナップショット保存 (セッションあたり 2 個・同名上書き。zlib 圧縮) |
 | `quubee_restore` | スナップショットへ巻き戻す — 「キーを試す → 駄目なら戻す」の分岐探索 (観察履歴ごと戻る) |
 | `quubee_close` | セッション解放 (上限 3 並行) |
@@ -89,4 +89,9 @@ package.json の license は `SEE LICENSE IN CREDITS.md`。CREDITS/LICENSE/licen
   CLI `node tools/quubee_run.js game.lzh` の方が軽い (報告は stdout に JSON)。
 - 起動解決・書庫展開は CLI と同じ共有部品 (`tools/lib/stage.js`)。展開は本番と同じ archive.js。
 - 分類は `tools/lib/tier.js` (bio100_triage と同じメトリクス)。
+- **CLI と MCP の JSON は同じ概念に同じフィールド名 (0.4.0 で整合)**: `frame` (到達位置。CLI の旧
+  `frames` を改名) / `maxColors` / `animated` / `int21Unimplemented`・`int21Calls` (両者とも常時。
+  CLI の `--diag` は no-op 化・受理は継続) / `xms` (classify にも掲載) / `audioSeconds` (MCP の旧
+  `seconds` を改名)。意図差 = `tier`/`animated` は MCP では classify のみ (蓄積要)・`session`/`hint`
+  は MCP のみ・`input`/`multiple`/`y2kClamp` は CLI 常時 vs MCP は boot 応答。
 - 回帰 = `node tools/mcp_server_test.js` (SDK 未インストール / 素材不在なら SKIP)。

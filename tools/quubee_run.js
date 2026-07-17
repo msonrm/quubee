@@ -21,8 +21,8 @@
 //     --keys SPEC      キー投入 "RETURN@500,SPACE@1200" (NKEY 名@フレーム。6 フレーム保持)
 //     --y2k-clamp      RTC の Y2K クランプ (1999 固定) を ON にする。既定 OFF = 実時計
 //                      (2026 年の実機相当。計測器は Y2K バグの煙を隠さない。ブラウザは ON 相当)
-//     --diag           INT 21h の AH 別呼び出しヒストグラムを JSON に含める
-//                      (未実装 AH のヒットは --diag 無しでも常に int21Unimplemented に出る)
+//     --diag           (0.4.0 から no-op。INT 21h 診断 = int21Unimplemented/int21Calls は
+//                      常時 JSON に載る。後方互換のためフラグは受理し続ける)
 //     --quiet          JSON 1 行のみ出力 (機械消費用)
 //
 // 制約 (v1):
@@ -127,7 +127,7 @@ function parseKeys(spec) {
         result = {
             input: opts.input,
             launch: plan.label,
-            frames: m.frame,
+            frame: m.frame,        // 到達フレーム位置 (MCP の frame と同名・同義。0.4.0 で frames から改名)
             tier: t,
             state,
             pc: '0x' + pc.toString(16).toUpperCase(),
@@ -142,10 +142,11 @@ function parseKeys(spec) {
             note: NOTE,
         };
         {
-            // INT 21h 診断: 未実装踏みは常時 (スモークテストの一級シグナル)、全ヒストグラムは --diag で
+            // INT 21h 診断は常時掲載 (未実装踏み・AH 別ヒストグラムとも。MCP classify と同じ既定。
+            // ヒストグラムは高々数十キーで軽い)。--diag は後方互換のため受理するが no-op (0.4.0)
             const stats = m.int21Stats();
             result.int21Unimplemented = stats.unimplemented;
-            if (opts.diag) result.int21Calls = stats.calls;
+            result.int21Calls = stats.calls;
         }
         if (opts.audio) {
             if (pcm) {

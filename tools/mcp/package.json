@@ -1,7 +1,7 @@
 {
   "name": "quubee-mcp",
   "private": true,
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "QuuBee headless MCP server — smoke-testing + instrumentation for PC-98 freeware (NOT a reference platform; HLE-DOS is not real DOS)",
   "main": "server.js",
   "dependencies": {

@@ -46,13 +46,17 @@ claude mcp add quubee -- npx -y quubee-mcp
 | `quubee_screenshot` | 現画面の PNG (640×400) |
 | `quubee_text` | テキスト VRAM 25 行 (ASCII のみ) |
 | `quubee_audio` | seconds 秒の音声 RMS (発音のスモークテスト) |
-| `quubee_classify` | tier 分類 (ALIVE/RENDER/BOOT/WAIT/EXIT/CRASH/BUSY) + INT 21h 診断 (`int21Unimplemented` = 未実装 DOS コール踏み・`int21Calls` = AH 別回数) |
+| `quubee_classify` | tier 分類 (ALIVE/RENDER/BOOT/WAIT/EXIT/CRASH/BUSY) + INT 21h 診断 (`int21Unimplemented` = 未実装 DOS コール踏み・`int21Calls` = AH 別回数) + XMS 使用量 (`xms`) |
 | `quubee_save` | スナップショット保存 (セッションあたり 2 個・同名上書き) |
 | `quubee_restore` | スナップショットへ巻き戻す — 「キーを試す → 駄目なら戻す」の分岐探索 |
 | `quubee_close` | セッション解放 (上限 3 並行) |
 | `quubee_gaps` | `docs/dos_hle_gaps.md` 全文 (実 DOS との差異の正典) |
 
 ## 利用例
+
+CLI と MCP の JSON は同じ概念に同じフィールド名を使う (`frame` = 到達フレーム位置 /
+`maxColors` / `animated` / `int21Unimplemented`・`int21Calls` / `xms` / `audioSeconds`)。
+`tier`/`animated` は観察の蓄積が要るため MCP では `quubee_classify` が返す (CLI は常時)。
 
 ### MCP: 対話セッションの典型フロー
 
@@ -84,17 +88,18 @@ npx -p quubee-mcp quubee-run game.lzh --exe GAME.EXE --frames 600 --quiet
 実出力 (LIO グラフィックのテストプログラムを実行した例):
 
 ```json
-{"input":"games/liotest.zip","launch":"exe:T1.EXE (合成 .bat)","frames":600,
+{"input":"games/liotest.zip","launch":"exe:T1.EXE (合成 .bat)","frame":600,
  "tier":"WAIT","state":"WAIT","pc":"0xFEE10","maxColors":2,"animated":false,
  "exited":false,"batchDone":false,"xms":{"handles":0,"usedMB":0,"largestMB":17},
  "wasm":"0f0c8ed52c256469","multiple":20,"y2kClamp":false,
  "note":"QuuBee HLE-DOS is not real DOS (see docs/dos_hle_gaps.md). Treat results as smoke-test signals + instrumentation, not real-machine compatibility proof.",
- "int21Unimplemented":{}}
+ "int21Unimplemented":{},
+ "int21Calls":{"25":30,"30":2,"35":14,"44":5,"3F":2113,"4A":2,"4B":1}}
 ```
 
 主なオプション: `--exe/--bat/--args` (起動明示)・`--frames N`・`--screenshot out.png`・
-`--text` (テキスト VRAM 同梱)・`--audio SEC` (RMS)・`--keys "RETURN@500"`・
-`--diag` (INT 21h 全ヒストグラム)・`--y2k-clamp`。
+`--text` (テキスト VRAM 同梱)・`--audio SEC` (RMS)・`--keys "RETURN@500"`・`--y2k-clamp`。
+INT 21h 診断 (`int21Unimplemented`/`int21Calls`) は常時載る。
 
 ### ディスクイメージ入力
 
@@ -106,7 +111,7 @@ npx -p quubee-mcp quubee-run vzdisk.hdm --frames 600 --quiet
 ```
 
 ```json
-{"input":"vzdisk.hdm","launch":"exe:VZ.COM (合成 .bat)","frames":600,
+{"input":"vzdisk.hdm","launch":"exe:VZ.COM (合成 .bat)","frame":600,
  "tier":"WAIT","state":"WAIT", ... }
 ```
 

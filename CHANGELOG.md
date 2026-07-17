@@ -1,5 +1,25 @@
 # CHANGELOG
 
+## [MCP 出力整合 — CLI と MCP の JSON 語彙を統一 = quubee-mcp 0.4.0] — 2026-07-17
+
+v2 実装時 (07-12) に残した「残 (小): quubee_run CLI と MCP の出力整合レビュー」を消化。
+npm 公開でスキーマに第三者が依存し始める前 (0.x のうち) に「同じ概念は同じ名前・同じ既定」へ。
+
+- **突き合わせで見つけたずれ 4 点と対処**:
+  1. **CLI `frames` → `frame` に改名**: 値は `m.frame` (到達フレーム位置) で MCP の `frame` と
+     同義だったのに、複数形で「走らせた数」に読めた (CLI フラグ `--frames` は要求数のままで別物)。
+  2. **CLI の `int21Calls` を常時掲載**: MCP classify は常時・CLI は `--diag` 限定だった。
+     ヒストグラムは高々数十キーで軽く、計測器は隠さないが筋。`--diag` は後方互換のため
+     受理し続けるが no-op (usage に明記)。
+  3. **MCP classify に `xms` を追加**: CLI には常時載っていた XMS 使用量が MCP に無かった穴。
+  4. **MCP `quubee_audio` の `seconds` → `audioSeconds`**: CLI の同名フィールドに合わせる。
+- **意図差は据え置き + README に明記**: `tier`/`animated` は MCP では classify のみ (蓄積要) /
+  `session`/`hint` は MCP のみ / `input`/`multiple`/`y2kClamp` は CLI 常時 vs MCP は boot 応答。
+- 検証: quubee_run_test 10 + mcp_server_test 18 + stage_diskimage_test 8 = PASS (回帰は
+  フィールド名 wasm/note/tier/state/animated のみ依存で非破壊を事前確認)。0.4.0 tgz を
+  実 npm install → 18 PASS + 配布物 CLI で新スキーマ (`frame`) + `--diag` no-op 受理を確認。
+  npm README の実出力 JSON も再採取 (int21Calls の実物入り。捏造なし)。publish はユーザー作業。
+
 ## [MCP B2+D — ディスクイメージ入力 + 利用例ドキュメント + 外向き文面のスモークテスト化 = quubee-mcp 0.3.0] — 2026-07-17
 
 MCP 計画の残り 2 段 (B2・D) と、ユーザー指摘の用語修正をまとめて 0.3.0 に載せた

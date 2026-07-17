@@ -190,7 +190,7 @@ server.tool(
             const pcm = s.m.captureAudio(a.seconds || 0.5);
             let sum = 0;
             for (let i = 0; i < pcm.length; i++) sum += pcm[i] * pcm[i];
-            return json({ frame: s.m.frame, seconds: a.seconds || 0.5,
+            return json({ frame: s.m.frame, audioSeconds: a.seconds || 0.5,
                 audioRms: pcm.length ? Math.round(Math.sqrt(sum / pcm.length)) : 0 });
         } catch (e) { return jsonError(e.message || e); }
     });
@@ -213,6 +213,7 @@ server.tool(
                 maxColors: s.samples.maxColors, animated, launch: s.launch,
                 int21Unimplemented: stats.unimplemented,   // 未実装 DOS コール踏み = スモークテストの一級シグナル
                 int21Calls: stats.calls,
+                xms: s.m.xms(),                            // CLI の常時掲載と整合 (0.4.0)
                 wasm: s.m.info().wasm.sha256.slice(0, 16) });
         } catch (e) { return jsonError(e.message || e); }
     });
