@@ -2,7 +2,7 @@
 // 薙刀式の編集キー (T=moveLeft / Y=moveRight / U=deleteBack) の二重経路 回帰。
 // labo の keymap-engine が発火する specialAction を fep が横取りし、状態別に振り分ける:
 //   空バッファ         → ゲストへ実キー注入 (cb.hostKey: ArrowLeft/ArrowRight/Backspace)
-//   Phase 2 (Mozc 候補中) → 文節フォーカス移動 / 取消
+//   Phase 2 (Mozc 候補中) → 文節フォーカス移動 / よみに戻す (hechima v0.8.1〜。旧: 全クリア)
 //   変換前よみ合成中    → engine 既定 (composingKana 削除)。moveLeft/Right は飲む
 //
 // Part A: 二重経路のロジックを engine.chordBuffer.onSpecialAction 直叩きで決定的に検証。
@@ -15,12 +15,11 @@ const fs   = require('fs');
 
 const WEB = path.join(__dirname, '..', 'web');
 const qbFepCreate = require(path.join(WEB, 'assets', 'hechima.js')).createFep;   // labo hechima (UMD)
-const K = require(path.join(WEB, 'assets', 'keymap-engine.js'));                  // v1.2.0 (onHostAction は v1.1.0〜)
+const K = require(path.join(WEB, 'assets', 'keymap-engine.js'));                  // v1.4.0 (onHostAction は v1.1.0〜)
 
 let fails = 0;
 const ok = (cond, label) => { console.log((cond ? 'ok   ' : 'FAIL ') + label); if (!cond) fails++; };
 const tick = () => new Promise((r) => setImmediate(r));
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function harness(convert) {
     const log = { hostKeys: [], commits: [], shows: [], hides: 0 };
@@ -76,9 +75,11 @@ function harness(convert) {
         ok(h.log.hostKeys.length === 0, 'Phase2: moveRight は実キーを注入しない (バッファ操作)');
         h.fire('moveLeft');
         ok(h.lastShow()[0].kind === 'focus', 'Phase2 + moveLeft(T) → 注目文節が左へ');
-        const hidesBefore = h.log.hides;
         h.fire('deleteBack');
-        ok(h.log.hides > hidesBefore, 'Phase2 + deleteBack(U) → 取消 (hide)');
+        ok(h.lastShow() && h.lastShow().length === 1 && h.lastShow()[0].kind === 'yomi'
+           && h.lastShow()[0].text === 'きょうははれ',
+           `Phase2 + deleteBack(U) → よみに戻す (v0.12.0 新挙動。got ${JSON.stringify(h.lastShow())})`);
+        ok(h.log.commits.length === 0, 'Phase2: deleteBack は確定しない');
         ok(h.log.hostKeys.length === 0, 'Phase2: deleteBack も実キーを注入しない');
     }
 
@@ -105,7 +106,7 @@ function harness(convert) {
             shiftKey: false, ctrlKey: false, altKey: false, metaKey: false });
         h.fep.feed(tap('KeyT', 't'));      // T 単打 (chord 窓へ)
         h.fep.feedUp(tap('KeyT', 't'));
-        await sleep(220);                  // 同時打鍵窓 (~100ms) 満了を待つ
+        await tick();                      // mutual (v1.3.0+): タイマー不使用・keyup で出力 (時間送り不要)
         ok(h.log.hostKeys.includes('ArrowLeft'),
            `E2E: 空で実 T 打鍵 → moveLeft → hostKey ArrowLeft (got [${h.log.hostKeys.join(',')}])`);
     }

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// 文節伸縮 (hechima v0.3.0 + keymap-engine v1.2.0 + hechima-wasm v0.2.0) の headless 回帰。
+// 文節伸縮 (hechima v0.12.0 + keymap-engine v1.4.0 + hechima-wasm v0.2.0) の headless 回帰。
 // 薙刀式 space+T/Y → editSegmentLeft/Right → cb.resize → Mozc ResizeSegment の追随
 // (labo 指示書 docs/hechima_v020_quubee_handoff.md §5 + v0.3.0 追随 docs/hechima_v030_quubee_handoff.md)。
 //
@@ -62,8 +62,8 @@ const SEGS2 = [
 ];
 
 (async () => {
-    ok(H.version === '0.3.0', `hechima.version = 0.3.0 (got ${H.version})`);
-    ok(K.version === '1.2.0', `KeymapEngine.version = 1.2.0 (got ${K.version}) — hechima 0.3.0 とセット必須`);
+    ok(H.version === '0.12.0', `hechima.version = 0.12.0 (got ${H.version})`);
+    ok(K.version === '1.4.0', `KeymapEngine.version = 1.4.0 (got ${K.version}) — hechima 0.12.0 とセット必須`);
 
     // ---- Part A1: Phase 2 + editSegment* → cb.resize(focus, ±1)・表示差し替え ----
     {
@@ -149,7 +149,6 @@ const SEGS2 = [
 
     // ---- Part A6: 実打鍵 E2E (space+T 同時打鍵 → resize、三重奏の再発防止) ----
     {
-        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
         const tap = (code, key, shiftKey = false) => ({ code, key, repeat: false,
             shiftKey, ctrlKey: false, altKey: false, metaKey: false });
         const h = harness(() => Promise.resolve(SEGS2), () => Promise.resolve(null));
@@ -158,8 +157,7 @@ const SEGS2 = [
         h.fep.feed(tap('KeyT', 't'));              // …T (chord)
         h.fep.feedUp(tap('KeyT', 't'));
         h.fep.feedUp(tap('Space', ' '));
-        await sleep(220);                          // 同時打鍵窓満了
-        await tick();
+        await tick();                              // mutual (v1.3.0+): タイマー不使用 (時間送り不要)
         ok(h.log.resizes.pop()?.join(',') === '0,-1', 'E2E: 実打鍵 space+T → cb.resize(0, -1)');
         ok(h.log.commits.length === 0, 'E2E: 即確定しない (三重奏 その1 の再発防止)');
         ok(h.log.hostKeys.length === 0, 'E2E: 余剰カーソルキーがゲストへ飛ばない (三重奏 その2)');
@@ -167,8 +165,7 @@ const SEGS2 = [
         // space 単打 = 次候補 (engine の SandS 判定 → convert action 経由)
         h.fep.feed(tap('Space', ' '));
         h.fep.feedUp(tap('Space', ' '));
-        await sleep(220);
-        await tick();
+        await tick();                              // 単打の出力も keyUp 駆動 (タイマー無し)
         ok(h.lastText() === '京は晴れ', `E2E: space 単打 → 次候補 (got ${h.lastText()})`);
         ok(h.log.commits.length === 0, 'E2E: space 単打でも確定しない');
         // Shift+←→ = 伸縮 (engine 経路の navCandidates)

@@ -3,7 +3,7 @@
 })(this, function(exports) {
 	Object.defineProperty(exports, Symbol.toStringTag, { value: "Module" });
 	//#region src/hechima/version.ts
-	const HECHIMA_VERSION = "0.3.0";
+	const HECHIMA_VERSION = "0.12.0";
 	//#endregion
 	//#region src/hechima/session.ts
 	const ROMAJI = {
@@ -279,6 +279,41 @@
 			candidates: kata !== yomi ? [kata, yomi] : [yomi]
 		}];
 	}
+	function toZenkakuAscii(s) {
+		let out = "";
+		for (const ch of s) {
+			const c = ch.codePointAt(0) ?? 0;
+			out += ch === " " ? "　" : c >= 33 && c <= 126 ? String.fromCodePoint(c + 65248) : ch;
+		}
+		return out;
+	}
+	function eijiVariants(raw) {
+		const lower = raw.toLowerCase();
+		const capital = lower ? lower[0].toUpperCase() + lower.slice(1) : lower;
+		return [{
+			key: raw,
+			candidates: [
+				raw,
+				lower,
+				raw.toUpperCase(),
+				capital,
+				toZenkakuAscii(raw)
+			]
+		}];
+	}
+	function mergeEijiConvert(raw, result) {
+		const variants = eijiVariants(raw)[0].candidates ?? [raw];
+		let engineCands = [];
+		if (result && result.length === 1 && result[0].key === raw) engineCands = (result[0].candidates ?? []).filter((c) => c !== raw);
+		return [{
+			key: raw,
+			candidates: [
+				variants[0],
+				...engineCands,
+				...variants.slice(1)
+			]
+		}];
+	}
 	/**
 	* 変換セッションを作る。cb は SessionCallbacks（QuuBee 実証済みの 5 点契約）。
 	*
@@ -292,23 +327,102 @@
 		let segs = null;
 		let focus = 0;
 		let genId = 0;
+		let eiji = false;
+		let addlShown = 0;
+		let addlSel = null;
 		const composing = () => (kana + pend).length > 0;
+		const resetAddl = () => {
+			addlShown = 0;
+			addlSel = null;
+		};
 		const clear = () => {
 			kana = "";
 			pend = "";
 			segs = null;
 			focus = 0;
 			genId++;
+			eiji = false;
+			resetAddl();
 		};
 		const backToYomi = () => {
 			segs = null;
 			focus = 0;
 			genId++;
+			resetAddl();
 		};
+		function addlAll() {
+			if (!segs) return [];
+			const key = segs[focus].key;
+			const kata = toKatakana(key);
+			const out = [];
+			if (kata !== key) out.push({
+				text: kata,
+				annotation: "カタカナ"
+			});
+			out.push({
+				text: key,
+				annotation: "ひらがな"
+			});
+			return out;
+		}
+		function addlVisible() {
+			const all = addlAll();
+			const n = Math.min(addlShown, all.length);
+			return n <= 0 ? [] : all.slice(all.length - n);
+		}
+		/** 文節 i の現在の出力テキスト（注目文節で追加候補を選択中ならそれを優先） */
+		function segText(s, i) {
+			if (i === focus && addlSel !== null) {
+				const v = addlVisible();
+				if (addlSel < v.length) return v[addlSel].text;
+			}
+			return s.candidates[s.idx];
+		}
+		/** 次候補（↓ / Space / SandS 単打 convert）。追加候補領域内なら下へ、末尾で通常候補の先頭へ戻る */
+		function candNext() {
+			if (!segs) return;
+			if (addlSel !== null) {
+				if (addlSel + 1 < addlVisible().length) addlSel++;
+				else {
+					addlSel = null;
+					segs[focus].idx = 0;
+				}
+				render();
+				return;
+			}
+			const s = segs[focus];
+			s.idx = (s.idx + 1) % s.candidates.length;
+			render();
+		}
+		/** 前候補（↑ / 内蔵経路の Shift+Space）。通常候補の先頭でさらに上 = 追加候補を段階展開 */
+		function candPrev() {
+			if (!segs) return;
+			if (addlSel !== null) {
+				if (addlSel > 0) addlSel--;
+				else if (addlShown < addlAll().length) addlShown++;
+				render();
+				return;
+			}
+			const s = segs[focus];
+			if (s.idx === 0 && addlAll().length > 0) {
+				if (addlShown === 0) addlShown = 1;
+				addlSel = addlVisible().length - 1;
+				render();
+				return;
+			}
+			s.idx = (s.idx + s.candidates.length - 1) % s.candidates.length;
+			render();
+		}
 		function render() {
 			if (segs) cb.show(segs.map((s, i) => ({
-				text: s.candidates[s.idx],
-				kind: i === focus ? "focus" : "other"
+				text: segText(s, i),
+				kind: i === focus ? "focus" : "other",
+				candidates: s.candidates.slice(),
+				candidateIndex: s.idx,
+				...i === focus && addlShown > 0 ? {
+					additional: addlVisible(),
+					...addlSel !== null ? { additionalIndex: addlSel } : {}
+				} : {}
 			})));
 			else if (composing()) cb.show([{
 				text: kana + pend,
@@ -316,10 +430,74 @@
 			}]);
 			else cb.hide();
 		}
-		const joined = () => (segs ?? []).map((s) => s.candidates[s.idx]).join("");
+		const joined = () => (segs ?? []).map((s, i) => segText(s, i)).join("");
+		let lastCommit = null;
 		function commit(text) {
+			const learned = !!(segs && cb.learn && !eiji);
+			if (learned && segs) try {
+				cb.learn(segs.map((s, i) => ({
+					key: s.key,
+					value: segText(s, i)
+				})));
+			} catch {}
+			lastCommit = segs ? {
+				text,
+				segs,
+				focus,
+				kana,
+				learned
+			} : null;
 			clear();
 			cb.commit(text);
+		}
+		async function reconvert(surface) {
+			if (!active || !cb.reconvert || segs || composing()) return false;
+			if (engine && engine.getState().isComposing) return false;
+			if (!surface) return false;
+			const gen = ++genId;
+			let result = null;
+			try {
+				result = await Promise.resolve(cb.reconvert(surface));
+			} catch {
+				result = null;
+			}
+			if (gen !== genId || segs || composing()) return false;
+			if (!result || !result.length) return false;
+			segs = result.map(ingestSegment);
+			kana = segs.map((s) => s.key).join("");
+			focus = 0;
+			resetAddl();
+			render();
+			return true;
+		}
+		function undoCommit() {
+			if (!lastCommit || composing() || !cb.retract) return false;
+			let removed = false;
+			try {
+				removed = cb.retract(lastCommit.text);
+			} catch {
+				removed = false;
+			}
+			if (!removed) return false;
+			segs = lastCommit.segs;
+			focus = lastCommit.focus;
+			kana = lastCommit.kana;
+			genId++;
+			resetAddl();
+			if (lastCommit.learned) try {
+				cb.unlearn?.();
+			} catch {}
+			lastCommit = null;
+			render();
+			return true;
+		}
+		function ingestSegment(s) {
+			const cands = s.candidates && s.candidates.length ? [...new Set(s.candidates)] : [s.key];
+			return {
+				key: s.key,
+				candidates: cands,
+				idx: 0
+			};
 		}
 		function startConvert() {
 			kana = resolveRomaji(kana, pend, true).kana;
@@ -327,15 +505,12 @@
 			render();
 			const yomi = kana;
 			const gen = ++genId;
-			Promise.resolve(cb.convert ? cb.convert(yomi) : null).then((result) => {
+			(eiji && /^[\x20-\x7e]+$/.test(yomi) ? Promise.resolve(cb.convert ? cb.convert(yomi) : null).then((r) => mergeEijiConvert(yomi, r), () => eijiVariants(yomi)) : Promise.resolve(cb.convert ? cb.convert(yomi) : null)).then((result) => {
 				if (gen !== genId || !composing() || kana !== yomi) return;
 				if (!result || !result.length) result = fallbackConvert(yomi);
-				segs = result.map((s) => ({
-					key: s.key,
-					candidates: s.candidates && s.candidates.length ? s.candidates : [s.key],
-					idx: 0
-				}));
+				segs = result.map(ingestSegment);
 				focus = 0;
+				resetAddl();
 				render();
 			}).catch(() => {});
 		}
@@ -346,17 +521,15 @@
 			Promise.resolve(cb.resize(idx, offset)).then((result) => {
 				if (gen !== genId || !segs) return;
 				if (!result || !result.length) return;
-				segs = result.map((s) => ({
-					key: s.key,
-					candidates: s.candidates && s.candidates.length ? s.candidates : [s.key],
-					idx: 0
-				}));
+				segs = result.map(ingestSegment);
 				focus = Math.min(idx, segs.length - 1);
+				resetAddl();
 				render();
 			}).catch(() => {});
 		}
 		let engine = null;
 		let engineKeyOf = null;
+		let commitYomiDirect = false;
 		function pumpEngine() {
 			if (!engine) return;
 			if (segs) {
@@ -365,9 +538,15 @@
 				commit(joined());
 			}
 			const confirmed = engine.takeConfirmedText();
+			const direct = commitYomiDirect;
+			commitYomiDirect = false;
 			if (confirmed) {
 				if (engine.getState().inputMode === "english") {
 					cb.commit(confirmed);
+					return;
+				}
+				if (direct) {
+					commit(kana + confirmed);
 					return;
 				}
 				kana += confirmed;
@@ -377,7 +556,7 @@
 			}
 			const st = engine.getState();
 			if (st.isComposing) cb.show([{
-				text: st.composingKana + st.pendingDisplay,
+				text: kana + st.composingKana + st.pendingDisplay,
 				kind: "yomi"
 			}]);
 			else if (!(kana || pend)) cb.hide();
@@ -391,9 +570,8 @@
 				return true;
 			}
 			if (k === "Escape" || k === "Backspace") {
-				clear();
-				engine?.reset();
-				cb.hide();
+				backToYomi();
+				render();
 				return true;
 			}
 			if (k === "ArrowLeft" || k === "ArrowRight") {
@@ -401,14 +579,16 @@
 					if (cb.resize) startResize(k === "ArrowRight" ? 1 : -1);
 					return true;
 				}
-				if (cur.length > 1) focus = (focus + (k === "ArrowRight" ? 1 : cur.length - 1)) % cur.length;
+				if (cur.length > 1) {
+					focus = (focus + (k === "ArrowRight" ? 1 : cur.length - 1)) % cur.length;
+					resetAddl();
+				}
 				render();
 				return true;
 			}
 			if (k === "ArrowUp" || k === "ArrowDown") {
-				const s = cur[focus];
-				s.idx = (s.idx + (k === "ArrowDown" ? 1 : s.candidates.length - 1)) % s.candidates.length;
-				render();
+				if (k === "ArrowDown") candNext();
+				else candPrev();
 				return true;
 			}
 			return true;
@@ -420,31 +600,45 @@
 				return true;
 			}
 			if (t === "convert" || t === "confirm" || t === "insertAndConfirm") {
-				if (!segs) return false;
+				const yomiRestored = !segs && composing() && !(engine && engine.getState().isComposing);
+				if (!segs && !yomiRestored) {
+					if (t === "insertAndConfirm" || t === "confirm" && engine && engine.getState().isComposing) commitYomiDirect = true;
+					return false;
+				}
 				if (t === "convert") {
-					const s = segs[focus];
-					s.idx = (s.idx + 1) % s.candidates.length;
-					render();
+					if (segs) candNext();
+					else startConvert();
 					return true;
 				}
-				commit(joined());
+				commit(segs ? joined() : kana);
 				if (action.type === "insertAndConfirm") cb.commit(action.text);
 				return true;
 			}
 			if (t !== "moveLeft" && t !== "moveRight" && t !== "deleteBack") return false;
 			if (segs) {
 				if (t === "deleteBack") {
-					clear();
-					engine?.reset();
-					cb.hide();
+					backToYomi();
+					render();
 					return true;
 				}
-				if (segs.length > 1) focus = (focus + (t === "moveRight" ? 1 : segs.length - 1)) % segs.length;
+				if (segs.length > 1) {
+					focus = (focus + (t === "moveRight" ? 1 : segs.length - 1)) % segs.length;
+					resetAddl();
+				}
 				render();
 				return true;
 			}
 			if (engine && engine.getState().isComposing) {
 				if (t === "deleteBack") return false;
+				return true;
+			}
+			if (composing()) {
+				if (t === "deleteBack") {
+					kana = Array.from(kana).slice(0, -1).join("");
+					genId++;
+					render();
+					return true;
+				}
 				return true;
 			}
 			if (cb.hostKey) cb.hostKey(t === "deleteBack" ? "Backspace" : t === "moveRight" ? "ArrowRight" : "ArrowLeft");
@@ -462,6 +656,7 @@
 		function engineDown(tap) {
 			if (!engine) return false;
 			if (segs) {
+				if (tap.key === "Shift" || tap.key === "Control" || tap.key === "Alt" || tap.key === "Meta") return true;
 				if (tap.ctrlKey || tap.altKey || tap.metaKey) {
 					commit(joined());
 					return false;
@@ -477,9 +672,30 @@
 				pumpEngine();
 				return true;
 			}
+			if (tap.key === "Backspace" && tap.ctrlKey && !tap.altKey && !tap.metaKey && !engine.getState().isComposing && !composing()) return undoCommit() ? true : false;
 			if (tap.ctrlKey || tap.altKey || tap.metaKey) return false;
 			if (tap.repeat) return true;
-			if (!engine.getState().isComposing && tap.code !== void 0 && HOST_NAV_KEYS.has(tap.code)) return false;
+			const composingNow = engine.getState().isComposing;
+			if (!composingNow && composing()) {
+				const k = tap.key;
+				if (k === "Backspace") {
+					kana = Array.from(kana).slice(0, -1).join("");
+					genId++;
+					render();
+					return true;
+				}
+				if (k === "Enter") {
+					commit(kana);
+					return true;
+				}
+				if (k === "Escape") {
+					clear();
+					cb.hide();
+					return true;
+				}
+				if (k === "ArrowLeft" || k === "ArrowRight" || k === "ArrowUp" || k === "ArrowDown") return true;
+			}
+			if (!composingNow && tap.code !== void 0 && HOST_NAV_KEYS.has(tap.code)) return false;
 			const kev = engineKeyOf ? engineKeyOf(tap) : null;
 			if (!kev) return false;
 			engine.processKey(kev);
@@ -499,6 +715,7 @@
 		function feed(e) {
 			if (!active) return false;
 			if (engine) return engineDown(e);
+			if (e.key === "Backspace" && e.ctrlKey && !e.altKey && !e.metaKey && !composing()) return undoCommit() ? true : false;
 			if (e.ctrlKey || e.altKey || e.metaKey) return false;
 			const k = e.key;
 			if (k === "Enter") {
@@ -518,16 +735,15 @@
 				if (segs) backToYomi();
 				else if (pend) pend = pend.slice(0, -1);
 				else kana = Array.from(kana).slice(0, -1).join("");
+				if (!composing()) eiji = false;
 				render();
 				return true;
 			}
 			if (k === " ") {
 				if (!composing()) return false;
-				if (segs) {
-					const s = segs[focus];
-					s.idx = (s.idx + 1) % s.candidates.length;
-					render();
-				} else startConvert();
+				if (segs) if (e.shiftKey) candPrev();
+				else candNext();
+				else startConvert();
 				return true;
 			}
 			if (k === "ArrowLeft" || k === "ArrowRight") {
@@ -538,21 +754,33 @@
 				}
 				if (segs && segs.length > 1) {
 					focus = (focus + (k === "ArrowRight" ? 1 : segs.length - 1)) % segs.length;
+					resetAddl();
 					render();
 				}
 				return true;
 			}
 			if (k === "ArrowUp" || k === "ArrowDown") {
 				if (!composing()) return false;
-				if (segs) {
-					const s = segs[focus];
-					const d = k === "ArrowDown" ? 1 : s.candidates.length - 1;
-					s.idx = (s.idx + d) % s.candidates.length;
-					render();
-				}
+				if (segs) if (k === "ArrowDown") candNext();
+				else candPrev();
 				return true;
 			}
 			if (k.length === 1 && k >= " " && k <= "~") {
+				if (/[a-zA-Z]/.test(k) && e.shiftKey) {
+					if (segs) commit(joined());
+					kana = resolveRomaji(kana, pend, true).kana + k;
+					pend = "";
+					eiji = true;
+					genId++;
+					render();
+					return true;
+				}
+				if (eiji && !segs) {
+					kana += k;
+					genId++;
+					render();
+					return true;
+				}
 				const ch = k.toLowerCase();
 				if (!composing() && !/[a-z]/.test(ch)) {
 					if (DIRECT_COMMIT[ch]) {
@@ -606,6 +834,17 @@
 				if (engine) engine.onHostAction = (action) => handleEngineAction(action);
 			},
 			pumpEngine,
+			selectCandidate(index) {
+				if (!segs) return false;
+				const s = segs[focus];
+				if (!Number.isInteger(index) || index < 0 || index >= s.candidates.length) return false;
+				addlSel = null;
+				s.idx = index;
+				render();
+				return true;
+			},
+			undoCommit,
+			reconvert,
 			reset() {
 				clear();
 				if (engine) try {
@@ -615,10 +854,214 @@
 		};
 	}
 	//#endregion
+	//#region src/hechima/worker-client.ts
+	function connectWorker(worker, opts) {
+		const maxCands = opts?.maxCands ?? 9;
+		const pending = /* @__PURE__ */ new Map();
+		const pendingLearn = /* @__PURE__ */ new Map();
+		const pendingDict = /* @__PURE__ */ new Map();
+		let seq = 0;
+		let ready = null;
+		let initPromise = null;
+		let resolveReady = null;
+		let rejectReady = null;
+		worker.addEventListener("message", (ev) => {
+			const m = ev.data;
+			if (!m || typeof m !== "object") return;
+			if (m.type === "progress") opts?.onProgress?.(m.loaded, m.total);
+			else if (m.type === "ready") {
+				ready = {
+					protocol: m.protocol,
+					version: m.version,
+					features: m.features
+				};
+				resolveReady?.(ready);
+			} else if (m.type === "error") rejectReady?.(new Error(m.message));
+			else if (m.type === "result") {
+				const resolve = pending.get(m.id);
+				if (resolve) {
+					pending.delete(m.id);
+					resolve(m.segments);
+				}
+			} else if (m.type === "learned") {
+				const resolve = pendingLearn.get(m.id);
+				if (resolve) {
+					pendingLearn.delete(m.id);
+					resolve(m.ok);
+				}
+			} else if (m.type === "dict") {
+				const resolve = pendingDict.get(m.id);
+				if (resolve) {
+					pendingDict.delete(m.id);
+					resolve(m.entries);
+				}
+			}
+		});
+		function init(paths) {
+			if (!initPromise) initPromise = new Promise((resolve, reject) => {
+				resolveReady = resolve;
+				rejectReady = reject;
+				worker.postMessage({
+					type: "init",
+					...paths
+				});
+			});
+			return initPromise;
+		}
+		/** init 完了を待つ。init 未呼び出しなら既定パスで開始する。失敗は null 扱いにする */
+		async function whenReady() {
+			try {
+				return await init();
+			} catch {
+				return null;
+			}
+		}
+		async function convert(yomi) {
+			if (!await whenReady()) return null;
+			return new Promise((resolve) => {
+				const id = ++seq;
+				pending.set(id, resolve);
+				worker.postMessage({
+					type: "convert",
+					id,
+					kana: yomi,
+					maxCands
+				});
+			});
+		}
+		async function resize(segmentIndex, offset) {
+			const info = await whenReady();
+			if (!info || !info.features.resize) return null;
+			return new Promise((resolve) => {
+				const id = ++seq;
+				pending.set(id, resolve);
+				worker.postMessage({
+					type: "resize",
+					id,
+					segIdx: segmentIndex,
+					offset,
+					maxCands
+				});
+			});
+		}
+		async function learn(segments) {
+			const info = await whenReady();
+			if (!info || info.features.learn === false || !segments.length) return false;
+			return new Promise((resolve) => {
+				const id = ++seq;
+				pendingLearn.set(id, resolve);
+				worker.postMessage({
+					type: "learn",
+					id,
+					kana: segments.map((s) => s.key).join(""),
+					sizes: segments.map((s) => Array.from(s.key).length),
+					values: segments.map((s) => s.value)
+				});
+			});
+		}
+		async function reconvert(surface) {
+			if (!await whenReady()) return null;
+			return new Promise((resolve) => {
+				const id = ++seq;
+				pending.set(id, resolve);
+				worker.postMessage({
+					type: "reconvert",
+					id,
+					surface,
+					maxCands
+				});
+			});
+		}
+		async function revert() {
+			if (!await whenReady()) return false;
+			return new Promise((resolve) => {
+				const id = ++seq;
+				pendingLearn.set(id, resolve);
+				worker.postMessage({
+					type: "revert",
+					id
+				});
+			});
+		}
+		function dictRequest(msg) {
+			return whenReady().then((info) => {
+				if (!info || info.features.dict === false) return null;
+				return new Promise((resolve) => {
+					const id = ++seq;
+					pendingDict.set(id, resolve);
+					worker.postMessage({
+						...msg,
+						id
+					});
+				});
+			});
+		}
+		/** ユーザー辞書の一覧（v0.11.0+）。未対応は null */
+		function dictList() {
+			return dictRequest({ type: "dictList" });
+		}
+		/** ユーザー辞書へ登録（v0.11.0+。pos 省略 = 名詞）。成功 = 更新後の一覧、失敗 = null */
+		function dictAdd(reading, word, pos = 1) {
+			return dictRequest({
+				type: "dictAdd",
+				reading,
+				word,
+				pos
+			});
+		}
+		/** ユーザー辞書から削除（一覧の index）。成功 = 更新後の一覧、失敗 = null */
+		function dictRemove(index) {
+			return dictRequest({
+				type: "dictRemove",
+				index
+			});
+		}
+		async function clearLearning() {
+			if (!await whenReady()) return false;
+			return new Promise((resolve) => {
+				const id = ++seq;
+				pendingLearn.set(id, resolve);
+				worker.postMessage({
+					type: "clearLearning",
+					id
+				});
+			});
+		}
+		return {
+			init,
+			convert,
+			resize,
+			reconvert,
+			learn,
+			revert,
+			clearLearning,
+			dictList,
+			dictAdd,
+			dictRemove,
+			callbacks: () => ({
+				convert,
+				resize,
+				reconvert,
+				learn: (segments) => {
+					learn(segments);
+				},
+				unlearn: () => {
+					revert();
+				}
+			})
+		};
+	}
+	//#endregion
+	//#region src/hechima/protocol.ts
+	/** 電文プロトコル版数。ready 応答の `protocol` で通知される */
+	const HECHIMA_PROTOCOL_VERSION = 0;
+	//#endregion
 	//#region src/hechima/index.ts
 	/** このバンドルのバージョン（取り込み側が記録する用） */
 	const version = HECHIMA_VERSION;
 	//#endregion
+	exports.HECHIMA_PROTOCOL_VERSION = HECHIMA_PROTOCOL_VERSION;
+	exports.connectWorker = connectWorker;
 	exports.createFep = createFep;
 	exports.fallbackConvert = fallbackConvert;
 	exports.resolveRomaji = resolveRomaji;

@@ -54,6 +54,7 @@
           "singleTapAction": "convert"
         }
       ],
+      "judgment": "mutual",
       "simultaneousWindow": 0.08,
       "lookupTable": {
         "W": "き",

@@ -321,7 +321,10 @@
 				shiftKeys: config.shiftKeys ?? [],
 				lookupTable: config.lookupTable ?? {},
 				specialActions: config.specialActions ?? {},
-				simultaneousWindow: config.simultaneousWindow ?? .1
+				judgment: config.judgment === "mutual" ? "mutual" : "window",
+				simultaneousWindow: config.simultaneousWindow ?? .1,
+				englishLookupTable: config.englishLookupTable,
+				englishSpecialActions: config.englishSpecialActions
 			};
 			return {
 				...common,
@@ -1149,6 +1152,23 @@
 				if (action) shiftSingleTapActions.set(sk.key, action);
 			}
 		}
+		let englishLookupTable = null;
+		if (config.englishLookupTable) {
+			englishLookupTable = /* @__PURE__ */ new Map();
+			for (const [keyStr, output] of Object.entries(config.englishLookupTable)) {
+				const bits = parseLookupKey(keyStr, keyBits);
+				if (bits !== void 0) englishLookupTable.set(bits, output);
+			}
+		}
+		let englishSpecialActions = null;
+		if (config.englishSpecialActions) {
+			englishSpecialActions = /* @__PURE__ */ new Map();
+			for (const [keyStr, actionStr] of Object.entries(config.englishSpecialActions)) {
+				const bits = parseLookupKey(keyStr, keyBits);
+				const action = parseSpecialAction(actionStr);
+				if (bits !== void 0 && action) englishSpecialActions.set(bits, action);
+			}
+		}
 		return {
 			hidToChordKey,
 			lookupTable,
@@ -1156,12 +1176,15 @@
 			shiftKeys,
 			shiftSingleTapActions,
 			keyBits,
-			simultaneousWindow: Math.round(config.simultaneousWindow * 1e3)
+			judgment: config.judgment ?? "window",
+			simultaneousWindow: Math.round(config.simultaneousWindow * 1e3),
+			englishLookupTable,
+			englishSpecialActions
 		};
 	}
 	//#endregion
 	//#region src/engine/version.ts
-	const ENGINE_VERSION = "1.2.0";
+	const ENGINE_VERSION = "1.4.0";
 	//#endregion
 	//#region src/engine/key-router.ts
 	/** Route a KeyEvent to a KeyAction based on the expanded keymap */
@@ -1261,6 +1284,20 @@
 	/** Route a key event for chord behavior */
 	function routeChord(event, chord, isDirectEnglishMode) {
 		if (isDirectEnglishMode) {
+			const noModifiers = (event.modifiers & (KeyModifierFlags.SHIFT | KeyModifierFlags.CONTROL | KeyModifierFlags.ALT | KeyModifierFlags.META)) === 0;
+			if (chord.englishLookupTable !== null && noModifiers) {
+				const chordKey = chord.hidToChordKey.get(event.keyCode);
+				if (chordKey) {
+					if (chord.shiftKeys.has(chordKey)) return {
+						type: "chordShiftDown",
+						key: chordKey
+					};
+					return {
+						type: "chordInput",
+						key: chordKey
+					};
+				}
+			}
 			const chars = event.characters;
 			if (chars.length === 1 && isPrintable(chars)) return {
 				type: "directInsert",
@@ -1402,19 +1439,43 @@
 	* 3rd key within window → try triple chord, else confirm and start fresh
 	* Shift key → no eager output, wait for timer
 	*/
-	var SimultaneousKeyBuffer = class {
+	var SimultaneousKeyBuffer = class SimultaneousKeyBuffer {
+		static {
+			this.EMPTY_LOOKUP = /* @__PURE__ */ new Map();
+		}
+		static {
+			this.EMPTY_SPECIALS = /* @__PURE__ */ new Map();
+		}
+		/** 現在のモードの lookup テーブル */
+		lookup() {
+			return this.englishMode ? this.chord.englishLookupTable ?? SimultaneousKeyBuffer.EMPTY_LOOKUP : this.chord.lookupTable;
+		}
+		/** 現在のモードの specialActions テーブル */
+		specials() {
+			return this.englishMode ? this.chord.englishSpecialActions ?? SimultaneousKeyBuffer.EMPTY_SPECIALS : this.chord.specialActions;
+		}
 		constructor(chord) {
 			this.state = { type: "idle" };
 			this.timerId = null;
 			this.pressedKeys = /* @__PURE__ */ new Set();
 			this.windowOverride = null;
+			this.englishMode = false;
 			this.onOutput = null;
 			this.onShiftSingle = null;
 			this.onSpecialAction = null;
+			this.mutualOrder = [];
+			this.mutualGroup = /* @__PURE__ */ new Set();
+			this.mutualCharCount = 0;
+			this.mutualPending = null;
+			this.mutualOutputted = false;
 			this.chord = chord;
 		}
 		/** Process key down */
 		keyDown(key) {
+			if (this.chord.judgment === "mutual") {
+				this.mutualKeyDown(key);
+				return;
+			}
 			this.pressedKeys.add(key);
 			switch (this.state.type) {
 				case "idle":
@@ -1433,6 +1494,10 @@
 		}
 		/** Process key up */
 		keyUp(key) {
+			if (this.chord.judgment === "mutual") {
+				this.mutualKeyUp(key);
+				return;
+			}
 			this.pressedKeys.delete(key);
 			if (this.state.type === "shiftHeld" && this.state.shiftKey === key) {
 				if (!this.state.used) {
@@ -1446,6 +1511,127 @@
 		reset() {
 			this.cancelTimer();
 			this.state = { type: "idle" };
+			this.clearMutualGroup();
+		}
+		/**
+		* 相互シフト方式の keyDown。
+		* 「押下中キー集合 + 新キー」の組合せがテーブルにあるかだけで chord / fall-through を判定する。
+		*/
+		mutualKeyDown(key) {
+			if (this.pressedKeys.has(key)) return;
+			this.pressedKeys.add(key);
+			const bit = this.getBit(key);
+			if (bit === void 0) return;
+			if (this.mutualGroup.has(key)) {
+				this.resolveMutualGroup();
+				this.startMutualGroup(key);
+				return;
+			}
+			if (this.mutualGroup.size === 0) {
+				this.startMutualGroup(key);
+				return;
+			}
+			let candidate = bit;
+			for (const k of this.mutualGroup) candidate += this.getBit(k) ?? 0;
+			if (this.lookup().has(candidate) || this.specials().has(candidate)) {
+				this.mutualGroup.add(key);
+				this.mutualOrder.push(key);
+				this.evaluateMutualChord(candidate);
+			} else {
+				this.resolveMutualGroup();
+				this.startMutualGroup(key);
+			}
+		}
+		/** 相互シフト方式の keyUp */
+		mutualKeyUp(key) {
+			this.pressedKeys.delete(key);
+			if (this.pressedKeys.size === 0) {
+				this.finalizeMutual();
+				return;
+			}
+			if (this.mutualGroup.has(key) && (this.mutualOutputted || this.mutualPending !== null)) {
+				const pending = this.mutualPending;
+				if (pending !== null) {
+					this.mutualPending = null;
+					this.mutualOutputted = true;
+				}
+				this.mutualGroup.delete(key);
+				const idx = this.mutualOrder.indexOf(key);
+				if (idx >= 0) this.mutualOrder.splice(idx, 1);
+				this.mutualCharCount = 0;
+				if (pending !== null) this.onSpecialAction?.(pending);
+			}
+		}
+		/** グループを chord 評価する（lookup 優先、なければ specialAction を保留） */
+		evaluateMutualChord(bits) {
+			const text = this.lookup().get(bits);
+			if (text !== void 0) {
+				this.onOutput?.(text, this.mutualCharCount);
+				this.mutualCharCount = text.length;
+				this.mutualPending = null;
+				this.mutualOutputted = true;
+				return;
+			}
+			const action = this.specials().get(bits);
+			if (action) {
+				if (this.mutualCharCount > 0) {
+					this.onOutput?.("", this.mutualCharCount);
+					this.mutualCharCount = 0;
+				}
+				this.mutualPending = action;
+				this.mutualOutputted = false;
+			}
+		}
+		/**
+		* 現グループを解決する（fall-through / グループ在籍キー再打鍵時）。
+		* chord 出力済みなら何もしない。specialAction 保留中なら発火。
+		* 未出力なら押下順に単打出力する。解決後グループは空（disarm）。
+		*/
+		resolveMutualGroup() {
+			if (this.mutualPending !== null) this.onSpecialAction?.(this.mutualPending);
+			else if (!this.mutualOutputted) for (const k of this.mutualOrder) this.mutualSingleTap(k);
+			this.clearMutualGroup();
+		}
+		/** 全キーリリース時の確定。単打はここで出力される（chord は keyDown 時に出力済み） */
+		finalizeMutual() {
+			if (this.mutualGroup.size === 1) {
+				if (!this.mutualOutputted) {
+					const only = this.mutualOrder[0];
+					if (only !== void 0) this.mutualSingleTap(only);
+				}
+			} else if (this.mutualGroup.size >= 2) {
+				if (this.mutualPending !== null) this.onSpecialAction?.(this.mutualPending);
+				else if (!this.mutualOutputted) for (const k of this.mutualOrder) this.mutualSingleTap(k);
+			}
+			this.clearMutualGroup();
+		}
+		/** 単打出力（シフトキー → 単打アクション、specialAction 優先、なければ文字） */
+		mutualSingleTap(key) {
+			if (this.chord.shiftKeys.has(key)) {
+				const action = this.chord.shiftSingleTapActions.get(key);
+				if (action) this.onShiftSingle?.(action);
+				return;
+			}
+			const bit = this.getBit(key);
+			if (bit === void 0) return;
+			const action = this.specials().get(bit);
+			if (action) {
+				this.onSpecialAction?.(action);
+				return;
+			}
+			const text = this.lookup().get(bit);
+			if (text !== void 0) this.onOutput?.(text, 0);
+		}
+		startMutualGroup(key) {
+			this.mutualGroup = /* @__PURE__ */ new Set([key]);
+			this.mutualOrder = [key];
+		}
+		clearMutualGroup() {
+			this.mutualGroup.clear();
+			this.mutualOrder = [];
+			this.mutualCharCount = 0;
+			this.mutualPending = null;
+			this.mutualOutputted = false;
 		}
 		handleFirstKey(key) {
 			const bits = this.getBit(key);
@@ -1459,7 +1645,7 @@
 				};
 				this.startTimer();
 			} else {
-				const singleChar = this.chord.lookupTable.get(bits);
+				const singleChar = this.lookup().get(bits);
 				if (singleChar) {
 					this.onOutput?.(singleChar, 0);
 					this.state = {
@@ -1491,7 +1677,7 @@
 			const keyBit = this.getBit(key);
 			if (!firstBit || !keyBit) return;
 			const combined = firstBit + keyBit;
-			const specialAction = this.chord.specialActions.get(combined);
+			const specialAction = this.specials().get(combined);
 			if (specialAction) {
 				if (firstCharCount > 0) this.onOutput?.("", firstCharCount);
 				const keys = /* @__PURE__ */ new Set([firstKey, key]);
@@ -1505,7 +1691,7 @@
 				this.startTimer();
 				return;
 			}
-			const simultaneousResult = this.chord.lookupTable.get(combined);
+			const simultaneousResult = this.lookup().get(combined);
 			if (simultaneousResult) {
 				if (firstCharCount > 0) this.onOutput?.(simultaneousResult, firstCharCount);
 				else this.onOutput?.(simultaneousResult, 0);
@@ -1524,14 +1710,14 @@
 					if (action) this.onShiftSingle?.(action);
 				} else {
 					const firstBits = this.getBit(firstKey);
-					const pendingAction2 = firstBits ? this.chord.specialActions.get(firstBits) : null;
+					const pendingAction2 = firstBits ? this.specials().get(firstBits) : null;
 					if (pendingAction2) this.onSpecialAction?.(pendingAction2);
 				}
 				this.state = { type: "idle" };
 				this.handleFirstKey(key);
 			} else {
 				const keys = /* @__PURE__ */ new Set([firstKey, key]);
-				const singleChar = this.chord.lookupTable.get(keyBit);
+				const singleChar = this.lookup().get(keyBit);
 				if (singleChar) {
 					this.onOutput?.(singleChar, 0);
 					this.state = {
@@ -1562,7 +1748,7 @@
 			const keyBit = this.getBit(key);
 			if (!keyBit) return;
 			const tripleKeys = existingBits + keyBit;
-			const tripleResult = this.chord.lookupTable.get(tripleKeys);
+			const tripleResult = this.lookup().get(tripleKeys);
 			if (tripleResult) {
 				this.onOutput?.(tripleResult, charCount);
 				this.state = { type: "idle" };
@@ -1578,7 +1764,7 @@
 			const keyBit = this.getBit(key);
 			if (!shiftBit || !keyBit) return;
 			const combined = shiftBit + keyBit;
-			const specialAction = this.chord.specialActions.get(combined);
+			const specialAction = this.specials().get(combined);
 			if (specialAction) {
 				this.onSpecialAction?.(specialAction);
 				this.state = {
@@ -1588,7 +1774,7 @@
 				};
 				return;
 			}
-			const shifted = this.chord.lookupTable.get(combined);
+			const shifted = this.lookup().get(combined);
 			if (shifted) {
 				this.onOutput?.(shifted, 0);
 				this.state = {
@@ -1635,7 +1821,7 @@
 					else {
 						const bits = this.getBit(firstKey);
 						if (bits) {
-							const pendingAction = this.chord.specialActions.get(bits);
+							const pendingAction = this.specials().get(bits);
 							if (pendingAction) this.onSpecialAction?.(pendingAction);
 						}
 						this.state = { type: "idle" };
@@ -1883,6 +2069,11 @@
 			this.inputMode = "japanese";
 			this.buffer.reset();
 			this.chordBuffer?.reset();
+			this.syncChordBufferMode();
+		}
+		/** chord バッファの参照テーブルを inputMode に同期する（iOS の syncChordBufferTables 相当） */
+		syncChordBufferMode() {
+			if (this.chordBuffer) this.chordBuffer.englishMode = this.inputMode === "english";
 		}
 		/** Whether this engine uses chord input */
 		get isChord() {
@@ -1895,7 +2086,17 @@
 		setupChordBuffer(keymap) {
 			if (keymap.chordData) {
 				this.chordBuffer = new SimultaneousKeyBuffer(keymap.chordData);
+				this.syncChordBufferMode();
 				this.chordBuffer.onOutput = (text, replaceCount) => {
+					if (this.inputMode === "english") {
+						if (replaceCount > 0) {
+							const chars = [...this.confirmedText];
+							this.confirmedText = chars.slice(0, Math.max(0, chars.length - replaceCount)).join("");
+						}
+						this.confirmedText += text;
+						this.onStateChange?.();
+						return;
+					}
 					if (replaceCount > 0) {
 						const chars = [...this.composingKana];
 						const remaining = chars.slice(0, Math.max(0, chars.length - replaceCount));
@@ -1934,15 +2135,18 @@
 					this.confirmComposition();
 					this.chordBuffer?.reset();
 					this.inputMode = this.inputMode === "japanese" ? "english" : "japanese";
+					this.syncChordBufferMode();
 					break;
 				case "switchToEnglish":
 					this.confirmComposition();
 					this.chordBuffer?.reset();
 					this.inputMode = "english";
+					this.syncChordBufferMode();
 					break;
 				case "switchToJapanese":
 					this.chordBuffer?.reset();
 					this.inputMode = "japanese";
+					this.syncChordBufferMode();
 					break;
 				case "insertAndConfirm":
 					if (this.onHostAction?.(action)) break;

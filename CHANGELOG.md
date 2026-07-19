@@ -1,5 +1,29 @@
 # CHANGELOG
 
+## [hechima v0.12.0 追随 — 薙刀式 相互シフト化 (judgment=mutual) + 機能キー実挙動修正] — 2026-07-19
+
+labo 指示書 docs/hechima_v0120_quubee_handoff.md (labo 側) への追随。薙刀式の同時押し判定が
+本家仕様と違っていた (80ms 時間窓は解釈違い。正しくは作者一次資料の「相互シフト」= ミリ秒を
+一切見ない状態ベース判定) ことの修正が本体。QuuBee 側はコード変更なし・**3 点セット差し替えのみ**。
+
+- **差し替え (同一コミット必須)**: hechima.js **0.3.0 → 0.12.0** / keymap-engine.js
+  **1.2.0 → 1.4.0** / naginata_{jis,us}.json (v18 のまま `chordConfig.judgment = "mutual"` 入り)。
+  いずれも labo main **84199d5** 時点 (ローカル checkout から vendoring)。hechima-wasm/mozc.data は
+  v0.2.0 据え置き。cb も現行 6 点のまま。hechima.d.ts も更新。
+  **罠**: 旧エンジン ≤1.2.0 は `judgment` を黙って無視して時間窓のまま動く (部分差し替えは気づけない)。
+- **挙動の変わり方 (薙刀式)**: chord = 押しっぱなし中にもう 1 キー (時間不使用) / 連続シフトが
+  任意の chord キーに一般化 (J 押しっぱなしで濁音連打) / 単打の出力 = keyUp 駆動 (タイマー無し) /
+  機能キー 3 件修正 (英数モードから H+J で日本語復帰・合成中 V+M = 無変換即確定・mutual 再入 reset)。
+  ほか v0.3.0→v0.12.0 の標準 IME 準拠差分 (Phase 2 の BS/Escape = よみに戻す・↑ = 追加候補の
+  段階展開・Shift 単体押下バグ修正) も差し替えだけで入る。
+- **回帰の追随**: 版アサート更新 (keymap_engine_test / fep_resize_test)。fep_naginata_edit_test の
+  「Phase 2 + deleteBack → 取消 (hide)」は v0.12.0 の新挙動「よみに戻す (kind='yomi')」へ期待値を
+  更新 (プローブで実挙動を確認してから)。E2E の `sleep(220)` (旧・時間窓満了待ち) は全廃して
+  `tick()` 化 — mutual がタイマー不使用であること自体が回帰でガードされる形に。
+- 検証: FEP/keymap 系 6 本 + **全体回帰 79 本 PASS**。CREDITS.md の pin 記載を更新。
+  残 = ブラウザ実機確認 5 点 (§4-2: J 押しっぱなし濁音連打 / F+G→H+J 復帰 / 合成中 V+M 即確定 /
+  F+G 直後ロールオーバー / Phase 2 BS = よみ戻し) — ユーザー実機待ち。
+
 ## [MCP 出力整合 — CLI と MCP の JSON 語彙を統一 = quubee-mcp 0.4.0] — 2026-07-17
 
 v2 実装時 (07-12) に残した「残 (小): quubee_run CLI と MCP の出力整合レビュー」を消化。

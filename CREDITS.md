@@ -223,11 +223,13 @@ PC-98 のフリーソフト/同人 CG 文化で標準的に使われた 2 大画
   `web/src/engine` を rolldown で 1 ファイルに UMD バンドルした単体成果物 (`npm run build:engine` の出力
   `web/public/engine/keymap-engine.js`)。**QuuBee は fork せず成果物 1 ファイルを vendoring** する
   (mozc.data と同じ「差し替えで取り込む」方針)。エンジンの正しさの正典は labo の golden テスト。
-- **取り込みバージョン**: `KeymapEngine.version` = **1.2.0** (labo main **8970116** = hechima-v0.3.0
-  タグ時点。1.1.0 で `onHostAction` 追加、1.2.0 で convert/confirm/insertAndConfirm も転送 —
-  **hechima 0.3.0 とセット必須**。組み合わせ違いは Phase 2 の space 単打が全角スペースに化ける) /
-  keymap-format **1.0**。keymaps は labo main **cf57718** 時点 (**薙刀式 v18** = space+W/R の め⇔ね
-  入れ替え。作者 大岡俊彦氏 発表)。
+- **取り込みバージョン**: `KeymapEngine.version` = **1.4.0** (labo main **84199d5**。1.1.0 で
+  `onHostAction` 追加、1.2.0 で convert/confirm/insertAndConfirm も転送、1.3.0 で同時押し判定モード
+  `judgment: "mutual"` = 相互シフト (時間不使用)、1.4.0 で英数モードの chord 解釈 + mutual 再入 reset
+  修正 — **hechima 0.12.0 とセット必須**) / keymap-format **1.0**。keymaps も labo main **84199d5**
+  時点 (**薙刀式 v18** = space+W/R の め⇔ね 入れ替え。作者 大岡俊彦氏 発表。naginata JSON は
+  `chordConfig.judgment = "mutual"` 入り — **旧エンジン ≤1.2.0 は judgment を黙って無視して時間窓の
+  まま動く**ため、engine / hechima / naginata JSON は 3 点セットで差し替えること)。
   更新時は labo で `npm run build:engine` → `web/public/engine/keymap-engine.js` と `web/public/keymaps/*.json`
   を本ディレクトリへコピーし、本項の version/commit を更新する。受け入れ検査 = `tools/keymap_engine_test.js`。
 - 依存: React/DOM/Next 非依存の純ロジック (ブラウザ `<script>` / Worker `importScripts` / node `require` 対応)。
@@ -242,9 +244,11 @@ PC-98 のフリーソフト/同人 CG 文化で標準的に使われた 2 大画
 vendoring** する (keymap-engine と同じ差し替えモデル)。QuuBee 固有物は bridge.js の cb 実装のみ。
 
 - **hechima.js** (変換セッション層): Copyright © 2026 Narumi Masao、**MIT**。UMD 単体成果物
-  (グローバル `Hechima`)。取り込み = **`Hechima.version` 0.3.0** (Release **hechima-v0.3.0** / labo
-  **8970116**。0.2.0 で文節伸縮 `cb.resize` + editSegmentLeft/Right、0.3.0 で Phase 2 の chord
-  routing 修正 + Shift+←→ 伸縮。**keymap-engine 1.2.0 とセット必須**)。
+  (グローバル `Hechima`)。取り込み = **`Hechima.version` 0.12.0** (Release **hechima-v0.12.0** / labo
+  main **84199d5** の `web/public/hechima/hechima.js`。0.2.0 で文節伸縮 `cb.resize` +
+  editSegmentLeft/Right、0.3.0 で Phase 2 の chord routing 修正 + Shift+←→ 伸縮、0.8.1 で Phase 2 の
+  BS/Escape = よみに戻す、0.12.0 で合成中 confirm = 無変換即確定 (薙刀式 V+M)。
+  **keymap-engine 1.4.0 とセット必須**)。
 - **hechima-wasm.{js,wasm} + mozc.data** (かな漢字変換エンジン): fcitx-contrib/fcitx5-mozc 由来の
   Emscripten ビルド、**BSD-3・powered by Mozc** (mozc 本体 = Google、BSD-3)。取り込み = Release
   **hechima-wasm-v0.2.0** (labo **29b6271** / fcitx5-mozc **8b3d34c** / mozc **0651fbc** / emsdk 3.1.69。
