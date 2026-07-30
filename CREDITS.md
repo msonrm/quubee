@@ -260,7 +260,9 @@ vendoring** する (keymap-engine と同じ差し替えモデル)。QuuBee 固�
   **hechima-wasm-v0.2.0** (labo **29b6271** / fcitx5-mozc **8b3d34c** / mozc **0651fbc** / emsdk 3.1.69。
   0.2.0 で `hechima_resize` = Mozc ResizeSegment 追加)。辞書 mozc.data (~19MB) は FEP 初回 ON で
   遅延 fetch。配信は事前圧縮版 `mozc.data.gz` (~12.6MiB、同一成果物を gzip したもの = ライセンスも同一)
-  を優先し、無い環境では素の mozc.data へ自動フォールバックする (deploy.sh が dist で生成)。
+  を優先し、無い環境では素の mozc.data へ自動フォールバックする (deploy.sh が dist に無ければ生成)。
+  **辞書を差し替えるときは `web/assets/mozc.data.gz` を先に消す** — 手元に古い .gz が残っていると
+  worker がそちらを優先し、新しい辞書が使われない (deploy.sh は「無ければ作る」だけで作り直さない)。
 - 更新時は Release 添付の BUILD_INFO.txt と本項・`web/player/mozc-worker.js` 冒頭の pin 記載を揃える。
   受け入れ検査 = `tools/fep_mozc_test.js` / `tools/fep_resize_test.js` / `tools/fep_space_test.js`。
 

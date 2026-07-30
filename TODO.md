@@ -157,7 +157,8 @@ labo (msonrm/logical-layout-labo) が単体 UMD ビルド出口 + chord golden �
 - ✓ **設定 UI**: Display グループに Kana Layout × Keyboard(JIS/US)、localStorage 永続、qbDebug.layout 経由。
 - ☐ **残 (別タスク・ユーザー判断で後回し)**: 薙刀式の編集系二重経路 (T/Y カーソル・U/BS)。web エンジンが
   KeyAction を surface せず・カーソル模型無しのため、labo フック追加 or QuuBee 側 specialActions 翻訳が要る。
-- ☐ **ブラウザ実機確認 (残)**: 設定 UI / NICOLA・月・AZIK・Colemak / ステータス即時反映。確認後にデプロイ。
+- ✓ **ブラウザ実機確認**: 設定 UI / NICOLA・月・AZIK・Colemak / ステータス即時反映 — いずれも問題なし
+  (ユーザー、2026-07-30。v0.16.0 追随の実機 6 点確認と同時)。**新配列統合の残タスクはゼロ**。
 - ✓ **逐次系の Space = 変換 (hechima v0.16.0 + keymap-engine v1.6.0 追随、2026-07-30)**: AZIK/月/Colemak/
   JSON ローマ字で合成中 Space が「よみのまま確定」だった実害 (ユーザー実機報告) を 2 点セット差し替えで
   根治。句読点 `, .` → `、。` と BS 後 pending 復帰も同梱。回帰 = 新設 `tools/fep_space_test.js`
