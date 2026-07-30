@@ -1,9 +1,11 @@
-// Hechima v0.11.1 — 変換セッション層 単体バンドルの型定義（手書き。cb 契約の明文化）。
-// 要 KeymapEngine >= 1.2.0（onHostAction の convert/confirm/insertAndConfirm 転送）。
+// Hechima v0.13.1 — 変換セッション層 単体バンドルの型定義（手書き。cb 契約の明文化）。
+// 要 KeymapEngine >= 1.4.0（英数モードの chord 解釈 + mutual 再入修正。
+// onHostAction の convert/confirm/insertAndConfirm 転送自体は >= 1.2.0）。
 // 対応バンドル: hechima.js / hechima.min.js（UMD、グローバル名 `Hechima`）
-//             + hechima-worker.js（Worker 本体、電文 v0。connectWorker で接続する）
+//             + hechima-worker.js（Worker 本体、へちま蔓 v0。connectWorker で接続する）
 // リファレンス: docs/hechima-session-embedding.md / docs/hechima-protocol.md
-// （logical-layout-labo リポジトリ）
+// （logical-layout-labo リポジトリ）。公開向けの最小ガイドは hechima リポジトリの
+// EMBEDDING.md（https://github.com/msonrm/hechima）。
 
 /** cb.show へ渡す表示文節。kind: yomi=未確定よみ / focus=注目文節 / other=非注目文節 */
 export interface SegmentView {
@@ -26,16 +28,56 @@ export interface SegmentView {
   additional?: { text: string; annotation: string }[];
   /** additional 内の選択位置（追加候補領域を選択中のみ。0 = 最上部） */
   additionalIndex?: number;
+  /**
+   * 一層目（既定で見せる候補）の件数（v0.14.0+、二層化しているときのみ）。
+   * UI は candidates.slice(0, foldCount) を既定の候補窓に描き、残り
+   * candidates.length - foldCount 件は「+n 件」等の到達手段として示す。
+   */
+  foldCount?: number;
+  /** 二層目を展開中か（v0.14.0+。expandCandidates() で true になる） */
+  expanded?: boolean;
 }
 
 /** cb.convert が返す文節。candidates 省略/空は key をそのまま候補にする */
 export interface ConvertSegment {
   key: string;
   candidates?: string[];
+  /**
+   * candidates と同じ長さ・同じ順の変換コスト（v0.14.0+、小さいほど上位）。
+   * 候補の二層化（FoldOptions）が使う。省略 = コスト不明 = 二層化しない。
+   * hechima-wasm v0.8.0+ が返す（connectWorker 経由なら自動で載る）。
+   */
+  costs?: number[];
 }
 
 /**
- * ホストが実装するコールバック契約（5 点）。ホストごとの差し替え点はここに閉じる。
+ * 候補の二層化設定（v0.14.0+）。createFep の第 2 引数 `{ fold }` で渡す。
+ *
+ * 変換候補は同音異義の当て字・人名で数十〜200 件に膨れる（実測: 「こうせい」94 件、
+ * 「ゆうき」184 件）。全部を同じ流れに並べると選びたい候補が紛れるので、
+ * **1 位からのコスト差**で「既定で見せる候補（一層目）」を切り出し、残りは
+ * expandCandidates() を呼ぶまで候補巡回に現れないようにする。
+ *
+ * コスト差を基準にするのは、それが「よみの性質」を自動的に反映するため:
+ * 一般語はコストが急に開くので少数で切れ（こうせい → 13 件）、人名系は候補が拮抗して
+ * いるので上限までは出る（ひろし → 15 件）。件数を固定するより実態に合う。
+ *
+ * **未指定 / costDelta 省略 = 二層化しない**（従来どおり全候補が 1 つの流れ）。
+ */
+export interface FoldOptions {
+  /** 一層目に入れる「1 位からのコスト差」の上限。省略/0 = 二層化しない */
+  costDelta?: number;
+  /** 一層目の最小件数（コスト差で切りすぎないための下限）。既定 5 */
+  minCandidates?: number;
+  /** 一層目の最大件数（拮抗しているよみで出しすぎないための上限）。既定 15 */
+  maxCandidates?: number;
+}
+
+/**
+ * ホストが実装するコールバック契約（必須 3 + 省略可 7 の計 10 点）。
+ * ホストごとの差し替え点はここに閉じる。必須は show / hide / commit の 3 点で、
+ * 残り（hostKey / convert / resize / learn / reconvert / retract / unlearn）は省略可
+ * ＝ 省略時は各項の記載どおり degrade する。
  *
  * - show(segments): 未確定表示を描画する（文節配列）。
  * - hide(): 表示消去（バッファが空になった）。
@@ -155,11 +197,41 @@ export interface FepSession {
    * 文書から該当テキストを取り除いておく（false 時の復元もホスト責務）。cb.reconvert 必須。
    */
   reconvert(surface: string): Promise<boolean>;
+  /**
+   * かな直接注入（v0.13.0+、フリック等の非キーボード入力フロント用）。
+   * idle = 合成開始 / 合成中 = 末尾 replaceCount 字を置換して連結（postModify の 1 字置換等）/
+   * 候補選択中 = 現候補を確定して新規合成 / よみ復帰中 = 連結。
+   * 候補選択中の置換・末尾字数を超える置換・engine（配列）合成中は false（現状維持）。
+   */
+  insertKana(kana: string, replaceCount?: number): boolean;
+  /**
+   * 二層目の展開（v0.14.0+）: 注目文節の隠れた候補（FoldOptions で切り出した残り）を
+   * 通常の候補巡回に加える。ホストが候補 UI の「もっと見る」やキーから呼ぶ
+   * （どのキーで呼ぶかはホストの方針 — selectCandidate と同じくキー routing には関与しない）。
+   * 既に展開済み・二層化なし・非 Phase 2 は false（現状維持）。
+   */
+  expandCandidates(): boolean;
+  /**
+   * 二層目の折り畳み（v0.14.0+）: expandCandidates() を取り消して一層目に戻す。
+   * **閉じる前の選択位置が一層目に収まるならそれを保ち**（二層目で見つけて選んだものが
+   * 一層目にもあるなら持ち帰る）、収まらないときだけ展開した時点の位置へ戻す。
+   * 未展開・非 Phase 2 は false（現状維持）。
+   */
+  collapseCandidates(): boolean;
+  /**
+   * 二層化設定の差し替え（v0.14.0+）。null = 二層化を止める。
+   * 表示中の候補にも即座に反映される（設定 UI から変えたときに再変換を要求しない）。
+   * 巡回範囲の外に出た選択位置は先頭へ戻る。
+   */
+  setFold(opts: FoldOptions | null): void;
   reset(): void;
 }
 
-/** 変換セッションを作る */
-export function createFep(cb: SessionCallbacks): FepSession;
+/**
+ * 変換セッションを作る。
+ * opts.fold を渡すと候補を二層化する（省略 = 従来どおり全候補を 1 つの流れで巡回）。
+ */
+export function createFep(cb: SessionCallbacks, opts?: { fold?: FoldOptions }): FepSession;
 
 /** 内蔵ローマ字リゾルバ（テスト・診断用に公開） */
 export function resolveRomaji(kana: string, pend: string, flush: boolean): { kana: string; pend: string };
@@ -170,15 +242,20 @@ export function fallbackConvert(yomi: string): ConvertSegment[];
 /** このバンドルのバージョン（取り込み側が記録する用） */
 export const version: string;
 
-// ---- hechima-worker（電文 v0）。仕様の正典: docs/hechima-protocol.md ----
+// ---- hechima-worker（へちま蔓 v0）。仕様の正典: docs/hechima-protocol.md ----
 
-/** 電文プロトコル版数（ready.protocol と一致する） */
+/** へちま蔓プロトコル版数（ready.protocol と一致する） */
 export const HECHIMA_PROTOCOL_VERSION: number;
 
-/** 変換結果の 1 文節（電文ペイロード）。key = よみ、candidates = 候補（先頭が第一候補） */
+/** 変換結果の 1 文節（へちま蔓ペイロード）。key = よみ、candidates = 候補（先頭が第一候補） */
 export interface WireSegment {
   key: string;
   candidates: string[];
+  /**
+   * candidates と同じ長さ・同じ順の変換コスト（v0.14.0+、小さいほど上位）。
+   * エンジンが返さないなら省略される（受け手は「コスト不明」= 二層化しない、として扱う）。
+   */
+  costs?: number[];
 }
 
 /** ホスト → Worker: 初期化。パスは worker スクリプト位置からの相対 URL（省略 = ./hechima-wasm.js / ./mozc.data）。learning 省略 = true、scope 省略 = "default"（v0.8.0+） */
@@ -239,7 +316,7 @@ export interface WorkerInitPaths {
   scope?: string;
 }
 
-/** init 完了時の情報（ready 電文の中身） */
+/** init 完了時の情報（ready メッセージの中身） */
 export interface ReadyInfo {
   protocol: number;
   version: string;

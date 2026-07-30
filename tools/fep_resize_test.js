@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// 文節伸縮 (hechima v0.12.0 + keymap-engine v1.4.0 + hechima-wasm v0.2.0) の headless 回帰。
+// 文節伸縮 (hechima v0.16.0 + keymap-engine v1.6.0 + hechima-wasm v0.2.0) の headless 回帰。
 // 薙刀式 space+T/Y → editSegmentLeft/Right → cb.resize → Mozc ResizeSegment の追随
 // (labo 指示書 docs/hechima_v020_quubee_handoff.md §5 + v0.3.0 追随 docs/hechima_v030_quubee_handoff.md)。
 //
@@ -62,8 +62,8 @@ const SEGS2 = [
 ];
 
 (async () => {
-    ok(H.version === '0.12.0', `hechima.version = 0.12.0 (got ${H.version})`);
-    ok(K.version === '1.4.0', `KeymapEngine.version = 1.4.0 (got ${K.version}) — hechima 0.12.0 とセット必須`);
+    ok(H.version === '0.16.0', `hechima.version = 0.16.0 (got ${H.version})`);
+    ok(K.version === '1.6.0', `KeymapEngine.version = 1.6.0 (got ${K.version}) — hechima 0.16.0 とセット必須`);
 
     // ---- Part A1: Phase 2 + editSegment* → cb.resize(focus, ±1)・表示差し替え ----
     {

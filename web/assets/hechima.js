@@ -3,7 +3,7 @@
 })(this, function(exports) {
 	Object.defineProperty(exports, Symbol.toStringTag, { value: "Module" });
 	//#region src/hechima/version.ts
-	const HECHIMA_VERSION = "0.12.0";
+	const HECHIMA_VERSION = "0.16.0";
 	//#endregion
 	//#region src/hechima/session.ts
 	const ROMAJI = {
@@ -319,8 +319,11 @@
 	*
 	* よみ入力 → 変換 (非同期・世代トークンで in-flight 破棄) → 複数文節の候補選択
 	* (←→ 移動・↑↓/Space 候補・Enter 結合確定) → 確定、を 1 つの状態機械で持つ。
+	*
+	* opts.fold を渡すと候補を二層化する（省略 = 従来どおり全候補を 1 つの流れで巡回）。
 	*/
-	function createFep(cb) {
+	function createFep(cb, opts) {
+		let foldOpts = opts?.fold;
 		let active = false;
 		let kana = "";
 		let pend = "";
@@ -334,6 +337,19 @@
 		const resetAddl = () => {
 			addlShown = 0;
 			addlSel = null;
+		};
+		const repend = () => {
+			if (eiji || pend) return;
+			const run = /[a-z]+$/.exec(kana)?.[0];
+			if (!run) return;
+			for (let i = 0; i < run.length; i++) {
+				const tail = run.slice(i);
+				if (PREFIXES.has(tail)) {
+					kana = kana.slice(0, kana.length - tail.length);
+					pend = tail;
+					return;
+				}
+			}
 		};
 		const clear = () => {
 			kana = "";
@@ -391,7 +407,7 @@
 				return;
 			}
 			const s = segs[focus];
-			s.idx = (s.idx + 1) % s.candidates.length;
+			s.idx = (s.idx + 1) % candRange(s);
 			render();
 		}
 		/** 前候補（↑ / 内蔵経路の Shift+Space）。通常候補の先頭でさらに上 = 追加候補を段階展開 */
@@ -410,7 +426,8 @@
 				render();
 				return;
 			}
-			s.idx = (s.idx + s.candidates.length - 1) % s.candidates.length;
+			const range = candRange(s);
+			s.idx = (s.idx + range - 1) % range;
 			render();
 		}
 		function render() {
@@ -419,6 +436,10 @@
 				kind: i === focus ? "focus" : "other",
 				candidates: s.candidates.slice(),
 				candidateIndex: s.idx,
+				...s.fold < s.candidates.length || s.expanded ? {
+					foldCount: s.fold,
+					expanded: s.expanded
+				} : {},
 				...i === focus && addlShown > 0 ? {
 					additional: addlVisible(),
 					...addlSel !== null ? { additionalIndex: addlSel } : {}
@@ -492,12 +513,41 @@
 			return true;
 		}
 		function ingestSegment(s) {
-			const cands = s.candidates && s.candidates.length ? [...new Set(s.candidates)] : [s.key];
+			const src = s.candidates && s.candidates.length ? s.candidates : [s.key];
+			const hasCosts = Array.isArray(s.costs) && s.costs.length === src.length;
+			const cands = [];
+			const costs = [];
+			const seen = /* @__PURE__ */ new Set();
+			for (let i = 0; i < src.length; i++) {
+				if (seen.has(src[i])) continue;
+				seen.add(src[i]);
+				cands.push(src[i]);
+				if (hasCosts) costs.push(s.costs[i]);
+			}
+			const cs = hasCosts ? costs : null;
 			return {
 				key: s.key,
 				candidates: cands,
-				idx: 0
+				idx: 0,
+				fold: foldCount(cands, cs),
+				expanded: false,
+				expandedFrom: 0,
+				costs: cs
 			};
+		}
+		function foldCount(cands, costs) {
+			const delta = foldOpts?.costDelta ?? 0;
+			if (!delta || !costs || !costs.length) return cands.length;
+			const base = costs[0];
+			let n = 0;
+			while (n < costs.length && costs[n] - base <= delta) n++;
+			const lo = Math.max(1, foldOpts?.minCandidates ?? 5);
+			const hi = Math.max(lo, foldOpts?.maxCandidates ?? 15);
+			return Math.min(cands.length, Math.min(hi, Math.max(lo, n)));
+		}
+		/** 候補巡回の範囲（一層目のみ / 展開後は全件） */
+		function candRange(s) {
+			return s.expanded ? s.candidates.length : Math.max(1, s.fold);
 		}
 		function startConvert() {
 			kana = resolveRomaji(kana, pend, true).kana;
@@ -595,6 +645,11 @@
 		}
 		function handleEngineAction(action) {
 			const t = action.type;
+			if (t === "insertSpace") {
+				if (!(!segs && !composing() && !(engine && engine.getState().isComposing))) return handleEngineAction({ type: "convert" });
+				cb.commit(action.shifted ? " " : "　");
+				return true;
+			}
 			if (t === "editSegmentLeft" || t === "editSegmentRight") {
 				if (segs && cb.resize) startResize(t === "editSegmentRight" ? 1 : -1);
 				return true;
@@ -733,8 +788,11 @@
 			if (k === "Backspace") {
 				if (!composing()) return false;
 				if (segs) backToYomi();
-				else if (pend) pend = pend.slice(0, -1);
-				else kana = Array.from(kana).slice(0, -1).join("");
+				else {
+					if (pend) pend = pend.slice(0, -1);
+					else kana = Array.from(kana).slice(0, -1).join("");
+					repend();
+				}
 				if (!composing()) eiji = false;
 				render();
 				return true;
@@ -800,6 +858,29 @@
 			}
 			return composing();
 		}
+		function insertKana(text, replaceCount = 0) {
+			if (!active) return false;
+			if (typeof text !== "string" || text.length === 0) return false;
+			if (!Number.isInteger(replaceCount) || replaceCount < 0) return false;
+			if (engine && engine.getState().isComposing) return false;
+			if (segs) {
+				if (replaceCount > 0) return false;
+				commit(joined());
+			}
+			if (pend) {
+				kana = resolveRomaji(kana, pend, true).kana;
+				pend = "";
+			}
+			if (replaceCount > 0) {
+				const chars = Array.from(kana);
+				if (chars.length < replaceCount) return false;
+				kana = chars.slice(0, chars.length - replaceCount).join("");
+			}
+			kana += text;
+			genId++;
+			render();
+			return true;
+		}
 		return {
 			get active() {
 				return active;
@@ -839,12 +920,41 @@
 				const s = segs[focus];
 				if (!Number.isInteger(index) || index < 0 || index >= s.candidates.length) return false;
 				addlSel = null;
+				if (index >= s.fold) s.expanded = true;
 				s.idx = index;
+				render();
+				return true;
+			},
+			expandCandidates() {
+				if (!segs) return false;
+				const s = segs[focus];
+				if (s.expanded || s.fold >= s.candidates.length) return false;
+				s.expandedFrom = s.idx;
+				s.expanded = true;
+				render();
+				return true;
+			},
+			setFold(o) {
+				foldOpts = o ?? void 0;
+				if (!segs) return;
+				for (const s of segs) {
+					s.fold = foldCount(s.candidates, s.costs);
+					if (s.idx >= candRange(s)) s.idx = 0;
+				}
+				render();
+			},
+			collapseCandidates() {
+				if (!segs) return false;
+				const s = segs[focus];
+				if (!s.expanded) return false;
+				s.expanded = false;
+				if (s.idx >= s.fold) s.idx = Math.min(s.expandedFrom, Math.max(0, s.fold - 1));
 				render();
 				return true;
 			},
 			undoCommit,
 			reconvert,
+			insertKana,
 			reset() {
 				clear();
 				if (engine) try {
@@ -1053,7 +1163,7 @@
 	}
 	//#endregion
 	//#region src/hechima/protocol.ts
-	/** 電文プロトコル版数。ready 応答の `protocol` で通知される */
+	/** へちま蔓プロトコル版数。ready 応答の `protocol` で通知される */
 	const HECHIMA_PROTOCOL_VERSION = 0;
 	//#endregion
 	//#region src/hechima/index.ts

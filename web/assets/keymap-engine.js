@@ -940,7 +940,11 @@
 	function expandKeymap(def) {
 		const inputMappings = expandInputMappings(def.inputBase, def.suffixRules, def.inputMappings);
 		const prefixSet = buildPrefixSet(inputMappings);
-		const characterMap = def.behavior.type === "sequential" ? def.behavior.characterMap : {};
+		const charMapBase = def.inputBase === "romaji" ? h2zMapUS : {};
+		const characterMap = def.behavior.type === "sequential" ? {
+			...charMapBase,
+			...def.behavior.characterMap
+		} : {};
 		const chordData = def.behavior.type === "chord" ? expandChordData(def.behavior.config) : void 0;
 		return {
 			definition: def,
@@ -1184,7 +1188,7 @@
 	}
 	//#endregion
 	//#region src/engine/version.ts
-	const ENGINE_VERSION = "1.4.0";
+	const ENGINE_VERSION = "1.6.0";
 	//#endregion
 	//#region src/engine/key-router.ts
 	/** Route a KeyEvent to a KeyAction based on the expanded keymap */
@@ -1233,7 +1237,7 @@
 			case HID.ENTER:
 			case HID.TAB: return { type: "confirm" };
 			case HID.ESCAPE: return { type: "cancel" };
-			case HID.SPACE: return { type: "confirm" };
+			case HID.SPACE: return { type: "convert" };
 			case HID.BACKSPACE: return { type: "deleteBack" };
 			default: return null;
 		}
@@ -1358,6 +1362,10 @@
 				return true;
 			}
 			return false;
+		}
+		/** BS の pending 復帰用: 未解決文字列をバッファ先頭へ戻す（repend が使う） */
+		restore(text) {
+			this.buffer = text + this.buffer;
 		}
 		/** Get current pending buffer text (for display) */
 		get pending() {
@@ -2157,13 +2165,17 @@
 					this.confirmedText += action.text;
 					break;
 				case "insertSpace":
+					if (this.onHostAction?.(action)) break;
 					if (this.inputMode === "japanese") this.confirmedText += action.shifted ? " " : "　";
 					else this.confirmedText += " ";
 					break;
 				case "convert":
 					if (this.onHostAction?.(action)) break;
 					if (this.composingKana.length > 0 || !this.buffer.isEmpty) this.confirmComposition();
-					else this.confirmedText += this.inputMode === "japanese" ? "　" : " ";
+					else this.executeAction({
+						type: "insertSpace",
+						shifted: false
+					});
 					break;
 				case "chordInput":
 					this.chordBuffer?.keyDown(action.key);
@@ -2217,12 +2229,35 @@
 			this.buffer.reset();
 			this.chordBuffer?.reset();
 		}
+		/**
+		* BS で「素通しされた未解決ローマ字」まで戻ったとき、それを逐次バッファへ復帰させる (v1.6.0)。
+		*
+		* greedy マッチは語彙外の先頭を素通しで composingKana に積む（例: dka → 「dか」。
+		* dk が語彙外なので d が素通しされた）。BS で「d」まで戻してもそれは解決済みかな扱いに
+		* なり、続く a が「dあ」になってしまう。実 IME は未解決チャンクの raw を保つので「だ」に
+		* なる — その挙動に合わせる。hechima セッション層（内蔵ローマ字）の v0.13.1 と同じ設計で、
+		* 戻すのは「続きを待てる」最長の末尾だけ（kt なら t、sh なら sh）。
+		*/
+		repend() {
+			if (!this.buffer.isEmpty) return;
+			const run = /[a-zA-Z]+$/.exec(this.composingKana)?.[0];
+			if (!run) return;
+			for (let i = 0; i < run.length; i++) {
+				const tail = run.slice(i);
+				if (this.keymap.prefixSet.has(tail)) {
+					this.composingKana = this.composingKana.slice(0, this.composingKana.length - tail.length);
+					this.buffer.restore(tail);
+					return;
+				}
+			}
+		}
 		handleDeleteBack() {
 			if (this.buffer.deleteBack()) return;
 			if (this.composingKana.length > 0) {
 				const chars = [...this.composingKana];
 				chars.pop();
 				this.composingKana = chars.join("");
+				this.repend();
 				return;
 			}
 			if (this.confirmedText.length > 0) {

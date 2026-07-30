@@ -158,6 +158,14 @@ labo (msonrm/logical-layout-labo) が単体 UMD ビルド出口 + chord golden �
 - ☐ **残 (別タスク・ユーザー判断で後回し)**: 薙刀式の編集系二重経路 (T/Y カーソル・U/BS)。web エンジンが
   KeyAction を surface せず・カーソル模型無しのため、labo フック追加 or QuuBee 側 specialActions 翻訳が要る。
 - ☐ **ブラウザ実機確認 (残)**: 設定 UI / NICOLA・月・AZIK・Colemak / ステータス即時反映。確認後にデプロイ。
+- ✓ **逐次系の Space = 変換 (hechima v0.16.0 + keymap-engine v1.6.0 追随、2026-07-30)**: AZIK/月/Colemak/
+  JSON ローマ字で合成中 Space が「よみのまま確定」だった実害 (ユーザー実機報告) を 2 点セット差し替えで
+  根治。句読点 `, .` → `、。` と BS 後 pending 復帰も同梱。回帰 = 新設 `tools/fep_space_test.js`
+  (旧版で 16 件 FAIL する実打鍵ガード)・全 80 本 PASS。辞書は事前圧縮配信 (mozc.data.gz) へ。
+  経緯 = CHANGELOG 2026-07-30 / 指示書 = labo の docs/hechima_v0160_quubee_handoff.md。
+  ☐ **本番での実機 6 点確認 (指示書 §3)**: ① AZIK「kyouha」+Space = 候補が出る ② Space 2 度目 = 次候補
+  ③ 空バッファ Space = 全角スペースが VRAM に入り表示が乱れない ④ Colemak/ローマ字の `, .` = 、。
+  ⑤ 月配列の打ち損じ → BS → 続き打鍵で合成復活 ⑥ 薙刀式が従来どおり (回帰)。
 
 **FEP の残キュー (急がない)**: 候補一覧窓 (退避は複数行対応済みで拡張容易) / 文節伸縮
 Shift+←→ (ResizeSegment、ラッパー API 追加要) / FEP 流派 API (INT 2Fh / MS$KANJI) の需要

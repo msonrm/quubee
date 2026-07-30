@@ -1,6 +1,35 @@
 # CHANGELOG
 
-## [hechima v0.12.0 追随 — 薙刀式 相互シフト化 (judgment=mutual) + 機能キー実挙動修正] — 2026-07-19
+## [hechima v0.16.0 追随 — 逐次系の Space を変換に + 辞書の事前圧縮配信] — 2026-07-30
+
+labo 指示書 docs/hechima_v0160_quubee_handoff.md (labo 側) への追随。**AZIK / 月配列 / Colemak /
+JSON ローマ字を選ぶと、合成中の Space が「変換」ではなく「よみのまま確定」になる**実害
+(ユーザー実機報告) の根治が本体。真因は keymap-engine が composing 中の Space に `confirm` を
+出していたこと — KeymapEngine 単体 (漢字変換なし) では正しい既定だが、hechima と合成すると
+「変換せずに確定」に化ける = **層を合成したときに前提が失効していた**。QuuBee 側はコード変更なし
+(cb も現行のまま)・**2 点セット差し替えのみ**。
+
+- **差し替え (同一コミット必須)**: hechima.js **0.12.0 → 0.16.0** / keymap-engine.js
+  **1.4.0 → 1.6.0** (labo main **e25d4fe**、ローカル checkout から vendoring)。keymaps JSON は
+  **不変** (md5 突き合わせで確認 = 12 本すべて同一)。hechima-wasm/mozc.data は v0.2.0 据え置き。
+  hechima.d.ts も更新。**罠**: engine だけ上げると空バッファ Space の `insertSpace` を旧 hechima が
+  知らず全角スペースが未確定表示に居座る / hechima だけ上げると旧 engine が `confirm` を出し続けて
+  主症状が残る (どちらも部分差し替えでは気づきにくい)。
+- **挙動の変わり方**: 逐次系で 合成中 Space = 変換 / 候補選択中 Space = 次候補 / 空バッファ Space =
+  全角スペースを `cb.commit`(Shift+Space = 半角)。JSON ローマ字の `, .` → `、。` (組み込みローマ字
+  だけが characterMap を持っていた非対称の解消)。BS 後の pending 復帰 (「dか」→ BS →「d」+ a →
+  「だ」)。薙刀式・NICOLA US は space を相互シフトとして宣言済みなので**変化なし**。
+  v0.13.0〜0.15.0 の追加 API (`insertKana` / 候補の二層化 `setFold`) は渡さない限り挙動不変。
+- **回帰**: 版アサート追随 (keymap_engine_test / fep_resize_test) + **新設 `tools/fep_space_test.js`**
+  — 実打鍵 (fep.feed → engine → onHostAction → hechima) で Space 意味論 / 句読点 / pending 復帰 /
+  薙刀式の非回帰を固定。**旧版 (0.12.0 + 1.4.0) に当てると 16 件 FAIL する**ことを確認してから採用
+  (報告どおり `commits=["きょうは"]` = よみのまま確定を再現)。全体回帰 **80 本 PASS**。
+- **辞書の事前圧縮配信 (v0.15.0 相当を QuuBee の worker へ移植)**: `mozc.data.gz`
+  (18,890,236 → 13,188,234 バイト = 12.6MiB) を `web/player/mozc-worker.js` が先に試し、gzip
+  マジック不一致 / 404 / `DecompressionStream` 非対応なら素の `mozc.data` へ自動フォールバック。
+  CDN の自動圧縮は辞書に効かない (拡張子から content-type が決まらず圧縮対象の型一覧に入らない)
+  ため、圧縮した実体を自分で持つ。展開結果が素の辞書と SHA-256 一致することを確認。deploy.sh が
+  dist に無ければ生成する (素の辞書も非対応ブラウザ用に残す)。`.gz` は gitignore (辞書と同じ扱い)。
 
 labo 指示書 docs/hechima_v0120_quubee_handoff.md (labo 側) への追随。薙刀式の同時押し判定が
 本家仕様と違っていた (80ms 時間窓は解釈違い。正しくは作者一次資料の「相互シフト」= ミリ秒を

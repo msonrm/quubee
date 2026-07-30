@@ -223,13 +223,16 @@ PC-98 のフリーソフト/同人 CG 文化で標準的に使われた 2 大画
   `web/src/engine` を rolldown で 1 ファイルに UMD バンドルした単体成果物 (`npm run build:engine` の出力
   `web/public/engine/keymap-engine.js`)。**QuuBee は fork せず成果物 1 ファイルを vendoring** する
   (mozc.data と同じ「差し替えで取り込む」方針)。エンジンの正しさの正典は labo の golden テスト。
-- **取り込みバージョン**: `KeymapEngine.version` = **1.4.0** (labo main **84199d5**。1.1.0 で
+- **取り込みバージョン**: `KeymapEngine.version` = **1.6.0** (labo main **e25d4fe**。1.1.0 で
   `onHostAction` 追加、1.2.0 で convert/confirm/insertAndConfirm も転送、1.3.0 で同時押し判定モード
   `judgment: "mutual"` = 相互シフト (時間不使用)、1.4.0 で英数モードの chord 解釈 + mutual 再入 reset
-  修正 — **hechima 0.12.0 とセット必須**) / keymap-format **1.0**。keymaps も labo main **84199d5**
-  時点 (**薙刀式 v18** = space+W/R の め⇔ね 入れ替え。作者 大岡俊彦氏 発表。naginata JSON は
-  `chordConfig.judgment = "mutual"` 入り — **旧エンジン ≤1.2.0 は judgment を黙って無視して時間窓の
-  まま動く**ため、engine / hechima / naginata JSON は 3 点セットで差し替えること)。
+  修正、1.6.0 で**逐次系 (AZIK/月/Colemak/JSON ローマ字) の Space を変換にする** (合成中 = convert /
+  候補選択中 = 次候補 / 空バッファ = `insertSpace`) + `inputBase: romaji` に characterMap を既定で
+  敷く (`, .` → `、。`) + BS 後の pending 復帰 — **hechima 0.16.0 とセット必須**) /
+  keymap-format **1.0**。keymaps は labo main **84199d5** 時点で不変 (**薙刀式 v18** = space+W/R の
+  め⇔ね 入れ替え。作者 大岡俊彦氏 発表。naginata JSON は `chordConfig.judgment = "mutual"` 入り —
+  **旧エンジン ≤1.2.0 は judgment を黙って無視して時間窓のまま動く**ため、engine と hechima は
+  必ずセットで差し替えること)。
   更新時は labo で `npm run build:engine` → `web/public/engine/keymap-engine.js` と `web/public/keymaps/*.json`
   を本ディレクトリへコピーし、本項の version/commit を更新する。受け入れ検査 = `tools/keymap_engine_test.js`。
 - 依存: React/DOM/Next 非依存の純ロジック (ブラウザ `<script>` / Worker `importScripts` / node `require` 対応)。
@@ -244,18 +247,22 @@ PC-98 のフリーソフト/同人 CG 文化で標準的に使われた 2 大画
 vendoring** する (keymap-engine と同じ差し替えモデル)。QuuBee 固有物は bridge.js の cb 実装のみ。
 
 - **hechima.js** (変換セッション層): Copyright © 2026 Narumi Masao、**MIT**。UMD 単体成果物
-  (グローバル `Hechima`)。取り込み = **`Hechima.version` 0.12.0** (Release **hechima-v0.12.0** / labo
-  main **84199d5** の `web/public/hechima/hechima.js`。0.2.0 で文節伸縮 `cb.resize` +
+  (グローバル `Hechima`)。取り込み = **`Hechima.version` 0.16.0** (Release **hechima-v0.16.0** / labo
+  main **e25d4fe** の `web/public/hechima/hechima.js`。0.2.0 で文節伸縮 `cb.resize` +
   editSegmentLeft/Right、0.3.0 で Phase 2 の chord routing 修正 + Shift+←→ 伸縮、0.8.1 で Phase 2 の
-  BS/Escape = よみに戻す、0.12.0 で合成中 confirm = 無変換即確定 (薙刀式 V+M)。
-  **keymap-engine 1.4.0 とセット必須**)。
+  BS/Escape = よみに戻す、0.12.0 で合成中 confirm = 無変換即確定 (薙刀式 V+M)、0.13.1 で内蔵ローマ字の
+  BS 後 pending 復帰、0.14.0 で候補の二層化 API (`setFold` 等 — QuuBee は未使用 = 挙動不変)、
+  0.16.0 で engine の `insertSpace` 受け入れ (空バッファ Space → 全角スペースを commit / Shift = 半角)。
+  **keymap-engine 1.6.0 とセット必須** — engine だけ上げると全角スペースが未確定表示に居座り、
+  hechima だけ上げると逐次系の Space が「よみのまま確定」のまま残る)。
 - **hechima-wasm.{js,wasm} + mozc.data** (かな漢字変換エンジン): fcitx-contrib/fcitx5-mozc 由来の
   Emscripten ビルド、**BSD-3・powered by Mozc** (mozc 本体 = Google、BSD-3)。取り込み = Release
   **hechima-wasm-v0.2.0** (labo **29b6271** / fcitx5-mozc **8b3d34c** / mozc **0651fbc** / emsdk 3.1.69。
   0.2.0 で `hechima_resize` = Mozc ResizeSegment 追加)。辞書 mozc.data (~19MB) は FEP 初回 ON で
-  遅延 fetch。
+  遅延 fetch。配信は事前圧縮版 `mozc.data.gz` (~12.6MiB、同一成果物を gzip したもの = ライセンスも同一)
+  を優先し、無い環境では素の mozc.data へ自動フォールバックする (deploy.sh が dist で生成)。
 - 更新時は Release 添付の BUILD_INFO.txt と本項・`web/player/mozc-worker.js` 冒頭の pin 記載を揃える。
-  受け入れ検査 = `tools/fep_mozc_test.js` / `tools/fep_resize_test.js`。
+  受け入れ検査 = `tools/fep_mozc_test.js` / `tools/fep_resize_test.js` / `tools/fep_space_test.js`。
 
 ---
 

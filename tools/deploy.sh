@@ -32,6 +32,15 @@ for f in assets/hechima-wasm.js assets/hechima-wasm.wasm assets/mozc.data; do
     [ -f "$DIST/$f" ] || echo "⚠ 警告: web/$f が無い — 本番 FEP のかな漢字変換が無効になります"
 done
 
+# 辞書の事前圧縮版 (mozc.data.gz、18.9MB → 12.6MiB)。CDN の自動圧縮は辞書に効かない (拡張子から
+# content-type が決まらず圧縮対象の型一覧から外れる) ので、圧縮した実体を自分で配る。worker
+# (mozc-worker.js) は .gz を先に試し、無ければ素の mozc.data に戻るので同梱は任意 — ただし
+# 初回ロードが 1.5 倍重くなるため、ここで無ければ作る (素の辞書は非対応ブラウザ用に残す)。
+if [ -f "$DIST/assets/mozc.data" ] && [ ! -f "$DIST/assets/mozc.data.gz" ]; then
+    echo "mozc.data.gz を生成 (辞書の事前圧縮配信)..."
+    gzip -9 -c "$DIST/assets/mozc.data" > "$DIST/assets/mozc.data.gz"
+fi
+
 # 同梱バイナリ (font.bmp=修正BSD / soundfont.sf2 / PMD / リズム音色) の帰属・ライセンス全文を
 # 公開ビルドにも届ける。BSD のバイナリ再配布条項 (著作権表示を「頒布物に付属する材料」に再現する)
 # を、サイト自身が CREDITS.md + licenses/ を配ることで満たす。歓迎パネルの「CREDITS.md」リンクの実体。

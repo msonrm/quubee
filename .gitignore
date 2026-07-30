@@ -68,6 +68,7 @@ Thumbs.db
 /web/assets/hechima-wasm.js
 /web/assets/hechima-wasm.wasm
 /web/assets/mozc.data
+/web/assets/mozc.data.gz
 /tools/mcp/node_modules/
 /tools/mcp/package-lock.json
 /tools/mcp/dist/

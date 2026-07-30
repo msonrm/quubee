@@ -16,6 +16,7 @@
 //   → {type:'result', id, segments}       convert と同形 / null=伸縮不能 (呼び元は現状維持)
 //
 // 辞書 mozc.data (~19MB) は初回 init でのみ fetch (FEP を使わないユーザーは一切取得しない)。
+// 事前圧縮版 mozc.data.gz があればそちらを優先する (12.8MB。無ければ素の辞書へ自動フォールバック)。
 //
 // pin 版 (labo hechima-wasm-v0.2.0, BUILD_INFO.txt より): labo 29b6271 /
 // fcitx5-mozc 8b3d34c / mozc 0651fbc / emsdk 3.1.69。成果物差し替え時はこの版も更新する。
@@ -26,9 +27,22 @@ importScripts('../assets/hechima-wasm.js');
 
 let M = null;
 
-async function init() {
-    const res = await fetch('../assets/mozc.data');
-    if (!res.ok) throw new Error(`mozc.data fetch failed (HTTP ${res.status})`);
+// 辞書を取得する。事前圧縮版 (mozc.data.gz) があればそちらを使う (18.9MB → 12.8MB)。
+// 辞書は大きいうえ CDN の自動圧縮が効かない (拡張子から content-type が決まらず、圧縮対象の型一覧から
+// 外れる — Cloudflare Pages で labo が実測)。ホスト側のヘッダ設定に頼ると「どこにでも置ける」前提が
+// 崩れるので、圧縮した実体を自分で持つ (deploy.sh が dist へ同梱)。.gz が無い / gzip でない /
+// DecompressionStream が無い環境では素の mozc.data に戻る。labo hechima-worker v0.15.0 と同方式。
+async function fetchDictionary(url) {
+    if (typeof DecompressionStream === 'function') {
+        try { return await fetchDictionaryBody(url + '.gz', true); }
+        catch (e) { console.debug('[mozc-worker] 事前圧縮版を使わず素の辞書へ:', (e && e.message) || e); }
+    }
+    return fetchDictionaryBody(url, false);
+}
+
+async function fetchDictionaryBody(url, gzipped) {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`${url} fetch failed (HTTP ${res.status})`);
     const total = Number(res.headers.get('content-length')) || 0;
     let buf;
     if (res.body && res.body.getReader) {
@@ -48,9 +62,21 @@ async function init() {
     } else {
         buf = new Uint8Array(await res.arrayBuffer());
     }
-    // Cloudflare Pages は未配備パスにも 200+HTML を返す (SPA フォールバック) ので、
-    // 先頭が '<' なら辞書ではない (soundfont の RIFF 検査と同じ発想)。
+    if (gzipped) {
+        // Cloudflare Pages は未配備パスにも 200+HTML を返すので、gzip マジックで「.gz ではない」を弾く
+        // (CDN が透過的に展開して返す構成でもここで落ち、呼び元が素の辞書へ戻る)。
+        if (buf.length < 2 || buf[0] !== 0x1F || buf[1] !== 0x8B) throw new Error(`${url} は gzip ではない`);
+        const stream = new ReadableStream({ start(c) { c.enqueue(buf); c.close(); } })
+            .pipeThrough(new DecompressionStream('gzip'));
+        buf = new Uint8Array(await new Response(stream).arrayBuffer());
+    }
+    // 未配備で HTML が返った場合の検査 (soundfont の RIFF 検査と同じ発想)。
     if (!buf.length || buf[0] === 0x3C) throw new Error('mozc.data が不正 (未配備で HTML が返った可能性)');
+    return buf;
+}
+
+async function init() {
+    const buf = await fetchDictionary('../assets/mozc.data');
 
     // ホストのタイムゾーンを cctz の固定オフセットゾーン名 (Fixed/UTC±hh:mm:ss) で注入する。
     // wasm には zoneinfo が無く TZ 未設定だと absl/cctz が UTC に落ち、「いま」「きょう」の
