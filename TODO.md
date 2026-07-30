@@ -163,9 +163,10 @@ labo (msonrm/logical-layout-labo) が単体 UMD ビルド出口 + chord golden �
   根治。句読点 `, .` → `、。` と BS 後 pending 復帰も同梱。回帰 = 新設 `tools/fep_space_test.js`
   (旧版で 16 件 FAIL する実打鍵ガード)・全 80 本 PASS。辞書は事前圧縮配信 (mozc.data.gz) へ。
   経緯 = CHANGELOG 2026-07-30 / 指示書 = labo の docs/hechima_v0160_quubee_handoff.md。
-  ☐ **本番での実機 6 点確認 (指示書 §3)**: ① AZIK「kyouha」+Space = 候補が出る ② Space 2 度目 = 次候補
-  ③ 空バッファ Space = 全角スペースが VRAM に入り表示が乱れない ④ Colemak/ローマ字の `, .` = 、。
-  ⑤ 月配列の打ち損じ → BS → 続き打鍵で合成復活 ⑥ 薙刀式が従来どおり (回帰)。
+  ✓ **本番での実機 6 点確認 (指示書 §3) 全部問題なし (ユーザー、2026-07-30)** = **クローズ**:
+  ① AZIK「kyouha」+Space = 候補が出る ② Space 2 度目 = 次候補 ③ 空バッファ Space = 全角スペースが
+  VRAM に入り表示が乱れない ④ Colemak/ローマ字の `, .` = 、。 ⑤ 月配列の打ち損じ → BS → 続き打鍵で
+  合成復活 ⑥ 薙刀式が従来どおり (回帰)。
 
 **FEP の残キュー (急がない)**: 候補一覧窓 (退避は複数行対応済みで拡張容易) / 文節伸縮
 Shift+←→ (ResizeSegment、ラッパー API 追加要) / FEP 流派 API (INT 2Fh / MS$KANJI) の需要

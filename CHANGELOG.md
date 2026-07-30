@@ -30,6 +30,12 @@ JSON ローマ字を選ぶと、合成中の Space が「変換」ではなく�
   CDN の自動圧縮は辞書に効かない (拡張子から content-type が決まらず圧縮対象の型一覧に入らない)
   ため、圧縮した実体を自分で持つ。展開結果が素の辞書と SHA-256 一致することを確認。deploy.sh が
   dist に無ければ生成する (素の辞書も非対応ブラウザ用に残す)。`.gz` は gitignore (辞書と同じ扱い)。
+- 検証: 同日 push (50c6d44) + Cloudflare Pages デプロイ・本番アセット検証済 (0.16.0 / 1.6.0 /
+  `mozc.data.gz` = content-type application/gzip・Content-Encoding なし・実体 1f 8b・GET に
+  content-length あり)。wasm は C 側変更なしのため再ビルドせず (07-19 デプロイと同一成果物)。
+  **ブラウザ実機 6 点 (指示書 §3: AZIK の Space = 変換 / 2 度目 = 次候補 / 空バッファ Space の全角
+  スペース / ローマ字系の `, .` / 月配列の BS 後復帰 / 薙刀式の非回帰) もユーザー確認済・問題なし
+  (2026-07-30) = v0.16.0 追随クローズ**。
 
 labo 指示書 docs/hechima_v0120_quubee_handoff.md (labo 側) への追随。薙刀式の同時押し判定が
 本家仕様と違っていた (80ms 時間窓は解釈違い。正しくは作者一次資料の「相互シフト」= ミリ秒を
