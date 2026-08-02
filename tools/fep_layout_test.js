@@ -26,9 +26,12 @@ const cb = {
 };
 const fep = qbFepCreate(cb);
 
-// naginata_us を実ロードしてエンジン装着
-const raw = JSON.parse(fs.readFileSync(path.join(WEB, 'assets', 'keymaps', 'naginata_us.json'), 'utf8'));
-const engine = new K.InputEngine(K.decodeKeymap(raw));
+// 薙刀式を実ロードしてエンジン装着。keymap-format v2 から JIS/US は配列でなくレイアウトの選択
+// (1 配列 1 ファイル + { layout })。本番 bridge.js の setFepLayout と同じ渡し方で読む。
+const loadMap = (name, layout = 'us') =>
+    K.decodeKeymap(JSON.parse(fs.readFileSync(path.join(WEB, 'assets', 'keymaps', `${name}.json`), 'utf8')),
+        { layout });
+const engine = new K.InputEngine(loadMap('naginata'));
 engine.onStateChange = () => fep.pumpEngine();
 fep.setEngine(engine, (tap) => K.keyEventFromBrowser(tap));
 
@@ -99,19 +102,19 @@ async function main() {
     ok(engine.getState().isComposing === false,
         `[7c] deleteBack で composing 空に (isComposing=${engine.getState().isComposing})`);
 
-    // [8] 横展開: 全 6 配列 (US) がアダプタ経由でかなを合成する (chord/逐次 両クラス)。
+    // [8] 横展開: 全 6 配列 (US レイアウト) がアダプタ経由でかなを合成する (chord/逐次 両クラス)。
     // 入力→期待かなは tools 実測値 (単打がかなを出すキー)。convert→Mozc→commit の fep 側配管は
     // [2] で実証済みなので、ここは「アダプタが任意の engine 配列を駆動する」ことに絞る。
     const LAYOUTS = [
-        { name: 'naginata_us',       chord: true,  code: 'KeyF', key: 'f', expect: 'か' },
-        { name: 'nicola_us',         chord: true,  code: 'KeyW', key: 'w', expect: 'か' },
-        { name: 'azik_us',           chord: false, code: 'KeyA', key: 'a', expect: 'あ' },
-        { name: 'tsuki2-263_us',     chord: false, code: 'KeyF', key: 'f', expect: 'と' },
-        { name: 'romaji_colemak_us', chord: false, code: 'KeyA', key: 'a', expect: 'あ' },
+        { name: 'naginata',          chord: true,  code: 'KeyF', key: 'f', expect: 'か' },
+        { name: 'nicola',            chord: true,  code: 'KeyW', key: 'w', expect: 'か' },
+        { name: 'oyayubi_pyun_1key', chord: true,  code: 'KeyW', key: 'w', expect: 'か' },
+        { name: 'azik',              chord: false, code: 'KeyA', key: 'a', expect: 'あ' },
+        { name: 'tsuki2-263',        chord: false, code: 'KeyF', key: 'f', expect: 'と' },
+        { name: 'romaji_colemak',    chord: false, code: 'KeyA', key: 'a', expect: 'あ' },
     ];
     for (const L of LAYOUTS) {
-        const j = JSON.parse(fs.readFileSync(path.join(WEB, 'assets', 'keymaps', `${L.name}.json`), 'utf8'));
-        const eng = new K.InputEngine(K.decodeKeymap(j));
+        const eng = new K.InputEngine(loadMap(L.name));
         eng.onStateChange = () => fep.pumpEngine();
         fep.setEngine(eng, (t) => K.keyEventFromBrowser(t));
         resetAll();

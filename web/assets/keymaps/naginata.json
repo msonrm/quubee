@@ -1,14 +1,17 @@
 {
-  "formatVersion": "1.0",
-  "name": "薙刀式(US)",
+  "$schema": "../../../docs/keymap-v2.schema.json",
+  "formatVersion": "2.0",
+  "name": "薙刀式",
+  "description": "薙刀式v18同時打鍵入力",
   "author": "大岡俊彦",
-  "description": "薙刀式v18同時打鍵入力（US キーボード）",
-  "keyboardLayout": "us",
   "targetScript": "hiragana",
-  "modeKeys": {
-    "ctrl+space": "toggleInputMode",
-    "ctrl+shift+j": "switchToJapanese",
-    "ctrl+shift+semicolon": "switchToEnglish"
+  "roles": {
+    "holder1": {
+      "label": "左親指 / センターシフト",
+      "keys": [
+        "space"
+      ]
+    }
   },
   "behavior": {
     "type": "chord",
@@ -43,17 +46,8 @@
         "m": "M",
         "comma": "comma",
         "period": "dot",
-        "slash": "slash",
-        "space": "space"
+        "slash": "slash"
       },
-      "shiftKeys": [
-        {
-          "key": "space",
-          "singleTapAction": "convert"
-        }
-      ],
-      "judgment": "mutual",
-      "simultaneousWindow": 0.08,
       "lookupTable": {
         "W": "き",
         "E": "て",
@@ -81,31 +75,31 @@
         "comma": "ん",
         "dot": "ら",
         "slash": "れ",
-        "space+E": "り",
-        "space+R": "め",
-        "space+W": "ね",
-        "space+I": "よ",
-        "space+O": "え",
-        "space+P": "ゆ",
-        "space+U": "さ",
-        "space+A": "せ",
-        "space+D": "に",
-        "space+F": "ま",
-        "space+G": "ち",
-        "space+H": "や",
-        "space+J": "の",
-        "space+K": "も",
-        "space+L": "つ",
-        "space+S": "み",
-        "space+semicolon": "ふ",
-        "space+B": "ぬ",
-        "space+C": "を",
-        "space+N": "お",
-        "space+X": "ひ",
-        "space+Z": "ほ",
-        "space+comma": "む",
-        "space+dot": "わ",
-        "space+slash": "れ",
+        "holder1+E": "り",
+        "holder1+R": "め",
+        "holder1+W": "ね",
+        "holder1+I": "よ",
+        "holder1+O": "え",
+        "holder1+P": "ゆ",
+        "holder1+U": "さ",
+        "holder1+A": "せ",
+        "holder1+D": "に",
+        "holder1+F": "ま",
+        "holder1+G": "ち",
+        "holder1+H": "や",
+        "holder1+J": "の",
+        "holder1+K": "も",
+        "holder1+L": "つ",
+        "holder1+S": "み",
+        "holder1+semicolon": "ふ",
+        "holder1+B": "ぬ",
+        "holder1+C": "を",
+        "holder1+N": "お",
+        "holder1+X": "ひ",
+        "holder1+Z": "ほ",
+        "holder1+comma": "む",
+        "holder1+dot": "わ",
+        "holder1+slash": "れ",
         "A+J": "ぜ",
         "B+J": "ぞ",
         "C+J": "ば",
@@ -221,11 +215,12 @@
         "Y": "moveRight",
         "F+G": "switchToEnglish",
         "M+V": "confirm",
-        "space+M": "insertAndConfirm:。",
-        "space+T": "editSegmentLeft",
-        "space+V": "insertAndConfirm:、",
-        "space+Y": "editSegmentRight"
+        "holder1+M": "insertAndConfirm:。",
+        "holder1+T": "editSegmentLeft",
+        "holder1+V": "insertAndConfirm:、",
+        "holder1+Y": "editSegmentRight"
       },
+      "judgment": "mutual",
       "englishLookupTable": {
         "Q": "q",
         "W": "w",
@@ -292,5 +287,16 @@
         "H+J": "switchToJapanese"
       }
     }
+  },
+  "requires": [
+    "judgment:mutual",
+    "roles"
+  ],
+  "modeKeys": {
+    "ctrl+space": "toggleInputMode",
+    "ctrl+shift+j": "switchToJapanese",
+    "ctrl+shift+semicolon": "switchToEnglish",
+    "lang2": "switchToEnglish",
+    "lang1": "switchToJapanese"
   }
 }

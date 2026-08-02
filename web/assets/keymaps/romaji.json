@@ -1,0 +1,17 @@
+{
+  "$schema": "../../../docs/keymap-v2.schema.json",
+  "formatVersion": "2.0",
+  "name": "ローマ字（QWERTY）",
+  "description": "標準ローマ字入力",
+  "targetScript": "hiragana",
+  "inputBase": "romaji",
+  "behavior": {
+    "type": "sequential",
+    "characterMap": {}
+  },
+  "modeKeys": {
+    "ctrl+space": "toggleInputMode",
+    "lang2": "switchToEnglish",
+    "lang1": "switchToJapanese"
+  }
+}

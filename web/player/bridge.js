@@ -2378,22 +2378,36 @@ async function makeWorkerEmu() {
     // fep に注入する。null / 'romaji' で内蔵ローマ字リゾルバへ戻す。エンジンは「キー→かな」だけを
     // 担い、確定かなは従来どおり fep→Mozc へ流れる (二段構え)。chord (naginata/nicola) の窓満了は
     // engine.onStateChange → fep.pumpEngine で汲む。定義 JSON は web/assets/keymaps/<name>.json。
+    //
+    // keymap-format v2 (engine 2.0.0〜) から JIS/US は配列ではなく **レイアウト** の選択になった。
+    // 配列が決めるのは役 (holder1=左親指 等) までで、それをどの物理キーに置くかは環境の関心事なので、
+    // ホスト側が第 2 引数 kbLayout ('jis'|'us') を渡す。ファイルは 1 配列 1 本 (旧 <name>_<jis|us>.json
+    // 14 本 → 7 本)。現状 layouts を持つのは NICOLA だけで、US では親指キーが スペース/右Alt、
+    // JIS では 無変換/変換 (役の既定候補) になる。渡さないと US キーボードで親指シフトが打てない。
     let fepLayoutName = 'romaji';   // 既定 = 内蔵ローマ字 (ゼロ回帰)
-    async function setFepLayout(name) {
+    async function setFepLayout(name, kbLayout) {
         if (!fep) return 'no-fep';
         const KE = window.KeymapEngine;
-        if (!name || name === 'romaji' || name === 'builtin') {
+        // 'romaji' は内蔵リゾルバの別名で据え置き (qbDebug.layout('romaji') の既存規約)。
+        // 同名の keymaps/romaji.json も同梱しているが、既定の日本語入力は内蔵側 = ゼロ回帰。
+        if (!name || name === 'builtin' || name === 'romaji') {
             fep.setEngine(null, null); fepLayoutName = 'romaji'; refreshFepStatus();
             return 'layout=romaji (内蔵リゾルバ)';
         }
         if (!KE) return 'KeymapEngine 未ロード (assets/keymap-engine.js)';
+        const layout = (kbLayout === 'jis' || kbLayout === 'us') ? kbLayout : 'us';
         try {
             const raw = await (await fetch(`assets/keymaps/${name}.json`)).json();
-            const eng = new KE.InputEngine(KE.decodeKeymap(raw));
+            // onDiagnostic = 解釈できずに捨てたエントリの報告 (未知のキー名・その面では書けない
+            // アクション等)。d.message は日本語。console.debug 送り = verbose(1) で前面化できる。
+            const diags = [];
+            const eng = new KE.InputEngine(KE.decodeKeymap(raw, { layout, onDiagnostic: (d) => diags.push(d) }));
+            for (const d of diags) console.debug(`[keymap] ${name}/${layout}: ${d.message}`);
             eng.onStateChange = () => { if (fep) fep.pumpEngine(); };
             fep.setEngine(eng, (tap) => KE.keyEventFromBrowser(tap));
             fepLayoutName = name; refreshFepStatus();
-            return `layout=${name} (chord=${eng.isChord}) engine=${KE.version}`;
+            return `layout=${name} (kb=${layout}, chord=${eng.isChord}) engine=${KE.version}` +
+                (diags.length ? ` — 診断 ${diags.length} 件 (console)` : '');
         } catch (e) {
             fep.setEngine(null, null); fepLayoutName = 'romaji'; refreshFepStatus();
             return `layout ロード失敗 (${name}): ${e.message} — 内蔵へフォールバック`;
@@ -2677,10 +2691,12 @@ async function makeWorkerEmu() {
         // 非注目素。次の表示更新 (キー 1 打) から反映。実画面で見比べて既定を決める (値は仮置き)。
         fepstyle: (name) => { if (name && FEP_STYLES[name]) fepStyleName = name;
             return `fepstyle=${fepStyleName} (wx=下線系/atok=反転系) — 次の表示更新から反映`; },
-        // 新配列 (keymap-format) の選択。layout('naginata_us') 等で切替、layout('romaji') で内蔵へ戻す。
-        // 定義 = web/assets/keymaps/<name>.json (naginata/nicola/tsuki2-263/azik/romaji_colemak/romaji ×
-        // _jis/_us)。エンジンは labo の KeymapEngine。FEP を ON にして打つと反映される。Promise を返す。
-        layout: (name) => setFepLayout(name),
+        // 新配列 (keymap-format) の選択。layout('naginata') 等で切替、layout('romaji') で内蔵へ戻す。
+        // 定義 = web/assets/keymaps/<name>.json (naginata / nicola / oyayubi_pyun_1key / tsuki2-263 /
+        // azik / romaji_colemak / romaji の 7 本)。第 2 引数は物理キーボード ('jis'|'us'、既定 us) で、
+        // v2 形式では JIS/US は配列でなくレイアウトの選択 → 同じファイルに渡し分ける。
+        // エンジンは labo の KeymapEngine。FEP を ON にして打つと反映される。Promise を返す。
+        layout: (name, kb) => setFepLayout(name, kb),
         // Mozc worker の健全性診断。restarts が増えていたら watchdog がデッドロックを回収した証拠
         // (変換が 4 秒無応答 → worker 再起動。体感は「一拍おいてカナ候補 → 次からまた漢字」)。
         mozc: () => ({ state: mozcState, restarts: mozcRestarts, pending: mozcPending.size }),
@@ -3144,12 +3160,13 @@ async function makeWorkerEmu() {
         const get = (k) => (k in settings ? settings[k] : DEFAULTS[k]);
 
         const applyTheme = (t) => { document.documentElement.dataset.theme = (t === 'light') ? 'light' : ''; };
-        // かな配列 (base) × キーボード (jis/us) → 配列名を組み立てて FEP へ適用。base='builtin' は
+        // かな配列 (base) と キーボード (jis/us) を FEP へ適用。keymap-format v2 からは JIS/US が
+        // 配列でなく **レイアウト** の選択になったので、ファイル名を連結せず layout として渡す
+        // (旧: `${base}_${region}.json` / 新: `${base}.json` + { layout: region })。base='builtin' は
         // 内蔵ローマ字リゾルバ (region 非適用)。適用は qbDebug.layout 経由 (パネル規約: qbDebug.* 経由)。
         const applyKanaLayout = () => {
             const base = get('kanalayout');
-            const name = (!base || base === 'builtin') ? 'romaji' : `${base}_${get('kanaregion')}`;
-            return qd.layout(name);
+            return qd.layout((!base || base === 'builtin') ? 'romaji' : base, get('kanaregion'));
         };
         // Gamepad 割当の適用 (localStorage → padDir/padBtnMap)。pollGamepads がこれを live 参照する。
         const applyPad = (p) => {

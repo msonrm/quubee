@@ -1,5 +1,53 @@
 # CHANGELOG
 
+## [keymap v2 追随 — 配列とレイアウトの分離 (engine 2.0.0 / hechima 0.19.0)] — 2026-08-02
+
+labo 指示書 docs/hechima_v2_quubee_handoff.md への追随。**キーマップの形式が v2 になり、JIS/US が
+「配列」ではなく「レイアウト」の選択になった**のが本体。配列が決めるのは**役** (`holder1` = 左親指、
+`holder2` = 右親指 など) までで、それをどの物理キーに置くかは環境の関心事なので、ホストが
+`decodeKeymap(json, { layout })` で渡す。きっかけは iPad で NICOLA JIS が打てないこと — `無変換` /
+`変換` / `英数` / `かな` を iPadOS が入力ソース切替に予約していてアプリに届かないのだが、v1 では
+配列ファイルが物理キーを名指ししていたため**配列の不備のように見えていた**。
+
+- **差し替え (同一コミット必須の 3 点セット)**: keymap-engine.js **1.6.0 → 2.0.0** / hechima.js
+  **0.16.0 → 0.19.0** / **keymaps JSON を v2 形式へ総入れ替え** (labo main **89d8cbc**、ローカル
+  checkout から vendoring)。hechima.d.ts も更新。hechima-wasm/mozc.data は v0.2.0 据え置き・cb 変更なし。
+  **版ゲートは相互に非互換** — v1 の JSON を v2 エンジンに渡すとエラー、v2 の JSON を v1 エンジンに
+  渡してもエラーになるので、1 つでも古いと動かない (旧版では「黙って無視」だった罠が明確なエラーに
+  なったのは改善)。
+- **配列ファイルが 14 本 → 7 本**: `naginata_jis.json` + `naginata_us.json` → `naginata.json` の要領で
+  1 配列 1 ファイルに。新規 **`oyayubi_pyun_1key.json`** (親指ぴゅん 1キー版 — 遠藤諭氏の
+  親指シフトキーボードエミュレータ DOS/V 版 OKPV.ASM v0.80 (1992) の AT キーボードモードを機械復元
+  したもの) が加わり、設定 UI にも出した。配列名から JIS/US 表記が消えた
+  (`ローマ字(QWERTY JIS)` → `ローマ字（QWERTY）`)。
+- **QuuBee 側のコード変更 (2 か所 + デバッグ API)**: `bridge.js` の `setFepLayout(name, kbLayout)` が
+  `decodeKeymap(raw, { layout, onDiagnostic })` を呼ぶ形に。設定パネルの `applyKanaLayout` は
+  `${配列}_${region}.json` のファイル名連結をやめ、配列名と layout を別々に渡す。
+  `qbDebug.layout('nicola', 'jis')` の第 2 引数も同じ。**設定パネルの Keyboard (US/JIS) は残した** —
+  これは PC-98 側ではなく利用者の手元の物理キーボードの話で、NICOLA の親指キーが
+  US = スペース/右Alt、JIS = 無変換/変換 に切り替わる (渡さないと US で親指シフトが死ぬ)。
+  読み込み診断 `onDiagnostic` は `console.debug` 送り (`qbDebug.verbose(1)` で前面化)。
+- **未着手だった追随 3 件も同梱**: engine **1.8.0** (役に載ったスペースの単打が死ぬ = NICOLA JIS で
+  Space が無反応)・**1.9.0/1.10.0** (アクション文字列パーサの 1 本化 — `specialActions` の
+  `toggleInputMode` が黙って落ちていた) / hechima **0.17.0** (Shift+英字の英字合成が engine 挿し時にも
+  効く = 英字を Mozc へ投げない)・**0.18.0** (候補選択中の Shift+Space = 前候補が engine 挿し時にも効く)。
+- **NICOLA の配列自体も 1 か所変更**: `;` の左親指シフト (交差シフト) に置いていた `ー` を削除。
+  日本語入力コンソーシアムの規格書ではこのセルの交差シフト面に文字が割り当てられておらず、labo が
+  独自に置いていたもので `X` キーの親指シフトと重複していた。左親指 + `;` は定義が無くなるが暴走せず
+  単打の「ん」に落ちる (QuuBee 側の対応は不要)。
+- **hechima-worker.js は取り込まない**: QuuBee は自前の `web/player/mozc-worker.js` で hechima-wasm を
+  駆動しており (hechima.js には cb 実装を渡す形)、labo の worker は OPFS 学習永続化と `hechima_sync` を
+  前提とするため pin 中の hechima-wasm v0.2.0 では動かない。判断を CREDITS.md に明記した。
+- **回帰**: `keymap_engine_test` を v2 化 — 7 本 × JIS/US で decode + 構築 + **診断 0 件**、
+  **v1 形式の JSON が拒否されること** (旧 JSON の置き去りを落とす)、NICOLA の親指キーが
+  US = Space+S → 「あ」/ JIS = 無変換+S → 「あ」かつ JIS の Space+S は親指シフトでない、の両方向。
+  `fep_space_test` に [10] Shift+Space = 前候補 (候補 2 個だと prev/next が同着地なので **3 候補**で縛る)
+  と [11] 英字合成中の Space は変換に回さない、を追加 — **どちらも旧 hechima 0.16.0 で FAIL することを
+  確認済み** (通ってしまうガードは書かない)。`fep_layout_test` は 親指ぴゅんを加えて 6 配列に。
+  **全 80 本 PASS**。
+- **ブラウザ実機確認 (ユーザー、2026-08-02)**: `qbDebug.layout` の返り値に `engine=2.0.0` が出ること、
+  NICOLA とローマ字が普通に打てることを確認 → デプロイ・本番検証まで完了 = **クローズ**。
+
 ## [hechima v0.16.0 追随 — 逐次系の Space を変換に + 辞書の事前圧縮配信] — 2026-07-30
 
 labo 指示書 docs/hechima_v0160_quubee_handoff.md (labo 側) への追随。**AZIK / 月配列 / Colemak /

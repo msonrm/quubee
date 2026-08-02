@@ -3,7 +3,7 @@
 })(this, function(exports) {
 	Object.defineProperty(exports, Symbol.toStringTag, { value: "Module" });
 	//#region src/hechima/version.ts
-	const HECHIMA_VERSION = "0.16.0";
+	const HECHIMA_VERSION = "0.19.0";
 	//#endregion
 	//#region src/hechima/session.ts
 	const ROMAJI = {
@@ -646,7 +646,13 @@
 		function handleEngineAction(action) {
 			const t = action.type;
 			if (t === "insertSpace") {
-				if (!(!segs && !composing() && !(engine && engine.getState().isComposing))) return handleEngineAction({ type: "convert" });
+				if (!(!segs && !composing() && !(engine && engine.getState().isComposing))) {
+					if (action.shifted && segs) {
+						candPrev();
+						return true;
+					}
+					return handleEngineAction({ type: "convert" });
+				}
 				cb.commit(action.shifted ? " " : "　");
 				return true;
 			}
@@ -709,6 +715,14 @@
 			"ArrowDown"
 		]);
 		function engineDown(tap) {
+			if (!engine.isChord && tap.shiftKey && !tap.ctrlKey && !tap.altKey && !tap.metaKey && /^[a-zA-Z]$/.test(tap.key) && !engine.getState().isComposing && !composing()) {
+				kana = tap.key;
+				pend = "";
+				eiji = true;
+				genId++;
+				render();
+				return true;
+			}
 			if (!engine) return false;
 			if (segs) {
 				if (tap.key === "Shift" || tap.key === "Control" || tap.key === "Alt" || tap.key === "Meta") return true;
@@ -907,12 +921,19 @@
 						engine.reset();
 					} catch {}
 					engine.onHostAction = null;
+					engine.hostPhase = null;
 				}
 				clear();
 				cb.hide();
 				engine = eng ?? null;
 				engineKeyOf = keyOf ?? null;
-				if (engine) engine.onHostAction = (action) => handleEngineAction(action);
+				if (engine) {
+					engine.onHostAction = (action) => handleEngineAction(action);
+					engine.hostPhase = () => {
+						if (segs) return "selecting";
+						return composing() || engine.isComposing ? "composing" : "idle";
+					};
+				}
 			},
 			pumpEngine,
 			selectCandidate(index) {

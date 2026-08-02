@@ -215,24 +215,34 @@ PC-98 のフリーソフト/同人 CG 文化で標準的に使われた 2 大画
 
 ## キー配列エンジン — `web/assets/keymap-engine.js` + `web/assets/keymaps/*.json`
 
-新配列 (薙刀式 / NICOLA / 月配列 2-263 / AZIK / Colemak ローマ字 / 標準ローマ字、JIS/US 分離) の
-物理キー入力 → かな解決を担う **KeymapEngine**。HLE FEP のかな入力前段として組み込む
+新配列 (薙刀式 / NICOLA / 親指ぴゅん 1キー版 / 月配列 2-263 / AZIK / Colemak ローマ字 / 標準ローマ字の
+7 本) の物理キー入力 → かな解決を担う **KeymapEngine**。HLE FEP のかな入力前段として組み込む
 (かな漢字変換は従来どおりホスト側 Mozc-Wasm が担当)。
 
 - **出所**: `msonrm/logical-layout-labo` (Copyright © 2026 Narumi Masao、**MIT**)。同 web ワークスペースの
   `web/src/engine` を rolldown で 1 ファイルに UMD バンドルした単体成果物 (`npm run build:engine` の出力
   `web/public/engine/keymap-engine.js`)。**QuuBee は fork せず成果物 1 ファイルを vendoring** する
   (mozc.data と同じ「差し替えで取り込む」方針)。エンジンの正しさの正典は labo の golden テスト。
-- **取り込みバージョン**: `KeymapEngine.version` = **1.6.0** (labo main **e25d4fe**。1.1.0 で
-  `onHostAction` 追加、1.2.0 で convert/confirm/insertAndConfirm も転送、1.3.0 で同時押し判定モード
-  `judgment: "mutual"` = 相互シフト (時間不使用)、1.4.0 で英数モードの chord 解釈 + mutual 再入 reset
-  修正、1.6.0 で**逐次系 (AZIK/月/Colemak/JSON ローマ字) の Space を変換にする** (合成中 = convert /
-  候補選択中 = 次候補 / 空バッファ = `insertSpace`) + `inputBase: romaji` に characterMap を既定で
-  敷く (`, .` → `、。`) + BS 後の pending 復帰 — **hechima 0.16.0 とセット必須**) /
-  keymap-format **1.0**。keymaps は labo main **84199d5** 時点で不変 (**薙刀式 v18** = space+W/R の
-  め⇔ね 入れ替え。作者 大岡俊彦氏 発表。naginata JSON は `chordConfig.judgment = "mutual"` 入り —
-  **旧エンジン ≤1.2.0 は judgment を黙って無視して時間窓のまま動く**ため、engine と hechima は
-  必ずセットで差し替えること)。
+- **取り込みバージョン**: `KeymapEngine.version` = **2.0.0** / keymap-format **2.0** (labo main
+  **89d8cbc**)。1.1.0 で `onHostAction` 追加、1.2.0 で convert/confirm/insertAndConfirm も転送、
+  1.3.0 で同時押し判定モード `judgment: "mutual"` = 相互シフト (時間不使用)、1.4.0 で英数モードの
+  chord 解釈 + mutual 再入 reset 修正、1.6.0 で逐次系 (AZIK/月/Colemak/JSON ローマ字) の Space を
+  変換にする + `, .` → `、。` + BS 後の pending 復帰、1.8.0 で役に載ったスペースの単打が死ぬ問題を修正、
+  1.9.0/1.10.0 でアクション文字列パーサを 1 本化 (面ごとに語彙を強制) + 読み込み診断 `onDiagnostic`、
+  **2.0.0 で keymap-format v2** — **JIS/US は配列でなくレイアウトの選択**になった。
+  - 配列が決めるのは**役** (`holder1` = 左親指 等) までで、それをどの物理キーに置くかは環境の関心事
+    なので、ホストが `decodeKeymap(json, { layout })` で `"jis"` / `"us"` を渡す。QuuBee は設定
+    パネルの Keyboard (US/JIS) をそのまま渡す (`bridge.js` の `setFepLayout`)。
+  - **配列ファイルが 14 本 → 7 本** (`naginata_jis.json` + `naginata_us.json` → `naginata.json` 等)。
+    新規に `oyayubi_pyun_1key.json` (親指ぴゅん 1キー版) が加わった。**名前から JIS/US が消えた**
+    (`ローマ字(QWERTY JIS)` → `ローマ字（QWERTY）`)。
+  - **版ゲートは相互に非互換**: v1 の JSON を v2 エンジンに渡すとエラー、v2 の JSON を v1 エンジンに
+    渡してもエラー。**engine / hechima / keymaps の 3 点は必ずセットで差し替えること**
+    (回帰 `tools/keymap_engine_test.js` が v1 JSON の拒否も含めて縛る)。
+  - NICOLA は配列そのものも 1 か所変わった: `;` の左親指シフト (交差シフト) に置いていた `ー` を削除
+    (日本語入力コンソーシアムの規格書はこのセルの交差シフト面に文字を割り当てておらず、`X` キーとも
+    重複していた)。左親指 + `;` は定義が無くなり単打の「ん」に落ちる。**薙刀式 v18** (space+W/R の
+    め⇔ね 入れ替え。作者 大岡俊彦氏 発表) は据え置き。
   更新時は labo で `npm run build:engine` → `web/public/engine/keymap-engine.js` と `web/public/keymaps/*.json`
   を本ディレクトリへコピーし、本項の version/commit を更新する。受け入れ検査 = `tools/keymap_engine_test.js`。
 - 依存: React/DOM/Next 非依存の純ロジック (ブラウザ `<script>` / Worker `importScripts` / node `require` 対応)。
@@ -247,14 +257,21 @@ PC-98 のフリーソフト/同人 CG 文化で標準的に使われた 2 大画
 vendoring** する (keymap-engine と同じ差し替えモデル)。QuuBee 固有物は bridge.js の cb 実装のみ。
 
 - **hechima.js** (変換セッション層): Copyright © 2026 Narumi Masao、**MIT**。UMD 単体成果物
-  (グローバル `Hechima`)。取り込み = **`Hechima.version` 0.16.0** (Release **hechima-v0.16.0** / labo
-  main **e25d4fe** の `web/public/hechima/hechima.js`。0.2.0 で文節伸縮 `cb.resize` +
+  (グローバル `Hechima`)。取り込み = **`Hechima.version` 0.19.0** (labo main **89d8cbc** の
+  `web/public/hechima/hechima.js`。0.2.0 で文節伸縮 `cb.resize` +
   editSegmentLeft/Right、0.3.0 で Phase 2 の chord routing 修正 + Shift+←→ 伸縮、0.8.1 で Phase 2 の
   BS/Escape = よみに戻す、0.12.0 で合成中 confirm = 無変換即確定 (薙刀式 V+M)、0.13.1 で内蔵ローマ字の
   BS 後 pending 復帰、0.14.0 で候補の二層化 API (`setFold` 等 — QuuBee は未使用 = 挙動不変)、
-  0.16.0 で engine の `insertSpace` 受け入れ (空バッファ Space → 全角スペースを commit / Shift = 半角)。
-  **keymap-engine 1.6.0 とセット必須** — engine だけ上げると全角スペースが未確定表示に居座り、
-  hechima だけ上げると逐次系の Space が「よみのまま確定」のまま残る)。
+  0.16.0 で engine の `insertSpace` 受け入れ (空バッファ Space → 全角スペースを commit / Shift = 半角)、
+  0.17.0 で Shift+英字の英字合成が engine 挿し時にも効く (英字は Mozc へ投げない)、0.18.0 で
+  候補選択中の Shift+Space = 前候補が engine 挿し時にも効く、0.19.0 で engine へ `hostPhase` を
+  渡し (idle/composing/selecting)、アクションの `when` 条件が状態を見て発火するようになった。
+  **keymap-engine 2.0.0 とセット必須** — 版を跨いで混ぜると `hostPhase` の受け口が無い / 逐次系の
+  Space が「よみのまま確定」に戻る)。
+  なお labo が併配布する `hechima-worker.js` は**取り込まない**。QuuBee は自前の
+  `web/player/mozc-worker.js` で hechima-wasm を駆動しており (hechima.js には cb 実装を渡す形)、
+  labo の worker は OPFS 学習永続化と `hechima_sync` を前提とするため pin 中の hechima-wasm v0.2.0
+  では動かない。
 - **hechima-wasm.{js,wasm} + mozc.data** (かな漢字変換エンジン): fcitx-contrib/fcitx5-mozc 由来の
   Emscripten ビルド、**BSD-3・powered by Mozc** (mozc 本体 = Google、BSD-3)。取り込み = Release
   **hechima-wasm-v0.2.0** (labo **29b6271** / fcitx5-mozc **8b3d34c** / mozc **0651fbc** / emsdk 3.1.69。

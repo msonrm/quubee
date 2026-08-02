@@ -15,7 +15,7 @@ const fs   = require('fs');
 
 const WEB = path.join(__dirname, '..', 'web');
 const qbFepCreate = require(path.join(WEB, 'assets', 'hechima.js')).createFep;   // labo hechima (UMD)
-const K = require(path.join(WEB, 'assets', 'keymap-engine.js'));                  // v1.4.0 (onHostAction は v1.1.0〜)
+const K = require(path.join(WEB, 'assets', 'keymap-engine.js'));                  // v2.0.0 (onHostAction は v1.1.0〜)
 
 let fails = 0;
 const ok = (cond, label) => { console.log((cond ? 'ok   ' : 'FAIL ') + label); if (!cond) fails++; };
@@ -30,7 +30,7 @@ function harness(convert) {
         convert,
         hostKey(name) { log.hostKeys.push(name); },
     });
-    const json = JSON.parse(fs.readFileSync(path.join(WEB, 'assets', 'keymaps', 'naginata_jis.json'), 'utf8'));
+    const json = JSON.parse(fs.readFileSync(path.join(WEB, 'assets', 'keymaps', 'naginata.json'), 'utf8'));
     const eng = new K.InputEngine(K.decodeKeymap(json));
     eng.onStateChange = () => fep.pumpEngine();
     fep.setEngine(eng, (tap) => K.keyEventFromBrowser(tap));

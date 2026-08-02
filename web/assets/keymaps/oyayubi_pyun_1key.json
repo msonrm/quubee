@@ -1,0 +1,146 @@
+{
+  "$schema": "../../../docs/keymap-v2.schema.json",
+  "formatVersion": "2.0",
+  "name": "親指ぴゅん 1キー版",
+  "description": "親指シフトキーボードエミュレータ「親指ぴゅん」（遠藤諭 / Hortense S. Endoh）の DOS/V 版 OKPV.ASM v0.80（1992）の -p（ＡＴキーボード）モードに倣った配列。親指ぴゅん自体は 1989 年の OKPJ.asm v0.69 まで遡る。AT/101 には無変換キーが無いため、親指シフトはスペース 1 本の単独シフトになり、交差シフトの濁音は無効化される。濁音・半濁音は L 字エンター左のキー（スキャンコード 0x1b）で後付けする。",
+  "author": "遠藤諭（Hortense S. Endoh）",
+  "basedOn": "NICOLA",
+  "addedAt": "2026-08-01",
+  "targetScript": "hiragana",
+  "roles": {
+    "holder1": {
+      "label": "左親指 / センターシフト",
+      "keys": [
+        "space"
+      ]
+    }
+  },
+  "behavior": {
+    "type": "chord",
+    "config": {
+      "hidToKey": {
+        "q": "Q",
+        "w": "W",
+        "e": "E",
+        "r": "R",
+        "t": "T",
+        "y": "Y",
+        "u": "U",
+        "i": "I",
+        "o": "O",
+        "p": "P",
+        "a": "A",
+        "s": "S",
+        "d": "D",
+        "f": "F",
+        "g": "G",
+        "h": "H",
+        "j": "J",
+        "k": "K",
+        "l": "L",
+        "semicolon": "semicolon",
+        "z": "Z",
+        "x": "X",
+        "c": "C",
+        "v": "V",
+        "b": "B",
+        "n": "N",
+        "m": "M",
+        "comma": "comma",
+        "period": "dot",
+        "slash": "slash"
+      },
+      "lookupTable": {
+        "_comment_single": "単打（kanatbl）",
+        "Q": "。",
+        "W": "か",
+        "E": "た",
+        "R": "こ",
+        "T": "さ",
+        "Y": "ら",
+        "U": "ち",
+        "I": "く",
+        "O": "つ",
+        "P": "、",
+        "A": "う",
+        "S": "し",
+        "D": "て",
+        "F": "け",
+        "G": "せ",
+        "H": "は",
+        "J": "と",
+        "K": "き",
+        "L": "い",
+        "semicolon": "ん",
+        "Z": "．",
+        "X": "ひ",
+        "C": "す",
+        "V": "ふ",
+        "B": "へ",
+        "N": "め",
+        "M": "そ",
+        "comma": "ね",
+        "dot": "ほ",
+        "slash": "・",
+        "_comment_shift": "スペース同時押し（kanasfttbl）。-p では交差シフトの濁音が無効化され、親指シフトは常にシフト面",
+        "holder1+Q": "ぁ",
+        "holder1+W": "え",
+        "holder1+E": "り",
+        "holder1+R": "ゃ",
+        "holder1+T": "れ",
+        "holder1+Y": "よ",
+        "holder1+U": "に",
+        "holder1+I": "る",
+        "holder1+O": "ま",
+        "holder1+P": "ぇ",
+        "holder1+A": "を",
+        "holder1+S": "あ",
+        "holder1+D": "な",
+        "holder1+F": "ゅ",
+        "holder1+G": "も",
+        "holder1+H": "み",
+        "holder1+J": "お",
+        "holder1+K": "の",
+        "holder1+L": "ょ",
+        "holder1+semicolon": "っ",
+        "holder1+Z": "ぅ",
+        "holder1+X": "ー",
+        "holder1+C": "ろ",
+        "holder1+V": "や",
+        "holder1+B": "ぃ",
+        "holder1+N": "ぬ",
+        "holder1+M": "ゆ",
+        "holder1+comma": "む",
+        "holder1+dot": "わ",
+        "holder1+slash": "ぉ"
+      },
+      "specialActions": {},
+      "judgment": "mutual"
+    }
+  },
+  "requires": [
+    "judgment:mutual",
+    "roles",
+    "postModify",
+    "actionGuard"
+  ],
+  "modeKeys": {
+    "ctrl+space": "toggleInputMode",
+    "ctrl+shift+j": "switchToJapanese",
+    "ctrl+shift+semicolon": "switchToEnglish",
+    "bracketRight": {
+      "action": "postModify:dakuten",
+      "when": [
+        "composing"
+      ]
+    },
+    "shift+bracketRight": {
+      "action": "postModify:handakuten",
+      "when": [
+        "composing"
+      ]
+    },
+    "lang1": "switchToJapanese",
+    "lang2": "switchToEnglish"
+  }
+}

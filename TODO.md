@@ -168,6 +168,18 @@ labo (msonrm/logical-layout-labo) が単体 UMD ビルド出口 + chord golden �
   ① AZIK「kyouha」+Space = 候補が出る ② Space 2 度目 = 次候補 ③ 空バッファ Space = 全角スペースが
   VRAM に入り表示が乱れない ④ Colemak/ローマ字の `, .` = 、。 ⑤ 月配列の打ち損じ → BS → 続き打鍵で
   合成復活 ⑥ 薙刀式が従来どおり (回帰)。
+- ✓ **keymap v2 = 配列とレイアウトの分離 (engine 2.0.0 + hechima 0.19.0 + keymaps v2、2026-08-02)**:
+  JIS/US が「配列」でなく「レイアウト」の選択に。配列が決めるのは役 (`holder1` = 左親指 等) までで、
+  どの物理キーに置くかは環境の関心事 → `decodeKeymap(json, { layout })`。配列ファイルは 14 本 → 7 本、
+  新規 親指ぴゅん 1キー版 を UI にも追加。未着手だった engine 1.8.0/1.9.0/1.10.0 と hechima
+  0.17.0/0.18.0 も同梱。**3 点セット差し替え必須** (版ゲートが相互に非互換)。QuuBee 側コードは
+  `setFepLayout(name, kbLayout)` / `applyKanaLayout` / `qbDebug.layout(name, kb)` の 3 か所。
+  設定パネルの Keyboard (US/JIS) は**残す** = 利用者の手元の物理キーボード (NICOLA の親指キーが
+  US = スペース/右Alt、JIS = 無変換/変換)。回帰 = keymap_engine_test を v2 化 (v1 JSON の拒否と
+  NICOLA の親指キー切替を両方向から縛る) + fep_space_test に [10][11] 追加 (旧 hechima で FAIL 確認済)・
+  全 80 本 PASS。経緯 = CHANGELOG 2026-08-02 / 指示書 = labo の docs/hechima_v2_quubee_handoff.md。
+  ✓ **ブラウザ実機確認 (ユーザー、2026-08-02) = `engine=2.0.0` の表示・NICOLA・ローマ字が普通に打てる
+  → デプロイ・本番検証まで完了 = クローズ**。
 
 **FEP の残キュー (急がない)**: 候補一覧窓 (退避は複数行対応済みで拡張容易) / 文節伸縮
 Shift+←→ (ResizeSegment、ラッパー API 追加要) / FEP 流派 API (INT 2Fh / MS$KANJI) の需要

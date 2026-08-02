@@ -279,6 +279,480 @@
 		const hid = NAME_TO_HID[name];
 		return hid !== void 0 ? HID_TO_BROWSER[hid] : void 0;
 	}
+	const HID_TO_US_LEGEND = {
+		[HID.A]: "a",
+		[HID.B]: "b",
+		[HID.C]: "c",
+		[HID.D]: "d",
+		[HID.E]: "e",
+		[HID.F]: "f",
+		[HID.G]: "g",
+		[HID.H]: "h",
+		[HID.I]: "i",
+		[HID.J]: "j",
+		[HID.K]: "k",
+		[HID.L]: "l",
+		[HID.M]: "m",
+		[HID.N]: "n",
+		[HID.O]: "o",
+		[HID.P]: "p",
+		[HID.Q]: "q",
+		[HID.R]: "r",
+		[HID.S]: "s",
+		[HID.T]: "t",
+		[HID.U]: "u",
+		[HID.V]: "v",
+		[HID.W]: "w",
+		[HID.X]: "x",
+		[HID.Y]: "y",
+		[HID.Z]: "z",
+		[HID.DIGIT_1]: "1",
+		[HID.DIGIT_2]: "2",
+		[HID.DIGIT_3]: "3",
+		[HID.DIGIT_4]: "4",
+		[HID.DIGIT_5]: "5",
+		[HID.DIGIT_6]: "6",
+		[HID.DIGIT_7]: "7",
+		[HID.DIGIT_8]: "8",
+		[HID.DIGIT_9]: "9",
+		[HID.DIGIT_0]: "0",
+		[HID.HYPHEN]: "-",
+		[HID.EQUAL]: "=",
+		[HID.BRACKET_LEFT]: "[",
+		[HID.BRACKET_RIGHT]: "]",
+		[HID.BACKSLASH]: "\\",
+		[HID.SEMICOLON]: ";",
+		[HID.QUOTE]: "'",
+		[HID.BACKQUOTE]: "`",
+		[HID.COMMA]: ",",
+		[HID.PERIOD]: ".",
+		[HID.SLASH]: "/"
+	};
+	/** HID コード → US 刻印の 1 文字。表に無ければ undefined */
+	function hidToUsLegend(code) {
+		return HID_TO_US_LEGEND[code];
+	}
+	//#endregion
+	//#region src/engine/diagnostics.ts
+	/** 診断を配列に溜めるだけの sink（テストと、まとめて受け取りたいホスト向け） */
+	function collectDiagnostics() {
+		const items = [];
+		return {
+			sink: (d) => items.push(d),
+			items
+		};
+	}
+	const REASON_TO_CODE = {
+		"not-allowed-here": "action-not-allowed-here",
+		unsupported: "action-unsupported",
+		unknown: "action-unknown",
+		extension: "action-extension-ignored",
+		"bad-param": "action-bad-param"
+	};
+	const REASON_TO_MESSAGE = {
+		"not-allowed-here": "この面では書けないアクションです",
+		unsupported: "このランタイムに実装が無いアクションです",
+		unknown: "未知のアクション名です",
+		extension: "アプリ固有アクション（x-）なので無視しました",
+		"bad-param": "アクションのパラメータが不正です"
+	};
+	/** parseKeyActionResult の reason を診断に変換して報告する */
+	function reportActionRejection(sink, reason, where, key, value) {
+		if (!sink) return;
+		sink({
+			code: REASON_TO_CODE[reason],
+			message: `${REASON_TO_MESSAGE[reason]}: "${value}"（${where} の ${key}）`,
+			where,
+			key,
+			value
+		});
+	}
+	//#endregion
+	//#region src/engine/gamepad-kana-table.ts
+	/** LT後置シフトマップ: 子音かな→拗音, 母音→小書き */
+	const YOUON_POSTSHIFT_MAP = /* @__PURE__ */ new Map([
+		["あ", "ぁ"],
+		["い", "ぃ"],
+		["う", "ぅ"],
+		["え", "ぇ"],
+		["お", "ぉ"],
+		["や", "ゃ"],
+		["ゆ", "ゅ"],
+		["よ", "ょ"],
+		["わ", "ゎ"],
+		["か", "きゃ"],
+		["く", "きゅ"],
+		["こ", "きょ"],
+		["さ", "しゃ"],
+		["す", "しゅ"],
+		["そ", "しょ"],
+		["た", "ちゃ"],
+		["つ", "ちゅ"],
+		["と", "ちょ"],
+		["な", "にゃ"],
+		["ぬ", "にゅ"],
+		["の", "にょ"],
+		["は", "ひゃ"],
+		["ふ", "ひゅ"],
+		["ほ", "ひょ"],
+		["ま", "みゃ"],
+		["む", "みゅ"],
+		["も", "みょ"],
+		["ら", "りゃ"],
+		["る", "りゅ"],
+		["ろ", "りょ"],
+		["が", "ぎゃ"],
+		["ぐ", "ぎゅ"],
+		["ご", "ぎょ"],
+		["ざ", "じゃ"],
+		["ず", "じゅ"],
+		["ぞ", "じょ"],
+		["だ", "ぢゃ"],
+		["づ", "ぢゅ"],
+		["ど", "ぢょ"],
+		["ば", "びゃ"],
+		["ぶ", "びゅ"],
+		["ぼ", "びょ"],
+		["ぱ", "ぴゃ"],
+		["ぷ", "ぴゅ"],
+		["ぽ", "ぴょ"]
+	]);
+	/** 濁点変換マップ */
+	const DAKUTEN_MAP = /* @__PURE__ */ new Map([
+		["か", "が"],
+		["き", "ぎ"],
+		["く", "ぐ"],
+		["け", "げ"],
+		["こ", "ご"],
+		["さ", "ざ"],
+		["し", "じ"],
+		["す", "ず"],
+		["せ", "ぜ"],
+		["そ", "ぞ"],
+		["た", "だ"],
+		["ち", "ぢ"],
+		["つ", "づ"],
+		["て", "で"],
+		["と", "ど"],
+		["は", "ば"],
+		["ひ", "び"],
+		["ふ", "ぶ"],
+		["へ", "べ"],
+		["ほ", "ぼ"],
+		["う", "ゔ"]
+	]);
+	/** 半濁点変換マップ */
+	const HANDAKUTEN_MAP = /* @__PURE__ */ new Map([
+		["は", "ぱ"],
+		["ひ", "ぴ"],
+		["ふ", "ぷ"],
+		["へ", "ぺ"],
+		["ほ", "ぽ"]
+	]);
+	/** 濁点逆引き（濁音→清音） */
+	const DAKUTEN_REVERSE = new Map([...DAKUTEN_MAP.entries()].map(([k, v]) => [v, k]));
+	/** 半濁点逆引き（半濁音→清音） */
+	const HANDAKUTEN_REVERSE = new Map([...HANDAKUTEN_MAP.entries()].map(([k, v]) => [v, k]));
+	//#endregion
+	//#region src/engine/postmodify.ts
+	const POST_MODIFY_OPS = [
+		"cycle",
+		"cycleDakuten",
+		"dakuten",
+		"handakuten",
+		"small"
+	];
+	/**
+	* サイクルの既定表。iOS 標準 12 キーの「゛゜小」と同系列（押すたびに次へ、末尾 → 先頭）。
+	* flickmap は `postModifyCycles` で完全置換できる。
+	*/
+	const DEFAULT_POST_MODIFY_CYCLES = [
+		"かが",
+		"きぎ",
+		"くぐ",
+		"けげ",
+		"こご",
+		"さざ",
+		"しじ",
+		"すず",
+		"せぜ",
+		"そぞ",
+		"ただ",
+		"ちぢ",
+		"つっづ",
+		"てで",
+		"とど",
+		"はばぱ",
+		"ひびぴ",
+		"ふぶぷ",
+		"へべぺ",
+		"ほぼぽ",
+		"あぁ",
+		"いぃ",
+		"うぅゔ",
+		"えぇ",
+		"おぉ",
+		"やゃ",
+		"ゆゅ",
+		"よょ",
+		"わゎ"
+	];
+	/** tail（末尾 1 字）の次のトグル字。どのサイクルにも無ければ null */
+	function nextPostModify(tail, cycles) {
+		for (const cycle of cycles) {
+			const chars = Array.from(cycle);
+			const i = chars.indexOf(tail);
+			if (i >= 0) return chars[(i + 1) % chars.length];
+		}
+		return null;
+	}
+	/**
+	* 濁点キー（方向つき）。清音↔濁音のトグルで、半濁音からは濁音へ。
+	*
+	* - か→が / が→か（トグル）
+	* - は→ば / ば→は（トグル）
+	* - ぱ→ば（半濁点を濁点に差し替え）
+	*/
+	function applyDakuten(tail) {
+		const seionFromHandakuten = HANDAKUTEN_REVERSE.get(tail);
+		if (seionFromHandakuten) return DAKUTEN_MAP.get(seionFromHandakuten) ?? seionFromHandakuten;
+		const seionFromDakuten = DAKUTEN_REVERSE.get(tail);
+		if (seionFromDakuten) return seionFromDakuten;
+		return DAKUTEN_MAP.get(tail) ?? null;
+	}
+	/**
+	* 半濁点キー（方向つき）。清音↔半濁音のトグルで、濁音からは半濁音へ。
+	*
+	* - は→ぱ / ぱ→は（トグル）
+	* - ば→ぱ（濁点を半濁点に差し替え）
+	*/
+	function applyHandakuten(tail) {
+		const seionFromHandakuten = HANDAKUTEN_REVERSE.get(tail);
+		if (seionFromHandakuten) return seionFromHandakuten;
+		const seion = DAKUTEN_REVERSE.get(tail) ?? tail;
+		return HANDAKUTEN_MAP.get(seion) ?? null;
+	}
+	/**
+	* 濁点キー 1 本で全部を回す（か→が→か / は→ば→ぱ→は）。
+	* ゲームパッド経路が従来から使っている挙動。
+	*/
+	function cycleDakuten(tail) {
+		const seionFromHandakuten = HANDAKUTEN_REVERSE.get(tail);
+		if (seionFromHandakuten) return seionFromHandakuten;
+		const seionFromDakuten = DAKUTEN_REVERSE.get(tail);
+		if (seionFromDakuten) return HANDAKUTEN_MAP.get(seionFromDakuten) ?? seionFromDakuten;
+		return DAKUTEN_MAP.get(tail) ?? null;
+	}
+	/** 小書きをトグルする（や↔ゃ） */
+	function applySmall(tail) {
+		return YOUON_POSTSHIFT_MAP.get(tail) ?? null;
+	}
+	/**
+	* 末尾 1 字に後置変調を適用した結果を返す。適用できなければ null。
+	*
+	* **対象は「合成テキストの末尾 1 字」で、その正は合成テキストの所有者が持つ**
+	* （docs/keymap-v2-requirements.md D4）。呼び出し側が所有者から末尾を取って渡すこと。
+	*/
+	function postModify(tail, op, cycles = DEFAULT_POST_MODIFY_CYCLES) {
+		switch (op) {
+			case "cycle": return nextPostModify(tail, cycles);
+			case "cycleDakuten": return cycleDakuten(tail);
+			case "dakuten": return applyDakuten(tail);
+			case "handakuten": return applyHandakuten(tail);
+			case "small": return applySmall(tail);
+		}
+	}
+	//#endregion
+	//#region src/engine/key-action-parser.ts
+	const FULL_VOCAB = [
+		"convert",
+		"confirm",
+		"cancel",
+		"deleteBack",
+		"moveLeft",
+		"moveRight",
+		"moveUp",
+		"moveDown",
+		"editSegmentLeft",
+		"editSegmentRight",
+		"switchToEnglish",
+		"switchToJapanese",
+		"toggleInputMode",
+		"insertAndConfirm",
+		"directInsert",
+		"insertSpace",
+		"postModify",
+		"pass"
+	];
+	const SURFACE_VOCAB = {
+		"keymap.specialActions": FULL_VOCAB,
+		"keymap.englishSpecialActions": FULL_VOCAB,
+		"keymap.singleTapAction": FULL_VOCAB,
+		"keymap.modeKeys": [
+			"switchToEnglish",
+			"switchToJapanese",
+			"toggleInputMode",
+			"postModify",
+			"pass"
+		]
+	};
+	const UNSUPPORTED_VOCAB = [
+		"convertPrev",
+		"confirmHiragana",
+		"confirmKatakana",
+		"confirmHalfWidthKatakana",
+		"confirmFullWidthRoman",
+		"confirmHalfWidthRoman",
+		"selectCandidate"
+	];
+	const PHASES = [
+		"idle",
+		"composing",
+		"selecting"
+	];
+	/** ガード付きオブジェクト形式 `{ action, when }` を素の値に分解する */
+	function unwrap(value) {
+		if (typeof value === "string") return { str: value };
+		if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+		const o = value;
+		if (typeof o.action !== "string") return null;
+		if (o.when === void 0) return { str: o.action };
+		if (!Array.isArray(o.when) || o.when.length === 0) return null;
+		if (o.when.some((p) => typeof p !== "string" || !PHASES.includes(p))) return null;
+		return {
+			str: o.action,
+			when: o.when
+		};
+	}
+	/** その局面でアクションが有効か。ガードが無ければ常に有効 */
+	function isActiveIn(when, phase) {
+		return when === void 0 || when.includes(phase);
+	}
+	/** パラメータ付きアクション（"名前:パラメータ" 形式）の組み立て */
+	function withParam(name, param) {
+		switch (name) {
+			case "insertAndConfirm": return param ? {
+				type: "insertAndConfirm",
+				text: param
+			} : null;
+			case "directInsert": return param ? {
+				type: "directInsert",
+				text: param
+			} : null;
+			case "insertSpace": return param === "shifted" ? {
+				type: "insertSpace",
+				shifted: true
+			} : null;
+			case "postModify": return POST_MODIFY_OPS.includes(param) ? {
+				type: "postModify",
+				op: param
+			} : null;
+			default: return null;
+		}
+	}
+	function withoutParam(name) {
+		switch (name) {
+			case "convert": return { type: "convert" };
+			case "confirm": return { type: "confirm" };
+			case "cancel": return { type: "cancel" };
+			case "deleteBack": return { type: "deleteBack" };
+			case "moveLeft": return { type: "moveLeft" };
+			case "moveRight": return { type: "moveRight" };
+			case "moveUp": return { type: "moveUp" };
+			case "moveDown": return { type: "moveDown" };
+			case "editSegmentLeft": return { type: "editSegmentLeft" };
+			case "editSegmentRight": return { type: "editSegmentRight" };
+			case "switchToEnglish": return { type: "switchToEnglish" };
+			case "switchToJapanese": return { type: "switchToJapanese" };
+			case "toggleInputMode": return { type: "toggleInputMode" };
+			case "insertSpace": return {
+				type: "insertSpace",
+				shifted: false
+			};
+			case "postModify": return {
+				type: "postModify",
+				op: "cycle"
+			};
+			case "pass": return { type: "pass" };
+			default: return null;
+		}
+	}
+	/**
+	* アクション文字列を KeyAction に変換し、**できなかった場合は理由を返す**。
+	*
+	* 呼び出し側はこの理由を診断（`KeymapDiagnostic`）に変換してホストへ渡す。
+	* v1.9.0 までは黙って捨てていた（`docs/keymap-v2-requirements.md` R3-4
+	* 「潰すのは許す。黙るのを禁じる」）。
+	*/
+	function parseKeyActionResult(value, surface) {
+		const unwrapped = unwrap(value);
+		if (!unwrapped) return {
+			ok: false,
+			reason: "bad-param"
+		};
+		const { str, when } = unwrapped;
+		const sep = str.indexOf(":");
+		const name = sep === -1 ? str : str.slice(0, sep);
+		const param = sep === -1 ? null : str.slice(sep + 1);
+		if (name.startsWith("x-")) return {
+			ok: false,
+			reason: "extension"
+		};
+		if (!SURFACE_VOCAB[surface].includes(name)) {
+			if (UNSUPPORTED_VOCAB.includes(name)) return {
+				ok: false,
+				reason: "unsupported"
+			};
+			return {
+				ok: false,
+				reason: Object.values(SURFACE_VOCAB).some((v) => v.includes(name)) ? "not-allowed-here" : "unknown"
+			};
+		}
+		const action = param === null ? withoutParam(name) : withParam(name, param);
+		if (action) return {
+			ok: true,
+			action,
+			when
+		};
+		return {
+			ok: false,
+			reason: "bad-param"
+		};
+	}
+	//#endregion
+	//#region src/engine/semantics.ts
+	const SUPPORTED_SEMANTICS = [
+		"behavior:sequential",
+		"behavior:chord",
+		"judgment:window",
+		"judgment:mutual",
+		"inputBase:romaji",
+		"suffixRules",
+		"keyRemap",
+		"modeKeys",
+		"chord:shiftKeys",
+		"chord:englishTables",
+		"prefixShiftKeys",
+		"requiresInput",
+		"actionGuard",
+		"postModify",
+		"roles",
+		"layouts",
+		"positionalBase"
+	];
+	/**
+	* `requires` を検証する。理解できない名前が 1 つでもあればエラー。
+	*
+	* **黙って無視してはならない**カテゴリ。`extensions` / `x-` の
+	* 「安全に無視してよい」とはちょうど逆向きの契約。
+	*/
+	function assertRequiredSemantics(raw) {
+		if (raw === void 0 || raw === null) return [];
+		if (!Array.isArray(raw) || raw.some((x) => typeof x !== "string")) throw new Error("KeymapEngine: requires は文字列の配列である必要があります");
+		const unknown = raw.filter((s) => !SUPPORTED_SEMANTICS.includes(s));
+		if (unknown.length > 0) throw new Error(`KeymapEngine: 理解できないセマンティクスを要求しています: ${unknown.join(", ")}。このエンジンでは、この配列を意図どおりに動かせません`);
+		return raw;
+	}
 	//#endregion
 	//#region src/engine/types.ts
 	/** Modifier key bit flags */
@@ -290,14 +764,46 @@
 	};
 	//#endregion
 	//#region src/engine/keymap-decoder.ts
+	const KNOWN_FIELDS = /* @__PURE__ */ new Set([
+		"$schema",
+		"formatVersion",
+		"requires",
+		"requiresInput",
+		"roles",
+		"layouts",
+		"base",
+		"name",
+		"description",
+		"author",
+		"contributor",
+		"basedOn",
+		"license",
+		"addedAt",
+		"keyboardLayout",
+		"targetScript",
+		"behavior",
+		"controlBindings",
+		"inputBase",
+		"keyRemap",
+		"suffixRules",
+		"inputMappings",
+		"prefixShiftKeys",
+		"bufferDisplayMap",
+		"modeKeys",
+		"extensions"
+	]);
+	const IGNORED_FIELDS = /* @__PURE__ */ new Set(["controlBindings", "bufferDisplayMap"]);
 	/** Parse a raw JSON object into a KeymapDefinition */
-	function decodeKeymap$1(json) {
+	function decodeKeymap$1(json, opts = {}) {
+		assertKnownFields(json, opts);
 		const behavior = json.behavior;
 		if (!behavior || behavior.type !== "sequential" && behavior.type !== "chord") throw new Error(`Unsupported behavior type: ${behavior?.type}`);
-		const modeKeys = decodeModeKeys(json.modeKeys);
+		const modeKeys = decodeModeKeys(json.modeKeys, opts);
 		const prefixShiftKeys = json.prefixShiftKeys;
 		const common = {
 			formatVersion: json.formatVersion || "1.0",
+			requires: assertRequiredSemantics(json.requires),
+			requiresInput: decodeInputLevel(json.requiresInput),
 			name: json.name,
 			description: json.description,
 			author: json.author,
@@ -305,6 +811,9 @@
 			basedOn: json.basedOn,
 			license: json.license,
 			keyboardLayout: json.keyboardLayout,
+			roles: json.roles,
+			layouts: json.layouts,
+			base: decodeBase(json.base),
 			targetScript: json.targetScript,
 			inputBase: json.inputBase,
 			keyRemap: json.keyRemap,
@@ -321,7 +830,7 @@
 				shiftKeys: config.shiftKeys ?? [],
 				lookupTable: config.lookupTable ?? {},
 				specialActions: config.specialActions ?? {},
-				judgment: config.judgment === "mutual" ? "mutual" : "window",
+				judgment: decodeJudgment(config.judgment),
 				simultaneousWindow: config.simultaneousWindow ?? .1,
 				englishLookupTable: config.englishLookupTable,
 				englishSpecialActions: config.englishSpecialActions
@@ -338,6 +847,13 @@
 		const rawMap = behavior.characterMap;
 		if (rawMap) {
 			for (const [k, v] of Object.entries(rawMap)) if (k.length === 1 && v.length === 1) characterMap[k] = v;
+			else if (!k.startsWith("_comment")) opts.onDiagnostic?.({
+				code: "character-map-invalid",
+				message: `characterMap は 1 文字 → 1 文字である必要があります: "${k}" → "${v}"`,
+				where: "behavior.characterMap",
+				key: k,
+				value: v
+			});
 		}
 		return {
 			...common,
@@ -348,20 +864,70 @@
 		};
 	}
 	/** Decode modeKeys from JSON string keys like "ctrl+space" */
-	function decodeModeKeys(raw) {
+	function decodeModeKeys(raw, opts) {
 		if (!raw) return [];
 		const entries = [];
-		for (const [keyStr, actionStr] of Object.entries(raw)) {
+		for (const [keyStr, rawAction] of Object.entries(raw)) {
+			if (keyStr.startsWith("_comment")) continue;
+			const actionStr = typeof rawAction === "string" ? rawAction : JSON.stringify(rawAction);
 			const trigger = decodeModeKeyTrigger(keyStr);
-			if (!trigger) continue;
-			const action = decodeKeyAction(actionStr);
-			if (!action) continue;
+			if (!trigger) {
+				opts.onDiagnostic?.({
+					code: "mode-key-trigger-unknown",
+					message: `modeKeys のキー名を解釈できません: "${keyStr}"`,
+					where: "modeKeys",
+					key: keyStr,
+					value: actionStr
+				});
+				continue;
+			}
+			const parsed = parseKeyActionResult(rawAction, "keymap.modeKeys");
+			if (!parsed.ok) {
+				reportActionRejection(opts.onDiagnostic, parsed.reason, "modeKeys", keyStr, actionStr);
+				continue;
+			}
 			entries.push({
 				trigger,
-				action
+				action: parsed.action,
+				...parsed.when ? { when: parsed.when } : {}
 			});
 		}
 		return entries;
+	}
+	/**
+	* トップレベルのフィールドを検査する。
+	*
+	* - **未知のフィールド → エラー**（黙って飛ばして読まない）
+	* - 既知だがこのランタイムが解釈しないフィールド → 診断で報告（読み込みは続ける）
+	*/
+	function assertKnownFields(json, opts) {
+		const unknown = Object.keys(json).filter((k) => !KNOWN_FIELDS.has(k) && !k.startsWith("_comment"));
+		if (unknown.length > 0) throw new Error(`KeymapEngine: 未知のフィールドがあります: ${unknown.join(", ")}。新しい仕様を要求する配列を、それを知らないエンジンで読もうとしています`);
+		if (!opts.onDiagnostic) return;
+		for (const k of Object.keys(json)) if (IGNORED_FIELDS.has(k)) opts.onDiagnostic({
+			code: "field-ignored",
+			message: `このランタイムは "${k}" を解釈しません（書いても効きません）`,
+			where: "(トップレベル)",
+			key: k
+		});
+	}
+	/** base の未知値はエラー（既定へ潰さない） */
+	function decodeBase(raw) {
+		if (raw === void 0 || raw === null) return void 0;
+		if (raw === "characters" || raw === "positional") return raw;
+		throw new Error(`KeymapEngine: 非対応の base "${String(raw)}"（characters / positional のみ）`);
+	}
+	/** requiresInput の未知値はエラー（既定へ潰さない） */
+	function decodeInputLevel(raw) {
+		if (raw === void 0 || raw === null) return void 0;
+		if (raw === "L1" || raw === "L2" || raw === "L3") return raw;
+		throw new Error(`KeymapEngine: 非対応の requiresInput "${String(raw)}"（L1 / L2 / L3 のみ）`);
+	}
+	/** judgment の未知値は既定へ潰さずエラー（v1.10.0。旧版は黙って window にしていた） */
+	function decodeJudgment(raw) {
+		if (raw === void 0 || raw === null) return "window";
+		if (raw === "window" || raw === "mutual") return raw;
+		throw new Error(`KeymapEngine: 非対応の judgment "${String(raw)}"（"window" / "mutual" のみ）。新しい判定方式を要求する配列を、それを知らないエンジンで読もうとしています`);
 	}
 	/** Parse "ctrl+shift+j" → { keyCode, modifiers } */
 	function decodeModeKeyTrigger(str) {
@@ -389,25 +955,88 @@
 		};
 	}
 	/** Parse a KeyAction string from JSON */
-	function decodeKeyAction(str) {
-		switch (str) {
-			case "convert": return { type: "convert" };
-			case "confirm": return { type: "confirm" };
-			case "cancel": return { type: "cancel" };
-			case "deleteBack": return { type: "deleteBack" };
-			case "switchToEnglish": return { type: "switchToEnglish" };
-			case "switchToJapanese": return { type: "switchToJapanese" };
-			case "toggleInputMode": return { type: "toggleInputMode" };
-			case "pass": return { type: "pass" };
-			default: return null;
-		}
-	}
 	/** Filter out _comment keys from inputMappings */
 	function filterComments(mappings) {
 		if (!mappings) return void 0;
 		const result = {};
 		for (const [k, v] of Object.entries(mappings)) if (!k.startsWith("_comment")) result[k] = v;
 		return Object.keys(result).length > 0 ? result : void 0;
+	}
+	//#endregion
+	//#region src/engine/input-level.ts
+	const ORDER = {
+		L1: 1,
+		L2: 2,
+		L3: 3
+	};
+	/**
+	* この配列を**このランタイムで**動かすのに必要な段を求める。
+	*
+	* - 逐次系 → L1（完結した打鍵列だけで意味が決まる）
+	* - chord 系 → **L3**。仕様上は時間窓方式なら L2 で近似できるが、
+	*   この実装は `window` でも単打確定を全キーリリースに置いている
+	*   （`SimultaneousKeyBuffer` は heldKeys 駆動）ため、実際には keyup が要る
+	*
+	* JSON の `requiresInput` 宣言は**厳しくする方向にのみ**効く。緩める宣言
+	* （実装が L3 を要るのに L1 と書く）を通すと、動かない配列を「動く」と誤って
+	* 見せることになるため。
+	*/
+	function requiredInputLevel(def) {
+		const derived = def.behavior.type === "chord" ? "L3" : "L1";
+		const declared = def.requiresInput;
+		if (declared && ORDER[declared] > ORDER[derived]) return declared;
+		return derived;
+	}
+	/** ホストの段で、その配列が動くか */
+	function isSatisfiedBy(required, hostLevel) {
+		return ORDER[hostLevel] >= ORDER[required];
+	}
+	//#endregion
+	//#region src/engine/roles.ts
+	/**
+	* 役名の別名。正規名は機能ベースで、身体部位の名前は可読性のために受理するだけ。
+	* v1 の `leftThumb` / `rightThumb` / `space` からの書き換えを不要にする効果もある。
+	*/
+	const ROLE_ALIASES = {
+		leftThumb: "holder1",
+		rightThumb: "holder2"
+	};
+	/** 別名を正規名に直す */
+	function canonicalRole(name) {
+		return ROLE_ALIASES[name] ?? name;
+	}
+	/**
+	* 役を解決する。
+	*
+	* @param layout どのレイアウトの追加バインドを適用するか（`layouts` のキー）。
+	*               省略すると `layouts` は適用されない（役の既定候補だけ）
+	* @param overrides ホストの実行時上書き。役 → 物理キー名の配列。
+	*                  **指定された役は既定を置き換える**（追加ではない）
+	*/
+	function resolveRoles(def, layout, overrides) {
+		const bindings = /* @__PURE__ */ new Map();
+		const order = [];
+		for (const [rawName, role] of Object.entries(def.roles ?? {})) {
+			const name = canonicalRole(rawName);
+			order.push(name);
+			const override = overrides?.get(name);
+			if (override) {
+				bindings.set(name, [...new Set(override)]);
+				continue;
+			}
+			const keys = [...role.keys ?? []];
+			const extra = layout ? def.layouts?.[layout]?.[rawName] ?? def.layouts?.[layout]?.[name] : void 0;
+			if (extra) keys.push(...extra);
+			bindings.set(name, [...new Set(keys)]);
+		}
+		const keyToRole = /* @__PURE__ */ new Map();
+		for (const name of order) for (const key of bindings.get(name) ?? []) if (!keyToRole.has(key)) keyToRole.set(key, name);
+		return {
+			bindings,
+			keyToRole,
+			order,
+			unbound: order.filter((n) => (bindings.get(n) ?? []).length === 0)
+		};
 	}
 	//#endregion
 	//#region src/engine/standard-romaji.ts
@@ -937,7 +1566,20 @@
 	//#endregion
 	//#region src/engine/keymap-expander.ts
 	/** Expand a KeymapDefinition into an ExpandedKeymap with pre-computed lookup data */
-	function expandKeymap(def) {
+	/** roles の宣言を正規名で引けるようにする（別名 leftThumb → holder1 を吸収） */
+	function normalizedRoleDefs(def) {
+		const out = {};
+		for (const [name, role] of Object.entries(def.roles ?? {})) out[canonicalRole(name)] = role;
+		return out;
+	}
+	function expandKeymap(def, opts = {}) {
+		const roles = resolveRoles(def, opts.layout, opts.roleOverrides);
+		for (const name of roles.unbound) opts.onDiagnostic?.({
+			code: "role-unbound",
+			message: `役 "${name}" に物理キーが割り当てられていません（この面は到達できません）`,
+			where: "roles",
+			key: name
+		});
 		const inputMappings = expandInputMappings(def.inputBase, def.suffixRules, def.inputMappings);
 		const prefixSet = buildPrefixSet(inputMappings);
 		const charMapBase = def.inputBase === "romaji" ? h2zMapUS : {};
@@ -945,9 +1587,12 @@
 			...charMapBase,
 			...def.behavior.characterMap
 		} : {};
-		const chordData = def.behavior.type === "chord" ? expandChordData(def.behavior.config) : void 0;
+		const chordData = def.behavior.type === "chord" ? expandChordData(def.behavior.config, opts, roles, normalizedRoleDefs(def)) : void 0;
 		return {
 			definition: def,
+			requiredInputLevel: requiredInputLevel(def),
+			roleBindings: roles.bindings,
+			unboundRoles: roles.unbound,
 			inputMappings,
 			prefixSet,
 			characterMap,
@@ -1104,96 +1749,160 @@
 		}
 		return bits;
 	}
-	/** Parse a special action string → KeyAction */
-	function parseSpecialAction(str) {
-		switch (str) {
-			case "deleteBack": return { type: "deleteBack" };
-			case "confirm": return { type: "confirm" };
-			case "cancel": return { type: "cancel" };
-			case "convert": return { type: "convert" };
-			case "moveLeft": return { type: "moveLeft" };
-			case "moveRight": return { type: "moveRight" };
-			case "moveUp": return { type: "moveUp" };
-			case "moveDown": return { type: "moveDown" };
-			case "switchToEnglish": return { type: "switchToEnglish" };
-			case "switchToJapanese": return { type: "switchToJapanese" };
-			case "editSegmentLeft": return { type: "editSegmentLeft" };
-			case "editSegmentRight": return { type: "editSegmentRight" };
-			default:
-				if (str.startsWith("insertAndConfirm:")) return {
-					type: "insertAndConfirm",
-					text: str.slice(17)
-				};
-				return null;
-		}
-	}
 	/** Expand chord config into ExpandedChordData */
-	function expandChordData(config) {
+	function expandChordData(config, opts = {}, roles, roleDefs) {
+		const diag = opts.onDiagnostic;
+		const roleBitIndex = /* @__PURE__ */ new Map();
+		(roles?.order ?? []).forEach((name, i) => roleBitIndex.set(name, 30 + i));
+		/** ビットマスク表記のキーを解く。未知の ChordKey 名は報告して捨てる */
+		const parseKeyOrReport = (keyStr, where, value) => {
+			const bits = parseLookupKey(keyStr, keyBits);
+			if (bits === void 0) diag?.({
+				code: "chord-key-unknown",
+				message: `未知の ChordKey 名を含む組合せです: "${keyStr}"`,
+				where,
+				key: keyStr,
+				value
+			});
+			return bits;
+		};
 		const keyBits = /* @__PURE__ */ new Map();
 		for (const [name, idx] of Object.entries(CHORD_KEY_BIT_INDEX)) keyBits.set(name, 2 ** idx);
+		for (const [name, idx] of roleBitIndex) keyBits.set(name, 2 ** idx);
+		for (const alias of [
+			"leftThumb",
+			"rightThumb",
+			"space"
+		]) {
+			const canon = canonicalRole(alias);
+			const idx = roleBitIndex.get(canon);
+			if (idx !== void 0 && !roleBitIndex.has(alias)) keyBits.set(alias, 2 ** idx);
+		}
 		const hidToChordKey = /* @__PURE__ */ new Map();
+		for (const [roleName, physKeys] of roles?.bindings ?? []) for (const physName of physKeys) {
+			const hid = hidNameToCode(physName);
+			if (hid !== void 0) hidToChordKey.set(hid, roleName);
+			else diag?.({
+				code: "hid-key-unknown",
+				message: `役 "${roleName}" に未知の物理キー名が割り当てられています: "${physName}"`,
+				where: "roles",
+				key: physName,
+				value: roleName
+			});
+		}
 		for (const [hidName, chordKeyName] of Object.entries(config.hidToKey)) {
+			if (hidName.startsWith("_comment")) continue;
 			const hid = hidNameToCode(hidName);
 			if (hid !== void 0) hidToChordKey.set(hid, chordKeyName);
+			else diag?.({
+				code: "hid-key-unknown",
+				message: `未知の物理キー名です: "${hidName}"`,
+				where: "behavior.config.hidToKey",
+				key: hidName,
+				value: chordKeyName
+			});
 		}
 		const lookupTable = /* @__PURE__ */ new Map();
 		for (const [keyStr, output] of Object.entries(config.lookupTable)) {
-			const bits = parseLookupKey(keyStr, keyBits);
+			if (keyStr.startsWith("_comment")) continue;
+			const bits = parseKeyOrReport(keyStr, "behavior.config.lookupTable", output);
 			if (bits !== void 0) lookupTable.set(bits, output);
 		}
 		const specialActions = /* @__PURE__ */ new Map();
-		for (const [keyStr, actionStr] of Object.entries(config.specialActions)) {
-			const bits = parseLookupKey(keyStr, keyBits);
-			const action = parseSpecialAction(actionStr);
-			if (bits !== void 0 && action) specialActions.set(bits, action);
+		const specialActionGuards = /* @__PURE__ */ new Map();
+		for (const [keyStr, rawAction] of Object.entries(config.specialActions)) {
+			if (keyStr.startsWith("_comment")) continue;
+			const where = "behavior.config.specialActions";
+			const label = typeof rawAction === "string" ? rawAction : JSON.stringify(rawAction);
+			const bits = parseKeyOrReport(keyStr, where, label);
+			const parsed = parseKeyActionResult(rawAction, "keymap.specialActions");
+			if (!parsed.ok) {
+				reportActionRejection(diag, parsed.reason, where, keyStr, label);
+				continue;
+			}
+			if (bits !== void 0) {
+				specialActions.set(bits, parsed.action);
+				if (parsed.when) specialActionGuards.set(bits, parsed.when);
+			}
 		}
-		const shiftKeys = /* @__PURE__ */ new Set();
+		const shiftKeys = new Set(roles?.order ?? []);
 		const shiftSingleTapActions = /* @__PURE__ */ new Map();
-		for (const sk of config.shiftKeys) {
+		const shiftSingleTapGuards = /* @__PURE__ */ new Map();
+		const spaceRole = hidToChordKey.get(HID.SPACE);
+		for (const [roleName, physKeys] of roles?.bindings ?? []) {
+			const decl = roleDefs?.[roleName]?.singleTapAction;
+			if (decl !== void 0) {
+				const parsed = parseKeyActionResult(decl, "keymap.singleTapAction");
+				if (parsed.ok) {
+					shiftSingleTapActions.set(roleName, parsed.action);
+					if (parsed.when) shiftSingleTapGuards.set(roleName, parsed.when);
+				} else reportActionRejection(diag, parsed.reason, "roles", roleName, String(decl));
+			} else if (physKeys.includes("space")) shiftSingleTapActions.set(roleName, { type: "convert" });
+		}
+		for (const sk of config.shiftKeys ?? []) {
 			shiftKeys.add(sk.key);
 			if (sk.singleTapAction) {
-				const action = parseSpecialAction(sk.singleTapAction);
-				if (action) shiftSingleTapActions.set(sk.key, action);
-			}
+				const parsed = parseKeyActionResult(sk.singleTapAction, "keymap.singleTapAction");
+				if (parsed.ok) {
+					shiftSingleTapActions.set(sk.key, parsed.action);
+					if (parsed.when) shiftSingleTapGuards.set(sk.key, parsed.when);
+				} else reportActionRejection(diag, parsed.reason, "behavior.config.shiftKeys", sk.key, sk.singleTapAction);
+			} else if (sk.key === spaceRole) shiftSingleTapActions.set(sk.key, { type: "convert" });
 		}
 		let englishLookupTable = null;
 		if (config.englishLookupTable) {
 			englishLookupTable = /* @__PURE__ */ new Map();
 			for (const [keyStr, output] of Object.entries(config.englishLookupTable)) {
-				const bits = parseLookupKey(keyStr, keyBits);
+				if (keyStr.startsWith("_comment")) continue;
+				const bits = parseKeyOrReport(keyStr, "behavior.config.englishLookupTable", output);
 				if (bits !== void 0) englishLookupTable.set(bits, output);
 			}
 		}
 		let englishSpecialActions = null;
+		let englishSpecialActionGuards = null;
 		if (config.englishSpecialActions) {
 			englishSpecialActions = /* @__PURE__ */ new Map();
-			for (const [keyStr, actionStr] of Object.entries(config.englishSpecialActions)) {
-				const bits = parseLookupKey(keyStr, keyBits);
-				const action = parseSpecialAction(actionStr);
-				if (bits !== void 0 && action) englishSpecialActions.set(bits, action);
+			englishSpecialActionGuards = /* @__PURE__ */ new Map();
+			for (const [keyStr, rawAction] of Object.entries(config.englishSpecialActions)) {
+				if (keyStr.startsWith("_comment")) continue;
+				const where = "behavior.config.englishSpecialActions";
+				const label = typeof rawAction === "string" ? rawAction : JSON.stringify(rawAction);
+				const bits = parseKeyOrReport(keyStr, where, label);
+				const parsed = parseKeyActionResult(rawAction, "keymap.englishSpecialActions");
+				if (!parsed.ok) {
+					reportActionRejection(diag, parsed.reason, where, keyStr, label);
+					continue;
+				}
+				if (bits !== void 0) {
+					englishSpecialActions.set(bits, parsed.action);
+					if (parsed.when) englishSpecialActionGuards.set(bits, parsed.when);
+				}
 			}
 		}
 		return {
 			hidToChordKey,
 			lookupTable,
 			specialActions,
+			specialActionGuards,
 			shiftKeys,
 			shiftSingleTapActions,
+			shiftSingleTapGuards,
 			keyBits,
 			judgment: config.judgment ?? "window",
 			simultaneousWindow: Math.round(config.simultaneousWindow * 1e3),
 			englishLookupTable,
-			englishSpecialActions
+			englishSpecialActions,
+			englishSpecialActionGuards
 		};
 	}
 	//#endregion
 	//#region src/engine/version.ts
-	const ENGINE_VERSION = "1.6.0";
+	const ENGINE_VERSION = "2.0.0";
 	//#endregion
 	//#region src/engine/key-router.ts
 	/** Route a KeyEvent to a KeyAction based on the expanded keymap */
-	function routeKey(event, keymap, isComposing, state, isDirectEnglishMode) {
-		const modeAction = matchModeKey(event, keymap);
+	function routeKey(event, keymap, isComposing, state, isDirectEnglishMode, phase = isComposing ? "composing" : "idle") {
+		const modeAction = matchModeKey(event, keymap, phase);
 		if (modeAction) return modeAction;
 		if (event.keyCode === HID.BACKSPACE && !(event.modifiers & (KeyModifierFlags.META | KeyModifierFlags.ALT))) return { type: "deleteBack" };
 		if (isComposing && event.modifiers & KeyModifierFlags.CONTROL) return routeControlKey(event);
@@ -1201,7 +1910,10 @@
 			const ctrlAction = routeStandardControlKey(event, state, keymap.chordData ? isChordShiftKeyCode(event.keyCode, keymap.chordData) : false);
 			if (ctrlAction) return ctrlAction;
 		}
-		if (keymap.chordData) return routeChord(event, keymap.chordData, isDirectEnglishMode);
+		if (keymap.chordData) {
+			const spaceIsChordKey = keymap.chordData.hidToChordKey.has(HID.SPACE);
+			if (!(event.keyCode === HID.SPACE && !spaceIsChordKey)) return routeChord(event, keymap.chordData, isDirectEnglishMode);
+		}
 		if (!isComposing && !isDirectEnglishMode && event.keyCode === HID.SPACE) return {
 			type: "insertSpace",
 			shifted: !!(event.modifiers & KeyModifierFlags.SHIFT)
@@ -1209,14 +1921,14 @@
 		return routeSequential(event, keymap, isComposing, isDirectEnglishMode);
 	}
 	/** Match modeKeys triggers */
-	function matchModeKey(event, keymap) {
+	function matchModeKey(event, keymap, phase) {
 		const eventMods = event.modifiers & (KeyModifierFlags.SHIFT | KeyModifierFlags.CONTROL | KeyModifierFlags.ALT);
-		for (const entry of keymap.modeKeys) {
+		for (const withModifiers of [true, false]) for (const entry of keymap.modeKeys) {
 			const t = entry.trigger;
 			if (t.keyCode !== event.keyCode) continue;
-			if (t.modifiers !== 0) {
-				if (t.modifiers === eventMods) return entry.action;
-			} else return entry.action;
+			if (t.modifiers !== 0 !== withModifiers) continue;
+			if (!isActiveIn(entry.when, phase)) continue;
+			if (t.modifiers === 0 || t.modifiers === eventMods) return entry.action;
 		}
 		return null;
 	}
@@ -1252,7 +1964,7 @@
 			};
 			return { type: "pass" };
 		}
-		const chars = event.characters;
+		const chars = (keymap.definition.base === "positional" && event.modifiers === 0 ? hidToUsLegend(event.keyCode) : void 0) ?? event.characters;
 		if (chars.length !== 1) return { type: "pass" };
 		const c = chars;
 		const logical = keymap.keyRemap[c] ?? c;
@@ -1454,6 +2166,9 @@
 		static {
 			this.EMPTY_SPECIALS = /* @__PURE__ */ new Map();
 		}
+		static {
+			this.EMPTY_GUARDS = /* @__PURE__ */ new Map();
+		}
 		/** 現在のモードの lookup テーブル */
 		lookup() {
 			return this.englishMode ? this.chord.englishLookupTable ?? SimultaneousKeyBuffer.EMPTY_LOOKUP : this.chord.lookupTable;
@@ -1462,12 +2177,38 @@
 		specials() {
 			return this.englishMode ? this.chord.englishSpecialActions ?? SimultaneousKeyBuffer.EMPTY_SPECIALS : this.chord.specialActions;
 		}
+		guards() {
+			return this.englishMode ? this.chord.englishSpecialActionGuards ?? SimultaneousKeyBuffer.EMPTY_GUARDS : this.chord.specialActionGuards;
+		}
+		/**
+		* その組合せの specialAction。**局面ガードが外れていれば「定義が無い」ものとして扱う**
+		* （lookupTable にあればそちらが出て、無ければ fall-through する）。
+		*/
+		specialAt(bits) {
+			const action = this.specials().get(bits);
+			if (action === void 0) return void 0;
+			const when = this.guards().get(bits);
+			if (when && this.hostPhase && !isActiveIn(when, this.hostPhase())) return void 0;
+			return action;
+		}
+		hasSpecialAt(bits) {
+			return this.specialAt(bits) !== void 0;
+		}
+		/** シフト役の単打アクション。局面ガードが外れていれば無し扱い */
+		singleTapAt(key) {
+			const action = this.chord.shiftSingleTapActions.get(key);
+			if (action === void 0) return void 0;
+			const when = this.chord.shiftSingleTapGuards.get(key);
+			if (when && this.hostPhase && !isActiveIn(when, this.hostPhase())) return void 0;
+			return action;
+		}
 		constructor(chord) {
 			this.state = { type: "idle" };
 			this.timerId = null;
 			this.pressedKeys = /* @__PURE__ */ new Set();
 			this.windowOverride = null;
 			this.englishMode = false;
+			this.hostPhase = null;
 			this.onOutput = null;
 			this.onShiftSingle = null;
 			this.onSpecialAction = null;
@@ -1509,7 +2250,7 @@
 			this.pressedKeys.delete(key);
 			if (this.state.type === "shiftHeld" && this.state.shiftKey === key) {
 				if (!this.state.used) {
-					const action = this.chord.shiftSingleTapActions.get(key);
+					const action = this.singleTapAt(key);
 					if (action) this.onShiftSingle?.(action);
 				}
 				this.state = { type: "idle" };
@@ -1541,7 +2282,7 @@
 			}
 			let candidate = bit;
 			for (const k of this.mutualGroup) candidate += this.getBit(k) ?? 0;
-			if (this.lookup().has(candidate) || this.specials().has(candidate)) {
+			if (this.lookup().has(candidate) || this.hasSpecialAt(candidate)) {
 				this.mutualGroup.add(key);
 				this.mutualOrder.push(key);
 				this.evaluateMutualChord(candidate);
@@ -1580,7 +2321,7 @@
 				this.mutualOutputted = true;
 				return;
 			}
-			const action = this.specials().get(bits);
+			const action = this.specialAt(bits);
 			if (action) {
 				if (this.mutualCharCount > 0) {
 					this.onOutput?.("", this.mutualCharCount);
@@ -1616,13 +2357,13 @@
 		/** 単打出力（シフトキー → 単打アクション、specialAction 優先、なければ文字） */
 		mutualSingleTap(key) {
 			if (this.chord.shiftKeys.has(key)) {
-				const action = this.chord.shiftSingleTapActions.get(key);
+				const action = this.singleTapAt(key);
 				if (action) this.onShiftSingle?.(action);
 				return;
 			}
 			const bit = this.getBit(key);
 			if (bit === void 0) return;
-			const action = this.specials().get(bit);
+			const action = this.specialAt(bit);
 			if (action) {
 				this.onSpecialAction?.(action);
 				return;
@@ -1685,7 +2426,7 @@
 			const keyBit = this.getBit(key);
 			if (!firstBit || !keyBit) return;
 			const combined = firstBit + keyBit;
-			const specialAction = this.specials().get(combined);
+			const specialAction = this.specialAt(combined);
 			if (specialAction) {
 				if (firstCharCount > 0) this.onOutput?.("", firstCharCount);
 				const keys = /* @__PURE__ */ new Set([firstKey, key]);
@@ -1714,11 +2455,11 @@
 				this.startTimer();
 			} else if (firstOutput === null) {
 				if (this.chord.shiftKeys.has(firstKey)) {
-					const action = this.chord.shiftSingleTapActions.get(firstKey);
+					const action = this.singleTapAt(firstKey);
 					if (action) this.onShiftSingle?.(action);
 				} else {
 					const firstBits = this.getBit(firstKey);
-					const pendingAction2 = firstBits ? this.specials().get(firstBits) : null;
+					const pendingAction2 = firstBits ? this.specialAt(firstBits) : null;
 					if (pendingAction2) this.onSpecialAction?.(pendingAction2);
 				}
 				this.state = { type: "idle" };
@@ -1772,7 +2513,7 @@
 			const keyBit = this.getBit(key);
 			if (!shiftBit || !keyBit) return;
 			const combined = shiftBit + keyBit;
-			const specialAction = this.specials().get(combined);
+			const specialAction = this.specialAt(combined);
 			if (specialAction) {
 				this.onSpecialAction?.(specialAction);
 				this.state = {
@@ -1793,7 +2534,7 @@
 				return;
 			}
 			if (!used) {
-				const action = this.chord.shiftSingleTapActions.get(shiftKey);
+				const action = this.singleTapAt(shiftKey);
 				if (action) this.onShiftSingle?.(action);
 			}
 			this.state = { type: "idle" };
@@ -1822,14 +2563,14 @@
 						used: false
 					};
 					else {
-						const action = this.chord.shiftSingleTapActions.get(firstKey);
+						const action = this.singleTapAt(firstKey);
 						if (action) this.onShiftSingle?.(action);
 						this.state = { type: "idle" };
 					}
 					else {
 						const bits = this.getBit(firstKey);
 						if (bits) {
-							const pendingAction = this.specials().get(bits);
+							const pendingAction = this.specialAt(bits);
 							if (pendingAction) this.onSpecialAction?.(pendingAction);
 						}
 						this.state = { type: "idle" };
@@ -1860,92 +2601,6 @@
 		}
 	};
 	//#endregion
-	//#region src/engine/gamepad-kana-table.ts
-	/** LT後置シフトマップ: 子音かな→拗音, 母音→小書き */
-	const YOUON_POSTSHIFT_MAP = /* @__PURE__ */ new Map([
-		["あ", "ぁ"],
-		["い", "ぃ"],
-		["う", "ぅ"],
-		["え", "ぇ"],
-		["お", "ぉ"],
-		["や", "ゃ"],
-		["ゆ", "ゅ"],
-		["よ", "ょ"],
-		["わ", "ゎ"],
-		["か", "きゃ"],
-		["く", "きゅ"],
-		["こ", "きょ"],
-		["さ", "しゃ"],
-		["す", "しゅ"],
-		["そ", "しょ"],
-		["た", "ちゃ"],
-		["つ", "ちゅ"],
-		["と", "ちょ"],
-		["な", "にゃ"],
-		["ぬ", "にゅ"],
-		["の", "にょ"],
-		["は", "ひゃ"],
-		["ふ", "ひゅ"],
-		["ほ", "ひょ"],
-		["ま", "みゃ"],
-		["む", "みゅ"],
-		["も", "みょ"],
-		["ら", "りゃ"],
-		["る", "りゅ"],
-		["ろ", "りょ"],
-		["が", "ぎゃ"],
-		["ぐ", "ぎゅ"],
-		["ご", "ぎょ"],
-		["ざ", "じゃ"],
-		["ず", "じゅ"],
-		["ぞ", "じょ"],
-		["だ", "ぢゃ"],
-		["づ", "ぢゅ"],
-		["ど", "ぢょ"],
-		["ば", "びゃ"],
-		["ぶ", "びゅ"],
-		["ぼ", "びょ"],
-		["ぱ", "ぴゃ"],
-		["ぷ", "ぴゅ"],
-		["ぽ", "ぴょ"]
-	]);
-	/** 濁点変換マップ */
-	const DAKUTEN_MAP = /* @__PURE__ */ new Map([
-		["か", "が"],
-		["き", "ぎ"],
-		["く", "ぐ"],
-		["け", "げ"],
-		["こ", "ご"],
-		["さ", "ざ"],
-		["し", "じ"],
-		["す", "ず"],
-		["せ", "ぜ"],
-		["そ", "ぞ"],
-		["た", "だ"],
-		["ち", "ぢ"],
-		["つ", "づ"],
-		["て", "で"],
-		["と", "ど"],
-		["は", "ば"],
-		["ひ", "び"],
-		["ふ", "ぶ"],
-		["へ", "べ"],
-		["ほ", "ぼ"],
-		["う", "ゔ"]
-	]);
-	/** 半濁点変換マップ */
-	const HANDAKUTEN_MAP = /* @__PURE__ */ new Map([
-		["は", "ぱ"],
-		["ひ", "ぴ"],
-		["ふ", "ぷ"],
-		["へ", "ぺ"],
-		["ほ", "ぽ"]
-	]);
-	/** 濁点逆引き（濁音→清音） */
-	const DAKUTEN_REVERSE = new Map([...DAKUTEN_MAP.entries()].map(([k, v]) => [v, k]));
-	/** 半濁点逆引き（半濁音→清音） */
-	const HANDAKUTEN_REVERSE = new Map([...HANDAKUTEN_MAP.entries()].map(([k, v]) => [v, k]));
-	//#endregion
 	//#region src/engine/input-engine.ts
 	var InputEngine = class {
 		constructor(keymap) {
@@ -1956,6 +2611,7 @@
 			this.chordBuffer = null;
 			this.onStateChange = null;
 			this.onHostAction = null;
+			this.hostPhase = null;
 			this.keymap = keymap;
 			this.buffer.setMappings(keymap.inputMappings, keymap.prefixSet);
 			this.setupChordBuffer(keymap);
@@ -1973,7 +2629,7 @@
 			const isComposing = this.composingKana.length > 0 || !this.buffer.isEmpty;
 			const state = isComposing ? "composing" : "idle";
 			const isEnglish = this.inputMode === "english";
-			const action = routeKey(event, this.keymap, isComposing, state, isEnglish);
+			const action = routeKey(event, this.keymap, isComposing, state, isEnglish, this.phase);
 			this.executeAction(action);
 			return this.getState();
 		}
@@ -1986,9 +2642,28 @@
 			return this.getState();
 		}
 		/** Get current state */
+		/**
+		* このエンジン自身が合成中か（よみ or ローマ字バッファを保持している）。
+		*
+		* `getState()` は `phase` を含み、`phase` は `hostPhase()` を呼ぶ。セッション側が
+		* `hostPhase` の中で `getState()` を見ると**無限再帰**になるので、問い合わせ用に
+		* 副作用の無いこちらを公開している。
+		*/
+		get isComposing() {
+			return this.composingKana.length > 0 || !this.buffer.isEmpty;
+		}
+		/**
+		* 現在の局面。所有者（セッション層）が居ればそちらを正とし、居なければ自分の
+		* 合成状態から導出する。
+		*/
+		get phase() {
+			if (this.hostPhase) return this.hostPhase();
+			return this.isComposing ? "composing" : "idle";
+		}
 		getState() {
 			const isComposing = this.composingKana.length > 0 || !this.buffer.isEmpty;
 			return {
+				phase: this.phase,
 				confirmedText: this.confirmedText,
 				composingKana: this.composingKana,
 				pendingBuffer: this.buffer.pending,
@@ -2034,40 +2709,28 @@
 		}
 		/** composingKana 末尾の濁点/半濁点/清音をトグル（か→が→か、は→ば→ぱ→は） */
 		applyToggleDakuten() {
-			if (this.composingKana.length === 0) return this.getState();
-			const chars = [...this.composingKana];
-			const last = chars[chars.length - 1];
-			const seionFromHandakuten = HANDAKUTEN_REVERSE.get(last);
-			if (seionFromHandakuten) {
-				chars[chars.length - 1] = seionFromHandakuten;
-				this.composingKana = chars.join("");
-				return this.getState();
-			}
-			const seionFromDakuten = DAKUTEN_REVERSE.get(last);
-			if (seionFromDakuten) {
-				const handakuten = HANDAKUTEN_MAP.get(seionFromDakuten);
-				if (handakuten) chars[chars.length - 1] = handakuten;
-				else chars[chars.length - 1] = seionFromDakuten;
-				this.composingKana = chars.join("");
-				return this.getState();
-			}
-			const dakuten = DAKUTEN_MAP.get(last);
-			if (dakuten) {
-				chars[chars.length - 1] = dakuten;
-				this.composingKana = chars.join("");
-			}
-			return this.getState();
+			return this.applyPostModify("cycleDakuten");
 		}
 		/** composingKana 末尾を拗音/小書きに変換。対象外なら「っ」を追加 */
 		applyYouon() {
+			return this.applyPostModify("small");
+		}
+		/**
+		* composingKana 末尾 1 字に後置変調を適用する。
+		*
+		* **対象の正は「合成テキストの所有者」が持つ**（docs/keymap-v2-requirements.md D4）。
+		* このエンジンが合成中はエンジンが所有者なので `composingKana` の末尾でよい。
+		* 合成していないときは所有者がセッション層側なので、ここでは何もしない
+		* （その経路はセッション層の postModify プリミティブの担当。別便）。
+		*/
+		applyPostModify(op) {
 			if (this.composingKana.length === 0) return this.getState();
 			const chars = [...this.composingKana];
 			const last = chars[chars.length - 1];
-			const replaced = YOUON_POSTSHIFT_MAP.get(last);
-			if (replaced) {
-				chars[chars.length - 1] = replaced[0];
-				this.composingKana = chars.join("") + replaced.slice(1);
-			} else this.composingKana += "っ";
+			const next = postModify(last, op);
+			if (next === null) return this.getState();
+			chars[chars.length - 1] = next;
+			this.composingKana = chars.join("");
 			return this.getState();
 		}
 		/** Reset all state */
@@ -2094,6 +2757,7 @@
 		setupChordBuffer(keymap) {
 			if (keymap.chordData) {
 				this.chordBuffer = new SimultaneousKeyBuffer(keymap.chordData);
+				this.chordBuffer.hostPhase = () => this.phase;
 				this.syncChordBufferMode();
 				this.chordBuffer.onOutput = (text, replaceCount) => {
 					if (this.inputMode === "english") {
@@ -2195,6 +2859,10 @@
 					if (this.onHostAction?.(action)) break;
 					this.confirmComposition();
 					break;
+				case "postModify":
+					if (this.isComposing) this.applyPostModify(action.op);
+					else this.onHostAction?.(action);
+					break;
 				case "pass": break;
 			}
 		}
@@ -2272,22 +2940,27 @@
 	/** このバンドルのバージョン（取り込み側が記録する用） */
 	const version = ENGINE_VERSION;
 	/** サポートする keymap-format のメジャーバージョン */
-	const SUPPORTED_MAJOR = 1;
+	const SUPPORTED_MAJOR = 2;
 	/**
 	* keymap JSON を検証しつつ ExpandedKeymap に変換する。
 	* `InputEngine` のコンストラクタにそのまま渡せる形。
 	*
 	* - `formatVersion` のメジャーが非対応なら明確なエラーを投げる。
 	* - `behavior.type` が未対応（sequential / chord 以外）ならデコーダがエラーを投げる。
+	* - `judgment` が未知の値ならエラーを投げる（v1.10.0。旧版は黙って window に潰していた）。
+	* - `requires` に理解できないセマンティクス名があればエラーを投げる（v1.11.0）。
+	* - `opts.onDiagnostic` を渡すと、**解釈できずに捨てたエントリ**を報告する
+	*   （未知のキー名・その面では書けないアクション・壊れたパラメータ等）。
+	*   省略時は従来どおり黙って捨てる。
 	*/
-	function decodeKeymap(json) {
+	function decodeKeymap(json, opts = {}) {
 		if (json === null || typeof json !== "object") throw new Error("KeymapEngine.decodeKeymap: keymap JSON オブジェクトを渡してください");
 		const obj = json;
 		assertFormatVersion(obj.formatVersion);
-		return expandKeymap(decodeKeymap$1(obj));
+		return expandKeymap(decodeKeymap$1(obj, opts), opts);
 	}
 	function assertFormatVersion(raw) {
-		const v = typeof raw === "string" && raw.length > 0 ? raw : "1.0";
+		const v = typeof raw === "string" && raw.length > 0 ? raw : "";
 		const major = Number.parseInt(v.split(".")[0], 10);
 		if (!Number.isFinite(major) || major !== SUPPORTED_MAJOR) throw new Error(`KeymapEngine: 非対応の formatVersion "${v}"（このエンジンは ${SUPPORTED_MAJOR}.x に対応）`);
 	}
@@ -2314,7 +2987,9 @@
 	//#endregion
 	exports.InputEngine = InputEngine;
 	exports.KeyModifierFlags = KeyModifierFlags;
+	exports.SUPPORTED_SEMANTICS = SUPPORTED_SEMANTICS;
 	exports.browserCodeToHID = browserCodeToHID;
+	exports.collectDiagnostics = collectDiagnostics;
 	exports.createBuiltinRomajiJIS = createBuiltinRomajiJIS;
 	exports.createBuiltinRomajiUS = createBuiltinRomajiUS;
 	exports.decodeKeymap = decodeKeymap;
@@ -2323,6 +2998,8 @@
 	exports.hidCodeToName = hidCodeToName;
 	exports.hidNameToBrowserCode = hidNameToBrowserCode;
 	exports.hidNameToCode = hidNameToCode;
+	exports.isSatisfiedBy = isSatisfiedBy;
 	exports.keyEventFromBrowser = keyEventFromBrowser;
+	exports.requiredInputLevel = requiredInputLevel;
 	exports.version = version;
 });

@@ -1,6 +1,9 @@
-// Hechima v0.13.1 — 変換セッション層 単体バンドルの型定義（手書き。cb 契約の明文化）。
-// 要 KeymapEngine >= 1.4.0（英数モードの chord 解釈 + mutual 再入修正。
-// onHostAction の convert/confirm/insertAndConfirm 転送自体は >= 1.2.0）。
+// Hechima v0.19.0 — 変換セッション層 単体バンドルの型定義（手書き。cb 契約の明文化）。
+// 要 KeymapEngine >= 2.0.0（keymap v2。配列は roles で役を宣言し、物理キーへの割当は
+// layouts + ホストの roleOverrides で決まる。**v1 のキーマップは読めない**）。
+// v0.19.0 は engine の局面問い合わせ（InputEngine.hostPhase）を配線する。
+// ※ このヘッダの版は web/src/hechima/version.ts の HECHIMA_VERSION と一致させること
+//   （hechima リポジトリ側は npm run build が機械照合する）。
 // 対応バンドル: hechima.js / hechima.min.js（UMD、グローバル名 `Hechima`）
 //             + hechima-worker.js（Worker 本体、へちま蔓 v0。connectWorker で接続する）
 // リファレンス: docs/hechima-session-embedding.md / docs/hechima-protocol.md
@@ -21,7 +24,7 @@ export interface SegmentView {
   /** candidates 内の現在選択位置（v0.5.0+、候補選択中のみ） */
   candidateIndex?: number;
   /**
-   * 展開済みの追加候補（v0.6.0+、注目文節のみ）。通常候補の先頭で ↑（内蔵経路は Shift+Space も）
+   * 展開済みの追加候補（v0.6.0+、注目文節のみ）。通常候補の先頭で ↑（v0.18.0+ は engine 挿し時も Shift+Space）
    * を押すたびに 1 つずつ展開される（ひらがな → カタカナ の順。KeyLogicKit / azooKey-Desktop 準拠）。
    * UI は通常候補の上に注釈付きで表示する。
    */

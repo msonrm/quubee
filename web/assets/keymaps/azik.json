@@ -1,98 +1,10 @@
 {
-  "formatVersion": "1.0",
-  "name": "AZIK(US)",
+  "$schema": "../../../docs/keymap-v2.schema.json",
+  "formatVersion": "2.0",
+  "name": "AZIK",
+  "description": "AZIK 拡張ローマ字入力",
   "author": "木村清",
-  "description": "AZIK 拡張ローマ字入力（US キーボード）",
-  "keyboardLayout": "us",
   "targetScript": "hiragana",
-  "behavior": {
-    "type": "sequential",
-    "characterMap": {
-      "0": "０",
-      "1": "１",
-      "2": "２",
-      "3": "３",
-      "4": "４",
-      "5": "５",
-      "6": "６",
-      "7": "７",
-      "8": "８",
-      "9": "９",
-      "{": "『",
-      "}": "』",
-      "(": "（",
-      ")": "）",
-      "<": "＜",
-      ">": "＞",
-      "^": "＾",
-      "_": "＿",
-      "\"": "”",
-      "'": "’",
-      "`": "｀",
-      "+": "＋",
-      "=": "＝",
-      "*": "＊",
-      "!": "！",
-      "?": "？",
-      "@": "＠",
-      "#": "＃",
-      "$": "＄",
-      "%": "％",
-      "&": "＆",
-      "|": "｜",
-      "\\": "＼",
-      "¥": "￥"
-    }
-  },
-  "modeKeys": {
-    "ctrl+space": "toggleInputMode",
-    "ctrl+shift+j": "switchToJapanese",
-    "ctrl+shift+semicolon": "switchToEnglish"
-  },
-  "prefixShiftKeys": [],
-  "inputBase": "romaji",
-  "suffixRules": {
-    "z": {
-      "vowel": "a",
-      "suffix": "ん"
-    },
-    "n": {
-      "vowel": "a",
-      "suffix": "ん"
-    },
-    "k": {
-      "vowel": "i",
-      "suffix": "ん"
-    },
-    "j": {
-      "vowel": "u",
-      "suffix": "ん"
-    },
-    "d": {
-      "vowel": "e",
-      "suffix": "ん"
-    },
-    "l": {
-      "vowel": "o",
-      "suffix": "ん"
-    },
-    "q": {
-      "vowel": "a",
-      "suffix": "い"
-    },
-    "h": {
-      "vowel": "u",
-      "suffix": "う"
-    },
-    "w": {
-      "vowel": "e",
-      "suffix": "い"
-    },
-    "p": {
-      "vowel": "o",
-      "suffix": "う"
-    }
-  },
   "inputMappings": {
     "_comment_special": "単打特殊キー",
     "q": "ん",
@@ -202,5 +114,95 @@
     "dch": "どぅー",
     "wp": "うぉー",
     "wl": "うぉん"
+  },
+  "inputBase": "romaji",
+  "suffixRules": {
+    "z": {
+      "vowel": "a",
+      "suffix": "ん"
+    },
+    "n": {
+      "vowel": "a",
+      "suffix": "ん"
+    },
+    "k": {
+      "vowel": "i",
+      "suffix": "ん"
+    },
+    "j": {
+      "vowel": "u",
+      "suffix": "ん"
+    },
+    "d": {
+      "vowel": "e",
+      "suffix": "ん"
+    },
+    "l": {
+      "vowel": "o",
+      "suffix": "ん"
+    },
+    "q": {
+      "vowel": "a",
+      "suffix": "い"
+    },
+    "h": {
+      "vowel": "u",
+      "suffix": "う"
+    },
+    "w": {
+      "vowel": "e",
+      "suffix": "い"
+    },
+    "p": {
+      "vowel": "o",
+      "suffix": "う"
+    }
+  },
+  "prefixShiftKeys": [],
+  "behavior": {
+    "type": "sequential",
+    "characterMap": {
+      "0": "０",
+      "1": "１",
+      "2": "２",
+      "3": "３",
+      "4": "４",
+      "5": "５",
+      "6": "６",
+      "7": "７",
+      "8": "８",
+      "9": "９",
+      "{": "『",
+      "}": "』",
+      "(": "（",
+      ")": "）",
+      "<": "＜",
+      ">": "＞",
+      "^": "＾",
+      "_": "＿",
+      "\"": "”",
+      "'": "’",
+      "`": "｀",
+      "+": "＋",
+      "=": "＝",
+      "*": "＊",
+      "!": "！",
+      "?": "？",
+      "@": "＠",
+      "#": "＃",
+      "$": "＄",
+      "%": "％",
+      "&": "＆",
+      "|": "｜",
+      "\\": "＼",
+      "¥": "￥"
+    }
+  },
+  "modeKeys": {
+    "ctrl+space": "toggleInputMode",
+    "ctrl+shift+j": "switchToJapanese",
+    "ctrl+shift+semicolon": "switchToEnglish",
+    "lang2": "switchToEnglish",
+    "lang1": "switchToJapanese"
   }
 }

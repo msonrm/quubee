@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// 文節伸縮 (hechima v0.16.0 + keymap-engine v1.6.0 + hechima-wasm v0.2.0) の headless 回帰。
+// 文節伸縮 (hechima v0.19.0 + keymap-engine v2.0.0 + hechima-wasm v0.2.0) の headless 回帰。
 // 薙刀式 space+T/Y → editSegmentLeft/Right → cb.resize → Mozc ResizeSegment の追随
 // (labo 指示書 docs/hechima_v020_quubee_handoff.md §5 + v0.3.0 追随 docs/hechima_v030_quubee_handoff.md)。
 //
@@ -43,7 +43,7 @@ function harness(convert, resize) {
     };
     if (resize) cb.resize = (segIdx, offset) => { log.resizes.push([segIdx, offset]); return resize(segIdx, offset); };
     const fep = H.createFep(cb);
-    const json = JSON.parse(fs.readFileSync(path.join(WEB, 'assets', 'keymaps', 'naginata_jis.json'), 'utf8'));
+    const json = JSON.parse(fs.readFileSync(path.join(WEB, 'assets', 'keymaps', 'naginata.json'), 'utf8'));
     const eng = new K.InputEngine(K.decodeKeymap(json));
     eng.onStateChange = () => fep.pumpEngine();
     fep.setEngine(eng, (tap) => K.keyEventFromBrowser(tap));
@@ -62,8 +62,8 @@ const SEGS2 = [
 ];
 
 (async () => {
-    ok(H.version === '0.16.0', `hechima.version = 0.16.0 (got ${H.version})`);
-    ok(K.version === '1.6.0', `KeymapEngine.version = 1.6.0 (got ${K.version}) — hechima 0.16.0 とセット必須`);
+    ok(H.version === '0.19.0', `hechima.version = 0.19.0 (got ${H.version})`);
+    ok(K.version === '2.0.0', `KeymapEngine.version = 2.0.0 (got ${K.version}) — hechima 0.19.0 とセット必須`);
 
     // ---- Part A1: Phase 2 + editSegment* → cb.resize(focus, ±1)・表示差し替え ----
     {
