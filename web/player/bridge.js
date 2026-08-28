@@ -134,6 +134,18 @@ async function loadDisk(M, url, fsPath) {
 // 赤黄+スタックトレースが自動付与され「無害なのにエラーの山」に見えるのを避ける狙い。本物の emscripten
 // エラーは Aborted/RuntimeError 等で先頭が [小文字 にならないので console.error に残す。
 // 前面表示 (console.log): URL に ?debug を付ける / window.QB_VERBOSE = true / qbDebug.verbose(1)。
+// qbDebug.dosver 用: '6.20' / '6.2' / 6 のいずれも DOS 慣例で packed = (major << 8) | minor へ。
+// 小数部は 2 桁扱い ('6.2' も '6.20' も minor=20 = DOS 6.2 の言い方に合わせる)。
+function qbParseDosVer(v) {
+    const m = String(v).trim().match(/^(\d{1,3})(?:\.(\d{1,2}))?$/);
+    if (!m) return null;
+    const major = parseInt(m[1], 10);
+    const minor = m[2] === undefined ? 0 : parseInt(m[2].padEnd(2, '0'), 10);
+    if (major < 1 || major > 255 || minor > 255) return null;
+    return (major << 8) | minor;
+}
+const qbFmtDosVer = (packed) => `${packed >> 8}.${String(packed & 0xFF).padStart(2, '0')}`;
+
 const qbVerbose = () => typeof window !== 'undefined' &&
     (window.QB_VERBOSE || /[?&]debug\b/.test(location.search));
 const qbChatter = /^\[[a-z]/;
@@ -2598,6 +2610,8 @@ async function makeWorkerEmu() {
     const setMul      = M.cwrap('np2kai_set_clock_multiple', 'number', ['number']);
     const setY2k      = M.cwrap('np2kai_set_y2k_clamp',      'number', ['number']);
     const getY2k      = M.cwrap('np2kai_get_y2k_clamp',      'number', []);
+    const setDosVer   = M.cwrap('np2kai_set_dos_version',    'number', ['number']);
+    const getDosVer   = M.cwrap('np2kai_get_dos_version',    'number', []);
     // 既定クロック倍率。multiple=27 × baseclock 2.4576MHz ≈ 66MHz (ZUN 推奨環境相当)。
     // 経緯: 2026-06-26 に 27 へ上げたが、当時はホスト律速で FMDSP 等の音が詰まり 20 (≈486DX2-50)
     // に差し戻した (2026-06-27)。2026-07-10/11 の CPU fast path (patch 07、Suika3 1.39x・Ray 1.43x)
@@ -2796,6 +2810,18 @@ async function makeWorkerEmu() {
         // 再びセーブが壊れる)。引数なし=現在値。ゲームは起動時に一度日付を読むので次の Run から反映が確実。
         y2k: (on) => { if (on !== undefined) setY2k(on ? 1 : 0);
             return `y2k_clamp=${getY2k()} (1=ON クランプ有効/0=OFF 本当の日付) — 次の Run 推奨`; },
+        // HLE-DOS が名乗るバージョン (INT 21h AH=30h / AX=3306h)。既定 '5.00'。90 年代ソフトの大半は
+        // 3.30 以上を期待するだけなので既定は動かさない。持ち込んだ MS-DOS 6.2 の標準コマンドのように
+        // 自前で版数を検査するものが「DOSのバージョンが違います」で弾く場合に dosver('6.20') と名乗り直す
+        // (上級者オプションなので設定ダイアログには出さない)。引数なし=現在値。次の Run 推奨。
+        dosver: (v) => {
+            if (v !== undefined) {
+                const packed = qbParseDosVer(v);
+                if (packed === null) return `dosver: '${v}' は解釈できません (例: dosver('6.20'))`;
+                setDosVer(packed);
+            }
+            return `dos_version=${qbFmtDosVer(getDosVer())} (既定 5.00) — 次の Run 推奨`;
+        },
         // async 自動クロック (快適化, **既定 OFF**)。autoclock(1)=ON で host の余裕に応じ multiple を
         // floor..ceil 内で自動調整 (達成フレーム時間から逆算)。autoclock(0)=OFF で既定 27≈66MHz 固定。
         // 既定 OFF の理由: 倍率を上げる利得は小さく音楽テンポがもたつく実害がある (上の autoClock 定義参照)。
@@ -3017,6 +3043,17 @@ async function makeWorkerEmu() {
                 if (on !== undefined) ctl('np2kai_set_y2k_clamp', ['number'], [on ? 1 : 0]);
                 return q('np2kai_get_y2k_clamp', 'number', [], [])
                     .then((v) => `y2k_clamp=${v} (1=ON クランプ有効/0=OFF 本当の日付) — 次の Run 推奨`);
+            },
+            // 名乗る DOS バージョン。設定は fire-and-forget、現在値取得は worker 往復 (await してください)。
+            dosver: (v) => {
+                if (v !== undefined) {
+                    const packed = qbParseDosVer(v);
+                    if (packed === null)
+                        return Promise.resolve(`dosver: '${v}' は解釈できません (例: dosver('6.20'))`);
+                    ctl('np2kai_set_dos_version', ['number'], [packed]);
+                }
+                return q('np2kai_get_dos_version', 'number', [], [])
+                    .then((p) => `dos_version=${qbFmtDosVer(p)} (既定 5.00) — 次の Run 推奨`);
             },
             vol: (o) => {
                 if (o !== undefined) {

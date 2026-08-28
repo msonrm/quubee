@@ -1859,7 +1859,7 @@ int qb_dos_exec_load(const uint8_t *image, size_t size, uint32_t file_bytes,
      * (zar は MZ エンジン siz*.exe を EXEC、Ray は COM の常駐音源ドライバ RIN.COM を EXEC する) */
     size_t   header_bytes = 0, body_bytes = 0;
     uint16_t e_crlc = 0, e_lfarlc = 0;
-    uint16_t e_cs = 0, e_ip = 0, e_ss = 0, e_sp = 0, e_minalloc = 0;
+    uint16_t e_cs = 0, e_ip = 0, e_ss = 0, e_sp = 0, e_minalloc = 0, e_maxalloc = 0;
 
     if (is_exe) {
         if (size < 0x1C) return -1;
@@ -1868,6 +1868,7 @@ int qb_dos_exec_load(const uint8_t *image, size_t size, uint32_t file_bytes,
         e_crlc             = read_le16(image + 0x06);
         uint16_t e_cparhdr = read_le16(image + 0x08);
         e_minalloc         = read_le16(image + 0x0A);
+        e_maxalloc         = read_le16(image + 0x0C);
         e_ss               = read_le16(image + 0x0E);
         e_sp               = read_le16(image + 0x10);
         e_ip               = read_le16(image + 0x14);
@@ -1908,7 +1909,7 @@ int qb_dos_exec_load(const uint8_t *image, size_t size, uint32_t file_bytes,
                                         (child_path && child_path[0]) ? child_path : child_name);
     }
 
-    /* DOS の EXEC は子に「最大空きブロック」を渡す。子はその中に PSP+イメージを置き、
+    /* DOS の EXEC は子を「最大空きブロック」に載せる。子はその中に PSP+イメージを置き、
      * 起動直後に 4Ah (EXE 自己縮小) または 31h TSR (COM ドライバ常駐) で自身を縮める。 */
     uint16_t free_sz = 0;
     uint16_t free_mcb = mcb_largest_free(&free_sz);
@@ -1921,7 +1922,30 @@ int qb_dos_exec_load(const uint8_t *image, size_t size, uint32_t file_bytes,
     }
     uint16_t child_psp = (uint16_t)(free_mcb + 1);
     uint16_t child_img = (uint16_t)(child_psp + 0x10);
-    mcb_set(free_mcb, mcb_sig(free_mcb), child_psp, free_sz);   /* 子に丸ごと割り当て */
+    /* 実 DOS は子 EXE に PSP + body + clamp(e_maxalloc, e_minalloc, 空き) paragraphs だけを与え、
+     * 余りは空きのまま残す。旧実装は e_maxalloc を無視して最大空きブロックを丸ごと子に渡していた
+     * ため、e_maxalloc が小さい EXE (LSI C-86 系に多い) が起動直後の AH=48h で「空きゼロ」に
+     * 出くわして「メモリが足りません」で落ちた (issue #5: MAG.EXE を .bat から 2 回 = 2 回目以降が
+     * INT 21h/4Bh 経路)。直接実行経路 (loader-start) と同じクランプをここにも置いて意味論を揃える。
+     * e_maxalloc=0xFFFF (大半の EXE の既定) では従来どおりブロック全取りになる。
+     * COM は実 DOS どおり最大空きブロックを丸ごと取る (ヘッダが無く申告値も無い)。 */
+    uint16_t blk_sz = free_sz;
+    if (is_exe) {
+        uint32_t want      = 0x10 + body_paras + (uint32_t)e_maxalloc;  /* 欲しいだけ */
+        uint32_t stack_end = 0x10 + (uint32_t)e_ss + (((uint32_t)e_sp + 15) >> 4);
+        if (want < need)          want = need;        /* 最低確保 (PSP+body+minalloc) は満たす */
+        if (want < stack_end)     want = stack_end;   /* スタック頂点は必ず収める */
+        if (want > (uint32_t)free_sz) want = free_sz; /* 空きを超えない (実機: 取れるだけ) */
+        blk_sz = (uint16_t)want;
+    }
+    if (blk_sz < free_sz) {
+        /* 末尾を空きブロックへ分割 (AH=4Ah の縮小と同じ手順: tail が元の sig=Z を継ぐ)。 */
+        uint16_t tail = (uint16_t)(free_mcb + 1 + blk_sz);
+        mcb_set(tail, mcb_sig(free_mcb), 0x0000, (uint16_t)(free_sz - blk_sz - 1));
+        mcb_set(free_mcb, QB_MCB_M, child_psp, blk_sz);
+    } else {
+        mcb_set(free_mcb, mcb_sig(free_mcb), child_psp, free_sz);   /* 子に丸ごと割り当て */
+    }
     /* env ブロックの所有者を子 PSP へ付け替え (子終了で free-on-terminate、TSR では resize 任せで残留)。 */
     if (child_env_seg) {
         uint16_t emcb = (uint16_t)(child_env_seg - 1);
@@ -1952,7 +1976,11 @@ int qb_dos_exec_load(const uint8_t *image, size_t size, uint32_t file_bytes,
     uint32_t pbase = (uint32_t)child_psp << 4;
     memset(&mem[pbase], 0, 0x100);
     poke8(pbase + 0x00, 0xCD); poke8(pbase + 0x01, 0x20);   /* INT 20h */
-    poke16(pbase + 0x02, QB_DOS_MEM_TOP_SEG);               /* top of memory */
+    /* top of memory = 実 DOS では「この子に割り当てたブロックの直後のセグメント」。
+     * 終端 Z ブロックを丸ごと取る従来ケースでは child_psp+blk_sz == QB_DOS_MEM_TOP_SEG と一致し、
+     * e_maxalloc でブロックを絞ったときだけ実際の上限を指す (PSP:2 から空きを算定する
+     * 旧来型プログラムに、MCB と食い違う値を見せないため)。 */
+    poke16(pbase + 0x02, (uint16_t)(child_psp + blk_sz));   /* top of memory */
     psp_save_term_vectors(pbase);                           /* INT 22h/23h/24h の現在値 (=親の値) を保存 */
     poke16(pbase + 0x16, parent_psp);                       /* 親 PSP */
     /* env: ① パラメータブロック明示 (env_seg!=0) → そのまま指す (完全 faithful は拡張ポイント、
@@ -1999,9 +2027,9 @@ int qb_dos_exec_load(const uint8_t *image, size_t size, uint32_t file_bytes,
             i_cs = (uint16_t)(child_img + e_cs); i_ip = e_ip;
             i_ss = (uint16_t)(child_img + e_ss); i_sp = e_sp;
         } else {
-            uint16_t com_sp = (free_sz >= 0x1000)
+            uint16_t com_sp = (blk_sz >= 0x1000)
                                 ? 0xFFFE
-                                : (uint16_t)(((uint32_t)free_sz << 4) - 2);
+                                : (uint16_t)(((uint32_t)blk_sz << 4) - 2);
             uint32_t splin = ((uint32_t)child_psp << 4) + com_sp;
             mem[splin] = 0; mem[splin + 1] = 0;         /* near RET → PSP:0000 = INT 20h */
             i_cs = child_psp; i_ip = 0x0100;
@@ -2063,9 +2091,9 @@ int qb_dos_exec_load(const uint8_t *image, size_t size, uint32_t file_bytes,
     } else {
         /* COM: 全 segreg = PSP、IP=0x100。SP はブロック末尾 (64KB 以上なら 0xFFFE)。
          * SS:SP に 0x0000 を 1 word push (near RET → PSP:0000 = INT 20h 終了)。 */
-        uint16_t com_sp = (free_sz >= 0x1000)
+        uint16_t com_sp = (blk_sz >= 0x1000)
                             ? 0xFFFE
-                            : (uint16_t)(((uint32_t)free_sz << 4) - 2);
+                            : (uint16_t)(((uint32_t)blk_sz << 4) - 2);
         CPU_CS = child_psp; CPU_IP = 0x0100;
         CPU_SS = child_psp; CPU_SP = com_sp;
         CPU_DS = child_psp; CPU_ES = child_psp;
@@ -2084,7 +2112,7 @@ int qb_dos_exec_load(const uint8_t *image, size_t size, uint32_t file_bytes,
             "[dos_exec] child @ PSP=%04X img=%04X entry=%04X:%04X SS:SP=%04X:%04X "
             "kind=%s (parent PSP=%04X 常駐, block=%u para)\n",
             child_psp, child_img, CPU_CS, CPU_IP, CPU_SS, CPU_SP,
-            is_exe ? "EXE" : "COM", (unsigned)parent_psp, (unsigned)free_sz);
+            is_exe ? "EXE" : "COM", (unsigned)parent_psp, (unsigned)blk_sz);
     return 0;
 }
 

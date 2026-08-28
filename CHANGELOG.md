@@ -1,5 +1,56 @@
 # CHANGELOG
 
+## [GitHub issue 対応 — EXEC の e_maxalloc honor / 名乗る DOS バージョンの設定] — 2026-08-28
+
+外部からの issue 2 件 (報告者 vyv03354 氏) の対応と、自動セキュリティ PR 1 件の判断。
+
+- **issue #5: EXEC (INT 21h AH=4Bh) が MZ ヘッダの `e_maxalloc` を無視していた**。ベクターの
+  MAG.EXE を
+  ```
+  MAG
+  MAG
+  ```
+  と 2 行書いた .bat から実行すると「メモリが足りません」、1 行なら通る、という報告。**真因は経路の
+  非対称**で、報告者自身がコメントで特定していた: 直接実行と .bat 単一コマンドは staging
+  (loader-start) 経路で `e_maxalloc` をクランプするが、複数コマンドはミニ COMMAND.COM →
+  INT 21h/4Bh 経路に切り替わり、そちらは `qb_dos_exec_load` が `e_maxalloc` を**読んでさえ
+  いなかった**ため最大空きブロックを丸ごと子に渡していた。`e_maxalloc` が小さい EXE (LSI C-86 系に
+  多い) は起動直後の AH=48h が「空きゼロ」で失敗する。
+  - 直接実行経路と同じクランプを 4Bh 側にも実装:
+    `PSP(0x10) + body + clamp(e_maxalloc, e_minalloc, 空き)`。スタック頂点は必ず収め、
+    余りは AH=4Ah の縮小と同じ手順で末尾を空き MCB へ分割する (tail が元の `Z` 標識を継ぐ)。
+    `e_maxalloc=0xFFFF` (大半の EXE の既定) では従来どおりブロック全取りなので回帰は無い。
+    COM は実 DOS どおり丸ごと取る (ヘッダが無く申告値も無いため)。
+  - あわせて**子 PSP:2 (top of memory) を実際に割り当てたブロックの直後**にした。従来は固定で
+    `0xA000` を書いており、終端ブロックを丸取りする場合は一致するが、ブロックを絞ると MCB と
+    食い違う上限を子に見せてしまう (PSP:2 から空きを算定する旧来型プログラム対策)。
+  - 回帰 **新設 `tools/exec_maxalloc_test.js`**: 報告と同じ「2 行の .bat」経路で、`e_maxalloc` が
+    小さい子 (AH=48h が成功すべき) と `0xFFFF` の子 (失敗すべき = 全メモリ所有) を両側から挟む。
+    **修正前のバイナリで落ちることを確認済み** — そのとき両子とも `block=40186 para` を丸取りし、
+    小さい申告の子のマーカが失敗を示す = 報告の症状そのもの。
+- **issue #3: 名乗る DOS バージョンを設定可能に**。INT 21h AH=30h が DOS 5.00 決め打ちで、自前で
+  版数を検査する MS-DOS 6.2 の標準コマンドが「DOSのバージョンが違います」で弾かれるという報告。
+  - **既定は 5.00 のまま据え置き** (90 年代ソフトの大半は 3.30 以上を期待するだけで、5.00 が最も
+    無難な中庸)。実体は `bridge.c` の `g_qb_dos_version` (packed = major<<8 | minor)。
+  - **設定ダイアログには出さず `qbDebug.dosver('6.20')` のみ**の上級者オプションとした (持ち込んだ
+    DOS のツール群に合わせる用途に限られ、設定画面に出すほどの需要が無いという判断)。`'6.2'` も
+    `'6.20'` も minor=20 に解釈する (DOS の言い方に合わせた)。worker 経路にも配線。
+  - **AX=3306h (true version) も同じ値を答える**ようにした。従来は AH=33h の `default` に落ちて
+    BL/BH が未定義のまま返っており、版数だけ変えても片手落ちになるため (SETVER 迂回で真の版数を
+    訊く経路)。
+  - 回帰 **新設 `tools/dosver_test.js`**: ゲスト側 COM から AH=30h と AX=3306h の両方を観測し、
+    既定 5.00 / 設定後 6.20 / 不正値は既定へ戻す、を確認。JS 側の文字列パーサも併せてガード。
+- **PR #4 (自動セキュリティ修正、OrbisAI Security) は close**。`OEMSTRCPY` の `sprintf` を
+  `snprintf(s1, sizeof(s1), ...)` にする 1 行。**報告された脆弱性はこのコードベースには存在しない** —
+  ビルド対象の呼び出しは 10 か所 (`cbus/ideio.c` 5・`io/pcidev.c` 4・`cbus/gpibio.c` 1) で、すべて
+  コンパイル時リテラル (最長 `"bios9821.rom"` = 13 byte) → `OEMCHAR[16]` 配列であり、攻撃者制御の
+  文字列は流れ込まない (唯一の非リテラル `debugsnapshot.c:622` は CMakeLists で非ビルド、
+  `misc/test_milstr.c` は上流の単体テスト)。加えて**マクロ引数への `sizeof` は将来ポインタを渡した
+  瞬間に 3 文字へ黙って切り詰める**ため、存在しない overflow と引き換えに実在する silent truncation
+  を持ち込む。丁寧な説明を添えて close し、代替として既存の `milstr_ncpy(dst, src, sizeof(dst))`
+  イディオムに言及した。
+- 回帰 **全 82 本 PASS** (新規 2 本を含む)。
+
 ## [keymap v2 追随 — 配列とレイアウトの分離 (engine 2.0.0 / hechima 0.19.0)] — 2026-08-02
 
 labo 指示書 docs/hechima_v2_quubee_handoff.md への追随。**キーマップの形式が v2 になり、JIS/US が

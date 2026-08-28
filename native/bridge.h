@@ -200,6 +200,20 @@ int np2kai_set_y2k_clamp(int on);
 __attribute__((visibility("default")))
 int np2kai_get_y2k_clamp(void);
 
+/* HLE-DOS が名乗るバージョン (INT 21h AH=30h / AX=3306h) の実行時変更。
+ * packed = (major << 8) | minor で、既定は 0x0500 = DOS 5.00 — 90 年代ソフトの大半が >= 3.30 を
+ * 期待し、5.00 が最も無難な中庸なので既定は動かさない。一方 MS-DOS 6.2 の標準コマンドのように
+ * 自前で版数を検査するものは 5.00 だと「DOSのバージョンが違います」で弾く (issue #3) ため、
+ * 持ち込んだ DOS のツール群に合わせて名乗り直せるようにする。設定ダイアログには出さない
+ * (需要が上級者向けに限られるため) 上級者オプション = qbDebug.dosver('6.20') の実体。
+ * major が 0 の指定は既定 (5.00) に戻す。戻り値: 設定後の packed 値。 */
+__attribute__((visibility("default")))
+int np2kai_set_dos_version(int packed);
+
+/* 名乗っているバージョンの packed 値を返す。qbDebug.dosver() 引数なしの読み取り用。 */
+__attribute__((visibility("default")))
+int np2kai_get_dos_version(void);
+
 /* 音声 pull 型 (C1)。JS の ScriptProcessorNode.onaudioprocess から呼ばれ、
  * dst に frames ぶんのステレオ int16 (L,R 交互) を書き出す。 */
 __attribute__((visibility("default")))

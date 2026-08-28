@@ -410,6 +410,19 @@ int np2kai_get_y2k_clamp(void) {
 	return g_qb_y2k_clamp;
 }
 
+/* HLE-DOS が名乗るバージョン。packed = (major << 8) | minor、既定 0x0500 = DOS 5.00。
+ * INT 21h AH=30h と AX=3306h (true version) が参照する。詳細は bridge.h 参照。 */
+int g_qb_dos_version = 0x0500;
+int np2kai_set_dos_version(int packed) {
+	packed &= 0xFFFF;
+	if ((packed >> 8) == 0) packed = 0x0500;   /* major 0 は名乗れない → 既定へ戻す */
+	g_qb_dos_version = packed;
+	return g_qb_dos_version;
+}
+int np2kai_get_dos_version(void) {
+	return g_qb_dos_version;
+}
+
 /* デバッグ: 16-bit CPU レジスタを idx で読む (ハング時のレジスタ確認用)。
  * 0:AX 1:BX 2:CX 3:DX 4:SI 5:DI 6:BP 7:SP 8:DS 9:ES 10:SS 11:CS 12:IP */
 uint32_t np2kai_debug_get_reg16(np2kai_handle h, int idx) {

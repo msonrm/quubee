@@ -1884,7 +1884,18 @@ static void int21_33_ctrlbreak(void) {
     switch (CPU_AL) {
     case 0x00: CPU_DL = (uint8_t)g_ctrl_break;       break;   /* get */
     case 0x01: g_ctrl_break = (CPU_DL != 0);         break;   /* set */
-    default:   CPU_DL = (uint8_t)g_ctrl_break;       break;   /* 02-06: 無害に get 扱い */
+    case 0x06: {   /* Get true version (DOS 5+): SETVER の偽装を迂回して真の版数を訊く経路。
+                    * AH=30h と同じ値を答える (我々に SETVER 表は無いので両者は常に一致する)。
+                    * 従来は下の default に落ちて BL/BH が未定義のまま返っていた。 */
+        extern int g_qb_dos_version;
+        CPU_BL = (uint8_t)(g_qb_dos_version >> 8);    /* major */
+        CPU_BH = (uint8_t)(g_qb_dos_version & 0xFF);  /* minor */
+        CPU_DL = 0;    /* revision (0 = A) */
+        CPU_DH = 0;    /* version flags (bit3=DOS in ROM, bit4=DOS in HMA。どちらでもない) */
+        CPU_AL = 0;
+        break;
+    }
+    default:   CPU_DL = (uint8_t)g_ctrl_break;       break;   /* 02-05: 無害に get 扱い */
     }
 }
 
@@ -2002,9 +2013,13 @@ static void int21_2c_get_time(void) {
 }
 
 static void int21_30_version(void) {
-    /* DOS 5.00 を名乗る (90 年代ソフトの大半が ≥ 3.30 を期待) */
-    CPU_AL = 5;
-    CPU_AH = 0;
+    /* 既定は DOS 5.00 を名乗る (90 年代ソフトの大半が 3.30 以上を期待し、5.00 が最も無難な中庸)。
+     * 持ち込んだ DOS のツール群に合わせて qbDebug.dosver('6.20') で名乗り直せる (実体は bridge.c の
+     * g_qb_dos_version、既定 0x0500)。MS-DOS 6.2 の標準コマンドのように自前で版数を検査するものは
+     * 5.00 だと「DOSのバージョンが違います」で弾くため (issue #3)。BX:CX = OEM/シリアルは 0 のまま。 */
+    extern int g_qb_dos_version;
+    CPU_AL = (uint8_t)(g_qb_dos_version >> 8);    /* major */
+    CPU_AH = (uint8_t)(g_qb_dos_version & 0xFF);  /* minor */
     CPU_BX = 0;
     CPU_CX = 0;
 }
