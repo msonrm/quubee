@@ -823,3 +823,22 @@ const uint8_t *np2kai_get_framebuffer(
 	}
 	return (const uint8_t *)scrnmng.dispsurf;
 }
+
+/* ---- ステートセーブ: NP2kai 区画 (statsave) --------------------------------------------
+ * NP2kai の statsave_save()/statsave_load() はファイル名を控えて g_u8ControlState を立てるだけで、
+ * 実処理はフロントエンドのメインループ (x/np2.c 等) が statsave_*_d() を呼ぶ作り。QuuBee の run
+ * ループはこのフラグを見ないので、ここで即時に実行する。呼ぶのはフレーム境界 (run_frame の外) に限る
+ * (worker はメッセージ処理が tick の間に走るので自然に満たす)。
+ * 戻り値は statsave のまま: 0=成功 / 0x80=WARNING (一部の区画を読めなかった) / 0x01=DISKCHG /
+ * 0x02=VERCHG / -1=FAILURE。HLE-DOS・MIDI 等の QuuBee 側の状態はここには含まれない。 */
+#include <statsave.h>
+int np2kai_state_np2_save(const char *path) {
+	statsave_save(path);
+	g_u8ControlState = 0;
+	return statsave_save_d();
+}
+int np2kai_state_np2_load(const char *path) {
+	statsave_load(path);
+	g_u8ControlState = 0;
+	return statsave_load_d();
+}

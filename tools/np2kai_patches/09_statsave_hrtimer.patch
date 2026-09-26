@@ -1,0 +1,84 @@
+diff --git a/io/upd4990.c b/io/upd4990.c
+index c8f48f0..4324e61 100755
+--- a/io/upd4990.c
++++ b/io/upd4990.c
+@@ -99,16 +99,15 @@ static void IOOUTCALL upd4990_o20(UINT port, REG8 dat) {
+ static void upd4990_hrtimer_setinterval(int absolute);
+ 
+ void upd4990_hrtimer_proc(NEVENTITEM item) {
+-	static UINT32 divcounter = 0;
+-	static UINT32 divcounter32 = 0;
+-	divcounter++;
+-	if(divcounter >= 64 / uPD4990HRT.hrtimerdiv){ // 64 -> hrtimerdiv
++	/* QuuBee patch 09: 分周カウンタは uPD4990HRT へ (statsave に入れるため。旧 関数内 static) */
++	uPD4990HRT.divcounter++;
++	if(uPD4990HRT.divcounter >= 64 / uPD4990HRT.hrtimerdiv){ // 64 -> hrtimerdiv
+ 		pic_setirq(15);
+-		divcounter = 0;
++		uPD4990HRT.divcounter = 0;
+ 	}
+ 	if(uPD4990HRT.hrtimerclock32){
+-		divcounter32++;
+-		if(divcounter32 >= 2){ // 64 -> 32
++		uPD4990HRT.divcounter32++;
++		if(uPD4990HRT.divcounter32 >= 2){ // 64 -> 32
+ 			UINT32 hrtimertimeuint;
+ 			
+ 			hrtimertimeuint = LOADINTELDWORD(mem+0x04F1);
+@@ -117,7 +116,7 @@ void upd4990_hrtimer_proc(NEVENTITEM item) {
+ 				hrtimertimeuint = ((hrtimertimeuint & ~0x3fffff) + 0x400000) & 0xffffff; // 日付変わった
+ 			}
+ 			STOREINTELDWORD(mem+0x04F1, hrtimertimeuint); // XXX: 04F4にも書いちゃってるけど差し当たっては問題なさそうなので･･･
+-			divcounter32 = 0;
++			uPD4990HRT.divcounter32 = 0;
+ 		}
+ 	}
+ 	upd4990_hrtimer_setinterval(0);
+diff --git a/io/upd4990.h b/io/upd4990.h
+index 8bc6ba8..f4913d2 100755
+--- a/io/upd4990.h
++++ b/io/upd4990.h
+@@ -21,6 +21,11 @@ typedef struct {
+ 	
+ 	UINT32 clockcounter;
+ 	UINT32 clockcounter32;
++
++	/* QuuBee patch 09: upd4990_hrtimer_proc の分周カウンタ (旧 関数内 static)。statsave の
++	 * uPD4990HRT (BIN) に入れて、ロード後も IRQ15 と 0x04F1 の刻みの位相をそろえる */
++	UINT32 divcounter;
++	UINT32 divcounter32;
+ } _UPD4990HRT, *UPD4990HRT;
+ 
+ 
+@@ -30,6 +35,7 @@ extern "C" {
+ 	
+ #if defined(SUPPORT_HRTIMER)
+ void upd4990_hrtimer_count(void);
++void upd4990_hrtimer_proc(NEVENTITEM item);	/* QuuBee patch 09: statsave の evtproc 用 */
+ #endif
+ 
+ void uPD4990_reset(const NP2CFG *pConfig);
+diff --git a/statsave.tbl b/statsave.tbl
+index d89c9b7..1ccd5af 100755
+--- a/statsave.tbl
++++ b/statsave.tbl
+@@ -45,6 +45,9 @@ static const PROCTBL evtproc[] = {
+ 			{PROCID('e','i','d','1'), ideioint},
+ 			{PROCID('e','i','d','2'), ideioint2},
+ #endif
++#if defined(SUPPORT_HRTIMER)
++			{PROCID('e','h','r','t'), upd4990_hrtimer_proc},	/* QuuBee patch 09 */
++#endif
+ };
+ 
+ static const ENUMTBL evtnum[] = {
+@@ -74,6 +77,9 @@ static const ENUMTBL evtnum[] = {
+ #ifdef SUPPORT_SOUND_SB16
+ 			{PROCID('1','7','4','1'), NEVENT_CT1741},
+ #endif
++#if defined(SUPPORT_HRTIMER)
++			{PROCID('h','r','t','m'), NEVENT_HRTIMER},	/* QuuBee patch 09 */
++#endif
+ };
+ 
+ static const PROCTBL dmaproc[] = {

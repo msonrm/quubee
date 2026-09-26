@@ -216,6 +216,8 @@ set(EXPORTED_FUNCTIONS
     _np2kai_debug_serial_midi_active
     _np2kai_debug_midi_fx
     _np2kai_debug_memprobe
+    _np2kai_state_np2_save
+    _np2kai_state_np2_load
     _np2kai_xms_enable
     _np2kai_xms_stat
     _np2kai_dos_stage_com

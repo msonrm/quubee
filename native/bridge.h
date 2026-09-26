@@ -263,6 +263,13 @@ int np2kai_dos_stage_music(void);
 __attribute__((visibility("default")))
 int np2kai_dos_music_play(const char *song);
 
+/* ステートセーブの NP2kai 区画 (statsave) を path へ書く / path から読む。フレーム境界で呼ぶこと。
+ * 戻り値: 0=成功 / 0x80=WARNING / 0x01=DISKCHG / 0x02=VERCHG / -1=FAILURE (statsave のまま)。 */
+__attribute__((visibility("default")))
+int np2kai_state_np2_save(const char *path);
+__attribute__((visibility("default")))
+int np2kai_state_np2_load(const char *path);
+
 #ifdef __cplusplus
 }
 #endif
