@@ -1,5 +1,49 @@
 # CHANGELOG
 
+## [ステートセーブ (フェーズ 2) 段階 A〜E — NP2kai statsave + HLE-DOS 区画 + 保存ファイル + IndexedDB] — 2026-09-27
+
+目標は東方旧作 (TH02〜05 体験版) での STG の練習。形式はビルドに依存しない (NP2kai の statsave + QuuBee
+独自の区画)。手順書 = `~/plan_np2kai_bump_and_statesave.md` のフェーズ 2。動機になった Win11 用アプリ
+PC98PLAYER (MIT) のソースも読んで比べた (「ロード失敗時は元に戻す」を取り入れた。比較 = memory
+reference_pc98player)。ブランチ `np2kai-bump` (フェーズ 1 に積む。デプロイはしない = ユーザー判断)。
+
+- **A. NP2kai 区画**: `statsave_save()`/`_load()` は名前を控えてフラグを立てるだけで実処理はフロントエンドの
+  ループが `statsave_*_d()` を呼ぶ作り → bridge で即時に呼ぶ (`np2kai_state_np2_*`)。**patch 09**: 高精度
+  タイマ `NEVENT_HRTIMER` が statsave のイベント表に無く、全タイトルでロードが WARNING (0x80) になり IRQ15 と
+  BDA 0x04F1 の刻みが止まっていた (HRTIMER はポート 0x128 の bind で常に動く) → 表に登録 + 関数内 static の
+  分周カウンタを構造体へ。
+- **B. QuuBee 区画** (`native/qb_state.{c,h}`): "QBST" + 区画 (タグ + 版 + 長さ)。変数は「大きさ + 中身」で書き、
+  大きさが食い違えば読み込み失敗 (配置の変わった構造体を黙って誤読しない)。DI21 (tty・キー定義・キー待ちと行入力の
+  途中経過・DTA・カレント・開いているファイル・FindFirst) / DLDR (EXEC スタック・MCB・PSP・バッチの実行位置・環境
+  変数・音楽セッション・stage) / XMS_ / M33_。開いているファイルはパス・モード・位置で開き直す (書き込みモードは
+  中身を消さないモードで)。FindFirst は読み進めた件数から開き直す。キー待ちは「IP を戻して次フレームで INT 21h を
+  やり直す」作りなのでフレーム境界では常に INT 21h の手前 = 途中経過の値を戻せば続く。**断るのは FEP 変換中だけ**
+  (手順書は XMS 確保中・FindFirst 途中・キー待ち・INT 23h 中・INT 33h 使用中も断る案だったが、どれも値の保存で足りた)。
+- **C. 音声**: 先頭 ~16000 サンプル (約 0.37 秒) が食い違う原因は手順書の見立て (ホスト側バッファ) ではなかった。
+  statsave のロードは既に sound_reset で溜まりを捨てている。欠けていたのは A 側の「合成済みで未再生」の分と、
+  合成が CPU を追いかけていた遅れ (lastclock の付け替え)。**patch 10** (`sound_pending_get/set`) + SND_ 区画で
+  差し戻す = **ロード後の音声が保存しなかった場合と 1 サンプルも違わず続く**。
+- **D. MIDI の控え** (`native/qb_tsf.c`、MIDI 区画): 合成器の内部は保存せず、TSF が反映する設定 (バンク・音色・
+  音量・エクスプレッション・パン・サステイン・RPN 0〜2・RPN の選択・ピッチベンド) の最後の値をハンドルごとに
+  控え、ロード後に全音停止 + 初期化を送ってから送り直す。データエントリは RPN ごとに控える (生の CC6/38 は
+  直前の RPN 選択で意味が変わるので再生しない)。
+- **E. 保存ファイル** (`web/player/statefmt.js`、worker・メインスレッド・headless 共通): gzip(ヘッダ JSON +
+  縮小画像 160x100 + NP2K + QBST + FILE (= /run の全ファイル))。**NP2K は疎な形** (ゼロだけの 4KB ページを
+  省く): statsave は拡張メモリ込みで 36MB あり、そのまま gzip すると保存・読み込みで 300〜400ms ずつかかった
+  → 保存ファイル ~11KB (T.COM)・**セーブ ~210ms・ロード ~170ms** (headless)。ヘッダの互換識別子 (NP2kai の
+  コミット + パッチ一式のハッシュ、build.sh が `native/qb_build_id.h` に生成) が違うセーブは断る。ロードは
+  「今の状態を取っておく → 適用 → 失敗したら戻す」。取っておいた状態は「元に戻す」に使う (worker が保持)。
+  保存先は IndexedDB (`web/player/statedb.js`、キー = ゲームの識別子 + 枠。クイックは上書き前を quick-prev に
+  1 つ残す)。ゲームの識別子 = Run したファイルの名前と中身の SHA-256。ロード後はファイル一覧を巻き戻った /run に
+  追随させる。UI は段階 G なので当面は `qbDebug.save(slot)` / `load(slot)` / `undoLoad()` / `slots()`。
+- 回帰: `statesave_test` (一致テスト: カウンタ・ファイル・画面・音声全区間) / `statesave_dos_test` (書き込み
+  ハンドル・FindFirst 途中・行入力の打ちかけ・XMS 確保中・バッチの TSR→子→ECHO。B は無関係の IDLE セッション
+  から読む = 同じプログラムで起動すると偶然一致する罠。区画を読まない版で全場面落ちることを確認) /
+  `statesave_midi_test` / `statesave_file_test` (保存ファイル経由の一致・互換識別子で断る・失敗時の巻き戻し・
+  元に戻す・識別子)。ビルドまたぎ = `tools/statesave_cross_build_check.sh` (無害な変更の別ビルドと双方向に読めて
+  続きが一致)。全 86 本 PASS。
+- 残り: F (東方 4 作の場面) / G (UI)。
+
 ## [NP2kai 追従 — 5939e0c6 (NP21/W rev.101〜104) へ・ADPCM 退行の修正・patch 07 の移し直し] — 2026-09-27
 
 ステートセーブ (次段) の形式は NP2kai の構造体レイアウトに依存するため、公開前に最新版へ追従した。

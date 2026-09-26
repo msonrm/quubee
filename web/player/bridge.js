@@ -278,6 +278,12 @@ async function makeWorkerEmu() {
         async musicPlay(song)        { return (await call({ type: 'musicPlay', song })).r; },
         async getExit()              { return await call({ type: 'getExit' }); },
         async batchDone()            { return !!(await call({ type: 'call', fn: 'np2kai_dos_batch_done', ret: 'number', argTypes: [], args: [] })).r; },
+        // ステートセーブ (フェーズ 2)。状態の取得・適用・元に戻す用の控えは worker 側 (statefmt.js)。
+        // save → { ok, reason?, bytes (保存ファイル), header, thumb } / load → { ok, reason?, detail?, header?, canUndo }
+        async stateSave(meta)        { return await call({ type: 'stateSave', meta }); },
+        async stateLoad(bytes)       { const b = bytes.slice(); return await call({ type: 'stateLoad', bytes: b.buffer }, [b.buffer]); },
+        async stateUndo()            { return await call({ type: 'stateUndo' }); },
+        stateForgetUndo()            { worker.postMessage({ type: 'stateForgetUndo' }); },
         keyDown(code)        { worker.postMessage({ type: 'key', down: 1, code }); },
         keyUp(code)          { worker.postMessage({ type: 'key', down: 0, code }); },
         injectText(bytes)    { worker.postMessage({ type: 'injectText', bytes }); },   // SJIS バイト列 (ホスト IME)
@@ -587,6 +593,9 @@ async function makeWorkerEmu() {
     let selectedRecipe = null; // selectedEntry が .bat の時の解決結果 { targetEntry, args, recipe }
     let focusedEntry   = null; // いまタップ/表示中のファイル — 一覧では行背景で示す (実行対象とは別概念)
     let loadedArchives = [];   // 表示用の投入書庫名
+    // ステートセーブ (フェーズ 2、下の「ステートセーブ」節)。resetToIdle 等から先に参照されるのでここで宣言
+    let stateSession = null;       // { gameId, gameName } = いまセーブできるゲームのセッション (Run 中だけ)
+    let pendingStateGame = null;   // Run ボタンで計算 → runStaged で stateSession へ
     let currentDir     = '';   // ファイラの現在フォルダ (/run 相対, '' = ルート, 末尾 '/' 付き)
     const crumbsEl     = document.getElementById('crumbs');
 
@@ -1166,6 +1175,7 @@ async function makeWorkerEmu() {
         // フラグを読んでフィルタ無しになり、音楽セッションの注入エンジン (PMD86.COM/
         // PMP.COM) が「新規ファイル」として一覧に出てしまう (Stop 後の出現バグ)。
         if (currentPoll && pollDosExit._stop) await pollDosExit._stop();
+        stateSession = null; emu.stateForgetUndo();
         emu.setPaused(false);       // 凍結したまま reset すると HELLO が描かれない
         musicState = 'stopped';
         musicSessionUp = false;     // セッション破棄 (C 側も qb_dos_reset_state で g_music_active=0)
@@ -1311,7 +1321,21 @@ async function makeWorkerEmu() {
     // 全メソッド async (worker 版はメッセージ往復で非同期になるため)。段階的に拡張中 (いまは起動フロー)。
     // docs/audio_worker_migration.md 段階1 (その場ファサード化・挙動不変)。
     if (QB_USE_WORKER) { emu = await makeWorkerEmu(); }
-    else emu = {
+    // ステートセーブのアダプタ (メインスレッド経路)。framebuffer の出力先は自前で持つ (後段の pW 等に依存しない)。
+    let localStateUndo = null, localStateOut = 0;
+    const localStateAdapter = () => ({
+        ccall: (...a) => M.ccall(...a),
+        FS: M.FS,
+        framebuffer: () => {
+            if (!localStateOut) localStateOut = M._malloc(12);
+            const p = M.ccall('np2kai_get_framebuffer', 'number', ['number', 'number', 'number', 'number'],
+                [handle, localStateOut, localStateOut + 4, localStateOut + 8]);
+            if (!p) return null;
+            const w = M.getValue(localStateOut, 'i32'), h = M.getValue(localStateOut + 4, 'i32');
+            return { px: M.HEAPU16.slice(p >> 1, (p >> 1) + w * h), w, h };
+        },
+    });
+    if (!QB_USE_WORKER) emu = {
         async writeFile(path, bytes) { M.FS.writeFile(path, bytes); },
         async writeRun(rel, data) {                       // /run/<rel> へ書く (親ディレクトリも作る)
             try { M.FS.mkdir('/run'); } catch (_) {}
@@ -1370,6 +1394,20 @@ async function makeWorkerEmu() {
             return { exited: !!exited, code };
         },
         async batchDone() { return !!dosBatchDoneFn(); },
+        // ステートセーブ (フェーズ 2)。worker 版と同じ statefmt.js をメインスレッドで使う。
+        async stateSave(meta) { return QBStateFmt.save(localStateAdapter(), meta); },
+        async stateLoad(bytes) {
+            const r = await QBStateFmt.load(localStateAdapter(), bytes);
+            if (r.ok) localStateUndo = r.undo;
+            return { ok: r.ok, reason: r.reason, detail: r.detail, header: r.header, canUndo: !!localStateUndo };
+        },
+        async stateUndo() {
+            if (!localStateUndo) return { ok: false, reason: 'none' };
+            const r = QBStateFmt.restore(localStateAdapter(), localStateUndo);
+            localStateUndo = null;
+            return { ok: r.ok, detail: r.detail };
+        },
+        stateForgetUndo() { localStateUndo = null; },
         // 入力 (fire-and-forget。戻り値を使わないので await 不要)。handle はここで前置。
         keyDown(code)         { keyDown(handle, code); },
         keyUp(code)           { keyUp(handle, code); },
@@ -1674,9 +1712,52 @@ async function makeWorkerEmu() {
     async function startRunSync() { stopRunSync(); await fsSnapshot(); runSyncTimer = setInterval(syncRunTick, 1000); }
     function stopRunSync()  { if (runSyncTimer) { clearInterval(runSyncTimer); runSyncTimer = null; } }
 
+    // ---- ステートセーブ (フェーズ 2) ----------------------------------------------------------
+    // 保存ファイルの組み立て・状態の取得と適用は emu (worker / メインスレッド、statefmt.js)。ここは
+    // 「どのゲームの・どの枠か」と保存先 (IndexedDB、statedb.js) と、ロード後のファイル一覧の追随を持つ。
+    // 枠: 'quick' (クイック。上書き前は 'quick-prev' に 1 つ残る) / '1'〜'8'。UI (段階 G) と qbDebug から使う。
+    const stateCapable = () => QBStateFmt.available() && typeof indexedDB !== 'undefined';
+    const STATE_REASON = {
+        idle: 'ゲームを実行していません', fep: 'FEP で変換中はセーブできません', empty: 'セーブがありません',
+        version: 'このセーブは以前の版の QuuBee のものなので読み込めません', corrupt: 'セーブが壊れています',
+        failed: '読み込みに失敗したので元の状態に戻しました', error: 'セーブに失敗しました',
+        unsupported: 'このブラウザではセーブを使えません', none: '元に戻せる状態がありません',
+    };
+    async function stateSaveTo(slot) {
+        if (!stateCapable()) return { ok: false, reason: 'unsupported' };
+        if (!stateSession) return { ok: false, reason: 'idle' };
+        const g = stateSession;
+        const settings = { soundBoard: forceWss ? 'matex' : (forceChibi ? 'adpcm' : '86'), midi: midiLoadState === 'ready' };
+        const r = await emu.stateSave({ gameId: g.gameId, gameName: g.gameName, settings });
+        if (!r.ok) return { ok: false, reason: r.reason, detail: r.detail };
+        const rec = { gameId: g.gameId, slot: String(slot), gameName: g.gameName, created: r.header.created,
+                      thumb: r.thumb, bytes: r.bytes };
+        if (rec.slot === 'quick') await QBStateDB.putQuick(rec); else await QBStateDB.put(rec);
+        return { ok: true, size: r.bytes.length, created: r.header.created };
+    }
+    async function stateLoadFrom(slot) {
+        if (!stateCapable()) return { ok: false, reason: 'unsupported' };
+        if (!stateSession) return { ok: false, reason: 'idle' };
+        const rec = await QBStateDB.get(stateSession.gameId, String(slot));
+        if (!rec) return { ok: false, reason: 'empty' };
+        const r = await emu.stateLoad(rec.bytes);
+        if (r.ok) await syncRunTick();   // ファイル一覧を巻き戻った /run に追随させる (決定 2026-09-27)
+        return r;
+    }
+    async function stateUndoLoad() {      // 直前のロードを取り消す (ロード前の状態へ)
+        const r = await emu.stateUndo();
+        if (r.ok) await syncRunTick();
+        return r;
+    }
+    const stateList = () => (stateSession ? QBStateDB.list(stateSession.gameId) : Promise.resolve([]));
+    const stateMessage = (r) => (r.ok ? 'OK' : (STATE_REASON[r.reason] || r.reason || '失敗') + (r.detail ? ` (${r.detail})` : ''));
+
     // staging 後の共通処理: /run 同期基準 → loader.d88 を A: に挿入してリセット → exit polling。
     async function runStaged(label) {
         runStatusEl.textContent = `${label}: starting…`;
+        // ステートセーブの対象になるゲームのセッション (音楽プレーヤーは pendingStateGame=null で来る)
+        stateSession = pendingStateGame; pendingStateGame = null;
+        emu.stateForgetUndo();
         // 同期基準 (fsSnapshot) は必ず reset より前に撮る。loader boot は実質ゼロ遅延で、
         // 「creat→write→exit だけ」の爆速プログラムは boot 込み 1 フレームで完走する (実測)。
         // 旧順序 (reset 後に snapshot) だと worker の tick が 1 回先行しただけでプログラムが
@@ -1689,6 +1770,7 @@ async function makeWorkerEmu() {
         stopButton.hidden = false;
         pollDosExit(async (code) => {
             stopRunSync();
+            stateSession = null;        // ゲームが終わった = セーブの対象が無い
             await syncRunDir();         // 終了直前の書き込みを最終取り込み
             runStatusEl.textContent = code === -1
                 ? `${label}: stopped`
@@ -1700,6 +1782,7 @@ async function makeWorkerEmu() {
             // (常駐音源ドライバの ISR を生かすため)。マシンは止めず、表示だけ「完了」にして Run を
             // 押せるようにする。Stop は出したままにする — 常駐演奏を止める手段が要るので。
             stopRunSync();
+            stateSession = null;        // バッチが全部終わった (常駐演奏だけが残る) = セーブの対象が無い
             await syncRunDir();         // 最後の書き込みを一覧へ取り込む
             runStatusEl.textContent = `${label}: finished`;
             runButton.disabled = false;
@@ -1780,6 +1863,7 @@ async function makeWorkerEmu() {
                 if (r !== 0) throw new Error(`stage_music failed r=${r}`);
                 await emu.musicPlay(dosPath);
                 suppressBootBeep = true;    // 音楽セッションのブートは起動音 (ピポ) を消す
+                pendingStateGame = null;    // 音楽プレーヤーはステートセーブの対象外
                 await runStaged(label);     // loader.d88 挿入 + reset + /run sync + exit polling
                 musicSessionUp = true;
             }
@@ -1883,6 +1967,14 @@ async function makeWorkerEmu() {
         runButton.disabled = true;   // ポーリング終了まで連打を抑止 (重複 stage 防止)
         runButton.blur();            // Enter で Run が再 click されないよう focus を外す
         const userArgs = runCmdline.value;
+        // ステートセーブの枠をゲームごとに分けるための識別子 (Run したファイルの名前と中身の SHA-256)。
+        // 書き換えられる前の中身で決めるので Run の時点で計算する。crypto.subtle が無い環境では null = セーブ無効
+        try {
+            pendingStateGame = {
+                gameId: await QBStateFmt.gameId(selectedEntry.name, selectedEntry.data),
+                gameName: loadedArchives.length ? loadedArchives.join(' + ') : sjisName(baseName(selectedEntry.name)),
+            };
+        } catch (_) { pendingStateGame = null; }
         try {
             // MIDI ドライバ (MIDDRV 等) を使うレシピ、または MIDI 曲データが投入されていれば、
             // staging 前に soundfont を遅延ロードして合成器を構築する。直後の runStaged 内
@@ -2774,6 +2866,12 @@ async function makeWorkerEmu() {
         // chibioto(1)=ON で FMP の .ovi / PMD の .PPC 等 ADPCM(PCM) 声部のある曲が鳴る。chibioto(0)/()=既定 OFF。
         // 設定後に対象を Run (reset) して反映。FM のみの曲には無影響なので付けっぱなしでも実害は小さい。
         chibioto: (on = 1) => { forceChibi = !!on; return `forceChibi=${forceChibi} (既定 ON。1=86+ADPCM/0=素の86) — 次の Run から反映`; },
+        // ステートセーブ (フェーズ 2、UI は段階 G)。slot = 'quick' | '1'..'8'。await qbDebug.save() 等で使う
+        save: async (slot = 'quick') => { const r = await stateSaveTo(slot); return r.ok ? `saved ${slot} (${(r.size / 1024).toFixed(1)} KB)` : stateMessage(r); },
+        load: async (slot = 'quick') => stateMessage(await stateLoadFrom(slot)),
+        undoLoad: async () => stateMessage(await stateUndoLoad()),
+        slots: async () => (await stateList()).map((e) => `${e.slot}\t${e.created}\t${(e.size / 1024).toFixed(1)} KB`).join('\n') || '(なし)',
+        stateSession: () => stateSession,
         // 「Mate-X PCM」(PC-9821 内蔵 PCM=CS4231=SOUND_SW 0x64) のトグル。既定 ON。0x64 は 86(ADPCM 込み)+
         // Mate-X PCM の上位互換なので、ON の間は FM/ADPCM は従来どおり鳴り、さらに Watcom+DOS/4GW の近代
         // エンジン (Suika3 等、FM 非対応で SB16/Mate-X PCM だけ検出) が鳴るようになる。wss(0)=素の 86(+ADPCM=

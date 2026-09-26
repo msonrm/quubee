@@ -857,3 +857,9 @@ int np2kai_state_qb_load(const char *path) { return qb_state_load_file(path); }
 /* ステートセーブの MIDI の控えの検証用 (tools/statesave_midi_test.js)。qb_tsf.c の qb_midi_debug_ch 参照。 */
 extern int qb_midi_debug_ch(int hdl, int ch, int what);
 int np2kai_debug_midi_ch(int hdl, int ch, int what) { return qb_midi_debug_ch(hdl, ch, what); }
+
+/* ステートセーブの互換識別子と QuuBee の版 (emscripten/build.sh が生成する qb_build_id.h)。
+ * 互換識別子 = NP2kai のコミット + パッチ一式のハッシュ。セーブのヘッダに書き、合わなければ読み込みを断る。 */
+#include "qb_build_id.h"
+const char *np2kai_state_compat_id(void) { return QB_NP2KAI_COMPAT_ID; }
+const char *np2kai_build_rev(void) { return QB_BUILD_REV; }

@@ -1,14 +1,14 @@
 # QB 作業状況
 
-## 🔧 NP2kai 追従 (5939e0c6) → ステートセーブ — フェーズ 1 実装済・ブラウザ確認待ち (2026-09-27)
+## 🔧 NP2kai 追従 (5939e0c6) → ステートセーブ — フェーズ 1 完了・フェーズ 2 は段階 A〜E 実装済 (2026-09-27)
 
 手順書 = `~/plan_np2kai_bump_and_statesave.md`。ブランチ `np2kai-bump`。詳細は CHANGELOG 2026-09-27。
 
 - ✓ サブモジュール eebb95c0 → 5939e0c6、CMake に ymzadpcm 追加、patch 04/05 削除 (本家で解決済み)
 - ✓ 新 patch 08 = 本家の ADPCM 退行 2 件 (ちびおとの ADPCM が無音になる) を修正
 - ✓ patch 07 を移し直し (固定窓 + 安全装置)。Suika3 約 5% 速い・Ray 同等・画面ハッシュ一致・全 82 本 PASS
-- [ ] **ブラウザ実機確認** (ユーザー): 東方 4 作 (FM / TH02 は MIDI(MPU) も)・Ray・Suika3・MIMPI・
-  ちびおと (FMP + ADPCM)・FEP。その後デプロイと `quubee-mcp` 再公開を判断
+- ✓ **ブラウザ実機確認** (ユーザー、2026-09-27): 問題なし (TH02 の MIDI が Mate-X で鳴らない件は追従前から = 下の別項)。
+  デプロイはしない (ユーザー判断) = フェーズ 2 を同じブランチに積む
 - [ ] 本家への報告候補 3 件 (ADPCM: 読み出し判定 / FIFO と RAM の重なり / FIFO 投入が delta の case)
 - [ ] ライセンス全文の同梱: NP2kai 側 (ラッパ MIT・i386c BSD・SoftFloat3・fmgen・mamebsd) の全文が
   `licenses/` にも CREDITS にも無い (既存の穴。今回は包括ライセンス = NP2 developer team BSD の全文だけ
@@ -25,6 +25,15 @@
   `/run` に追随 / NP2kai を上げたら古いセーブは断る (版とパッチ一式の識別子を記録) / 保存先は IndexedDB。
   PC98PLAYER に倣い「ロード失敗時は直前の状態へ戻す」を入れる。手順 A (statsave 配線 + patch 09 + 一致テスト) →
   B (HLE-DOS 区画・断る条件) → C (音声バッファ消去) → D (MIDI の控え) → E (形式・IndexedDB) → F (東方 4 作) → G (UI)
+  - ✓ A: statsave の即時呼び出し + patch 09 (HRTIMER) + 一致テスト (tools/statesave_test.js)
+  - ✓ B: QuuBee 区画 (native/qb_state.c、DI21/DLDR/XMS_/M33_)。断るのは FEP 変換中だけ (tools/statesave_dos_test.js)
+  - ✓ C: 鳴りかけの音の差し戻し (patch 10 + SND_ 区画) = 音声も全区間一致。手順書の「バッファを空に」では直らなかった
+  - ✓ D: MIDI の控え (native/qb_tsf.c、MIDI 区画) (tools/statesave_midi_test.js)
+  - ✓ E: 保存ファイル (web/player/statefmt.js、NP2K は疎な形で gzip) + IndexedDB (statedb.js) + worker/メインスレッド
+    への配線 + qbDebug.save/load/undoLoad/slots (tools/statesave_file_test.js、ビルドまたぎ = tools/statesave_cross_build_check.sh)。
+    保存ファイル ~11KB (T.COM)・セーブ ~210ms・ロード ~170ms (headless)。**ブラウザでの qbDebug による確認待ち**
+  - [ ] F: 東方 4 作の場面 (タイトル・ステージ途中・ボス・BGM 途中・面の切り替わり直後)。TH02 の MIDI はちびおと構成で
+  - [ ] G: UI (入力バーのクイックセーブ/ロード・元に戻す・フォーカス戻し・スロット一覧)
 - [ ] **PC98PLAYER (MIT) からの取り込み候補** (フェーズ 2 の後に別計画): INT 21h の FCB 系・56h/57h・59h・5Ah/5Bh・
   67h/68h/6Ch・65h/66h・00h・2Bh/2Dh / バッチの FOR・IF EXIST・COPY・DEL・MD/RD・REN・TYPE・XCOPY・COMMAND /C・EXIT /
   EMS 4.0 HLE (D000h・マップ時に 16KB 写し替え) / FindFirst の検索番号を DTA 予約域に。移すなら CREDITS に表記。

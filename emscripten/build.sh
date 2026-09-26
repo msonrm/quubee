@@ -30,6 +30,18 @@ for p in tools/np2kai_patches/*.patch; do
     fi
 done
 
+# ステートセーブの互換識別子 (フェーズ 2)。NP2kai の statsave は構造体をそのまま書くので、NP2kai の
+# コミットかパッチ一式が変われば古いセーブは読めない (読めても誤読しうる)。その組を識別子にして
+# セーブのヘッダに書き、合わないセーブは読み込み前に断る。QB_BUILD_REV は表示・調査用の QuuBee の版。
+# 中身が変わったときだけ書き換える (毎回書くと bridge.c が毎回再コンパイルされる)。
+NP2_COMMIT="$(git -C core/np2kai rev-parse HEAD 2>/dev/null || echo unknown)"
+PATCH_HASH="$(cat tools/np2kai_patches/*.patch | sha256sum | cut -c1-16)"
+QB_REV="$(git rev-parse --short=12 HEAD 2>/dev/null || echo unknown)$(git diff --quiet HEAD -- native web tools/np2kai_patches 2>/dev/null || echo -dirty)"
+BUILD_ID_NEW="$(printf '/* 生成物 (emscripten/build.sh)。コミットしない */\n#define QB_NP2KAI_COMPAT_ID \"np2kai-%s+p%s\"\n#define QB_BUILD_REV \"%s\"\n' "${NP2_COMMIT:0:12}" "$PATCH_HASH" "$QB_REV")"
+if [ "$(cat native/qb_build_id.h 2>/dev/null)" != "$BUILD_ID_NEW" ]; then
+    printf '%s\n' "$BUILD_ID_NEW" > native/qb_build_id.h
+fi
+
 # --clean で再configure
 if [[ "${1:-}" == "--clean" ]]; then
     rm -rf build/wasm

@@ -289,6 +289,23 @@ class Machine {
         return png;
     }
 
+    /* --- ステートセーブ (フェーズ 2)。ブラウザと同じ web/player/statefmt.js を使う --- */
+    stateAdapter() {
+        return {
+            ccall: (...a) => this.M.ccall(...a),
+            FS: this.M.FS,
+            framebuffer: () => {
+                const { ptr, w, h } = this.framebuffer();
+                return { px: this.M.HEAPU16.slice(ptr >> 1, (ptr >> 1) + w * h), w, h };
+            },
+        };
+    }
+    /* 保存ファイル (gzip 済みバイト列) を作る。戻り値 { ok, reason?, bytes, header, thumb } */
+    stateSave(meta = {}) { return require(path.join(WEB, 'player', 'statefmt.js')).save(this.stateAdapter(), meta); }
+    /* 保存ファイルを読み込む。戻り値 { ok, reason?, detail?, header?, undo? }。音声の汲み出し位置は
+     * 呼び出し側でそろえること (frame / produced。一致テストで A と比べる場合) */
+    stateLoad(bytes) { return require(path.join(WEB, 'player', 'statefmt.js')).load(this.stateAdapter(), bytes); }
+
     /* 画面の指紋 (回帰比較用。色数 + 全画素の 32bit ハッシュ) */
     screenHash() {
         const { ptr, w, h } = this.framebuffer();

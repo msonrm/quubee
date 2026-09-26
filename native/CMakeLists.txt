@@ -223,6 +223,8 @@ set(EXPORTED_FUNCTIONS
     _np2kai_state_qb_save
     _np2kai_state_qb_load
     _np2kai_debug_midi_ch
+    _np2kai_state_compat_id
+    _np2kai_build_rev
     _np2kai_xms_enable
     _np2kai_xms_stat
     _np2kai_dos_stage_com

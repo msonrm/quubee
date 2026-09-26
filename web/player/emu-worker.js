@@ -237,6 +237,7 @@ function startLoop() {
 async function init(msg) {
     logVerbose = !!msg.verbose;                          // ?debug/QB_VERBOSE を main から引き継ぐ (chatter を前面表示)
     importScripts(msg.coreUrl);                          // self.NP2KaiModule (MODULARIZE)
+    importScripts('statefmt.js');                        // self.QBStateFmt (ステートセーブの保存ファイル)
     const coreUrl = msg.coreUrl;
     M = await self.NP2KaiModule({
         locateFile: (p) => new URL(p, coreUrl).href,     // wasm を coreUrl と同じディレクトリから
@@ -290,6 +291,40 @@ async function init(msg) {
     }
 
     reply(msg.id, { bufsize });
+}
+
+// ---- ステートセーブ (フェーズ 2)。保存ファイルの組み立ては statefmt.js (bridge / headless と共通) ----
+// 状態の取得・適用は同期でフレーム境界に行う (メッセージ処理は tick の間に走る)。圧縮・展開だけ非同期。
+// ロード前の状態 (元に戻す用) はここに持つ (36MB 級なので main へは送らない)。
+let stateUndo = null;
+function stateAdapter() {
+    return {
+        ccall: (...a) => M.ccall(...a),
+        FS: M.FS,
+        framebuffer: () => {
+            const p = c.getFb(handle, pW, pH, pBpp);
+            if (!p) return null;
+            const w = M.getValue(pW, 'i32'), h = M.getValue(pH, 'i32');
+            return { px: M.HEAPU16.slice(p >> 1, (p >> 1) + w * h), w, h };
+        },
+        clearAudio: () => { clearRing(); g_swapSilence = 0; },
+    };
+}
+async function stateSave(m) {
+    const r = await QBStateFmt.save(stateAdapter(), m.meta || {});
+    if (!r.ok) return reply(m.id, { ok: false, reason: r.reason, detail: r.detail });
+    reply(m.id, { ok: true, bytes: r.bytes, header: r.header, thumb: r.thumb }, [r.bytes.buffer, r.thumb.buffer]);
+}
+async function stateLoad(m) {
+    const r = await QBStateFmt.load(stateAdapter(), new Uint8Array(m.bytes));
+    if (r.ok) stateUndo = r.undo;
+    reply(m.id, { ok: r.ok, reason: r.reason, detail: r.detail, header: r.header, canUndo: !!stateUndo });
+}
+function stateUndoApply(m) {
+    if (!stateUndo) return reply(m.id, { ok: false, reason: 'none' });
+    const r = QBStateFmt.restore(stateAdapter(), stateUndo);
+    stateUndo = null;
+    reply(m.id, { ok: r.ok, detail: r.detail });
 }
 
 // ---- メッセージディスパッチ ----
@@ -387,6 +422,11 @@ onmessage = (ev) => {
             audioOn = !!m.on;
             if (audioOn) { nextDue = performance.now(); sampleDebt = 0; lastAdvanceMs = performance.now(); }  // ペース時計 + stall 検知をリセット
             break;
+
+        case 'stateSave': stateSave(m).catch((e) => reply(m.id, { error: String((e && e.message) || e) })); break;
+        case 'stateLoad': stateLoad(m).catch((e) => reply(m.id, { error: String((e && e.message) || e) })); break;
+        case 'stateUndo': stateUndoApply(m); break;
+        case 'stateForgetUndo': stateUndo = null; break;   // 元に戻す期限切れ (メモリを返す)
 
         default: console.warn('emu-worker: unknown message', m.type);
     }

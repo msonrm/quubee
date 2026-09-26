@@ -72,3 +72,6 @@ Thumbs.db
 /tools/mcp/node_modules/
 /tools/mcp/package-lock.json
 /tools/mcp/dist/
+
+# ステートセーブの互換識別子 (emscripten/build.sh が生成)
+native/qb_build_id.h
