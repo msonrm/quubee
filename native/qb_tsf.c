@@ -54,6 +54,25 @@ typedef struct {
 	tsf		*sf;			/* マスター soundfont (SF2) */
 } QBMOD;
 
+/* ステートセーブ用の「控え」(フェーズ 2)。合成器 (TSF) の内部は保存せず、チャンネルごとに TSF が実際に
+ * 反映する設定の最後の値だけを控える: バンク (CC0/32)・音色・音量 (CC7/39)・エクスプレッション (CC11/43)・
+ * パン (CC10/42)・サステイン (CC64)・RPN 0〜2 (ピッチベンド幅・微調整・粗調整) のデータ・RPN の選択・
+ * ピッチベンド。ロード後に全音停止 + コントロール初期化を送ってから控えを送り直す (qb_midi_state_load)。
+ * データエントリ (CC6/38) は直前の RPN 選択で意味が変わるので生の CC は再生せず、RPN ごとに控える。 */
+#define QB_SH_NCC 9
+static const UINT8 k_sh_cc[QB_SH_NCC] = { 0, 32, 7, 39, 11, 43, 10, 42, 64 };
+typedef struct {
+	UINT8	cc[QB_SH_NCC];		/* k_sh_cc の順 */
+	UINT16	cc_set;				/* bit i = cc[i] を受けた */
+	UINT8	prog, prog_set;
+	UINT16	rpn;				/* 現在の RPN 選択 (CC101<<7 | CC100)。rpn_valid=0 なら選択なし (TSF の 0xFFFF) */
+	UINT8	rpn_valid;
+	UINT16	rpn_data[3];		/* RPN 0/1/2 のデータ (14bit、MSB<<7|LSB) */
+	UINT8	rpn_data_set;		/* bit n = RPN n のデータを受けた */
+	UINT16	bend;
+	UINT8	bend_set;
+} QB_MIDI_SHADOW;
+
 typedef struct {
 	UINT	samprate;		/* MIDIHDL 公開ビュー (samprate, worksize) に一致 */
 	UINT	worksize;
@@ -66,7 +85,13 @@ typedef struct {
 	FXALLPASS	apL[FX_NUMALLPASS], apR[FX_NUMALLPASS];
 	float		comb_fb, damp1, damp2;
 	float		fx_inlp;		/* リバーブ入力 pre-LPF の 1-pole 状態 */
+	QB_MIDI_SHADOW	sh[16];		/* ステートセーブ用の控え (上) */
 } QBHDL;
+
+/* 生きているハンドルを作成順に持つ (ステートセーブの控えをハンドルと対応づけるため)。 */
+#define QB_MAX_HDLS 8
+static QBHDL *s_hdls[QB_MAX_HDLS];
+static int    s_nhdls;
 
 static int s_fx_enable = 1;		/* 全 hdl 共通リバーブ on/off (midiout_fx_setenable) */
 
@@ -189,17 +214,56 @@ MIDIHDL VEXPORT midiout_create(MIDIMOD mod, UINT worksize) {
 		return NULL;
 	}
 	fx_alloc(h);
+	if (s_nhdls < QB_MAX_HDLS) s_hdls[s_nhdls++] = h;
 	return (MIDIHDL)(void *)h;
 }
 
 void VEXPORT midiout_destroy(MIDIHDL hdl) {
 	QBHDL *h = (QBHDL *)(void *)hdl;
 	if (h) {
+		int i, j;
+		for (i = 0; i < s_nhdls; i++) {
+			if (s_hdls[i] != h) continue;
+			for (j = i + 1; j < s_nhdls; j++) s_hdls[j - 1] = s_hdls[j];
+			s_nhdls--;
+			break;
+		}
 		if (h->synth) tsf_close(h->synth);
 		if (h->out)   _MFREE(h->out);
 		if (h->fbuf)  _MFREE(h->fbuf);
 		if (h->fpool) _MFREE(h->fpool);
 		_MFREE(h);
+	}
+}
+
+static void shadow_note(QB_MIDI_SHADOW *c, UINT8 kind, UINT8 d1, UINT8 d2) {
+	int i;
+	if (kind == 0xc0) { c->prog = d1; c->prog_set = 1; return; }
+	if (kind == 0xe0) { c->bend = (UINT16)(d1 | (d2 << 7)); c->bend_set = 1; return; }
+	if (kind != 0xb0) return;
+	for (i = 0; i < QB_SH_NCC; i++) {
+		if (k_sh_cc[i] == d1) { c->cc[i] = d2; c->cc_set |= (UINT16)(1u << i); return; }
+	}
+	switch (d1) {
+		/* RPN の選択は TSF と同じ意味論 (片方ずつ書き換え、NRPN と CC121 で選択なし) */
+		case 101: c->rpn = (UINT16)(((c->rpn_valid ? c->rpn : 0) & 0x7f) | (d2 << 7)); c->rpn_valid = 1; break;
+		case 100: c->rpn = (UINT16)(((c->rpn_valid ? c->rpn : 0) & 0x3f80) | d2);      c->rpn_valid = 1; break;
+		case 98: case 99: c->rpn_valid = 0; break;
+		case 6: case 38: {
+			int rpn = c->rpn_valid ? (int)c->rpn : -1;
+			if (rpn >= 0 && rpn <= 2) {
+				c->rpn_data[rpn] = (d1 == 6) ? (UINT16)((c->rpn_data[rpn] & 0x7f) | (d2 << 7))
+				                             : (UINT16)((c->rpn_data[rpn] & 0x3f80) | d2);
+				c->rpn_data_set |= (UINT8)(1u << rpn);
+			}
+			break;
+		}
+		case 121: {		/* reset all controllers: TSF と同じく音量等・RPN を初期値へ (音色とバンクは TSF もそのまま) */
+			UINT8 prog = c->prog, prog_set = c->prog_set;
+			ZeroMemory(c, sizeof(*c));
+			c->prog = prog; c->prog_set = prog_set;
+			break;
+		}
 	}
 }
 
@@ -212,6 +276,7 @@ void VEXPORT midiout_shortmsg(MIDIHDL hdl, UINT32 msg) {
 	d1 = (UINT8)((msg >> 8) & 0x7f);
 	d2 = (UINT8)((msg >> 16) & 0x7f);
 	ch = status & 0x0f;
+	shadow_note(&h->sh[ch], status & 0xf0, d1, d2);
 	switch (status & 0xf0) {
 		case 0x80:	/* note off */
 			tsf_channel_note_off(h->synth, ch, d1);
@@ -243,6 +308,7 @@ void VEXPORT midiout_longmsg(MIDIHDL hdl, const void *msg, UINT size) {
 	    (p[1] == 0x41 && size >= 10 && p[4] == 0x12 && p[5] == 0x40 && p[6] == 0x00 && p[7] == 0x7f)) {
 		tsf_reset(h->synth);
 		tsf_channel_set_presetnumber(h->synth, 9, 0, 1);	/* ドラム ch を再設定 */
+		ZeroMemory(h->sh, sizeof(h->sh));					/* 控えも初期状態へ */
 	}
 }
 
@@ -268,3 +334,80 @@ const SINT32 * VEXPORT midiout_get(MIDIHDL hdl, UINT *samples) {
 
 /* GS effects (= 全体リバーブ) の on/off。bridge の np2kai_debug_midi_fx → qbDebug.midifx。 */
 void VEXPORT midiout_fx_setenable(int enable) { s_fx_enable = enable ? 1 : 0; }
+
+/* ---- ステートセーブ (フェーズ 2): 区画 "MIDI" -----------------------------------------------
+ * 生きているハンドルごとの控え (QB_MIDI_SHADOW x 16)。ロードでは同じ順のハンドルへ、全音停止 (CC120) +
+ * コントロール初期化 (CC121) の後に控えを送り直す。statsave のロードで通信まわりが作り直されて合成器が
+ * 新品になることがあるので、NP2kai 区画より後に読むこと。セーブ側とハンドル数が違えば少ない方まで。 */
+#include "qb_state.h"
+#define MIDI_STATE_VER 1u
+
+int qb_midi_state_save(qb_sw *w) {
+	int i;
+	size_t mark = qb_sw_begin(w, "MIDI", MIDI_STATE_VER);
+	qb_sw_u32(w, (uint32_t)s_nhdls);
+	for (i = 0; i < s_nhdls; i++) qb_sw_var(w, s_hdls[i]->sh);
+	qb_sw_end(w, mark);
+	return 0;
+}
+
+static void shadow_replay(QBHDL *h, int ch, const QB_MIDI_SHADOW *c) {
+	int i, n;
+	tsf *f = h->synth;
+	tsf_channel_midi_control(f, ch, 120, 0);		/* all sound off (即時) */
+	tsf_channel_midi_control(f, ch, 121, 0);		/* reset all controllers */
+	for (i = 0; i < QB_SH_NCC; i++) {
+		if (c->cc_set & (1u << i)) tsf_channel_midi_control(f, ch, k_sh_cc[i], c->cc[i]);
+	}
+	if (c->prog_set) tsf_channel_set_presetnumber(f, ch, c->prog, (ch == 9));
+	else if (ch == 9) tsf_channel_set_presetnumber(f, 9, 0, 1);
+	for (n = 0; n < 3; n++) {
+		if (!(c->rpn_data_set & (1u << n))) continue;
+		tsf_channel_midi_control(f, ch, 101, 0);
+		tsf_channel_midi_control(f, ch, 100, n);
+		tsf_channel_midi_control(f, ch, 6, (c->rpn_data[n] >> 7) & 0x7f);
+		tsf_channel_midi_control(f, ch, 38, c->rpn_data[n] & 0x7f);
+	}
+	if (c->rpn_valid) {								/* RPN の選択をセーブ時点へ */
+		tsf_channel_midi_control(f, ch, 101, (c->rpn >> 7) & 0x7f);
+		tsf_channel_midi_control(f, ch, 100, c->rpn & 0x7f);
+	} else {
+		tsf_channel_midi_control(f, ch, 99, 0);		/* 選択なし (TSF は NRPN で 0xFFFF) */
+	}
+	if (c->bend_set) tsf_channel_set_pitchwheel(f, ch, c->bend);
+	h->sh[ch] = *c;
+}
+
+int qb_midi_state_load(const uint8_t *blob, size_t n) {
+	qb_sr r; uint32_t ver, nh, i;
+	int ch;
+	if (!qb_sr_section(blob, n, "MIDI", &r, &ver)) return -60;
+	if (ver != MIDI_STATE_VER) return -61;
+	nh = qb_sr_u32(&r);
+	for (i = 0; i < nh && !r.err; i++) {
+		QB_MIDI_SHADOW sh[16];
+		qb_sr_var(&r, sh);
+		if (r.err) break;
+		if ((int)i >= s_nhdls) continue;			/* ロード側に無いハンドル (MIDI 未読み込み等) は捨てる */
+		for (ch = 0; ch < 16; ch++) shadow_replay(s_hdls[i], ch, &sh[ch]);
+	}
+	return r.err ? -62 : 0;
+}
+
+/* テスト用の読み出し口 (bridge.c の np2kai_debug_midi_ch)。hdl 番目のハンドルの ch の TSF 上の値。
+ * what: 0=音色番号 1=バンク 2=音量x1000 3=パンx1000 4=ベンド幅x100 5=ピッチベンド / -1=ハンドル数 */
+int qb_midi_debug_ch(int hdl, int ch, int what) {
+	tsf *f;
+	if (what < 0) return s_nhdls;
+	if (hdl < 0 || hdl >= s_nhdls || ch < 0 || ch > 15) return -1;
+	f = s_hdls[hdl]->synth;
+	switch (what) {
+		case 0: return tsf_channel_get_preset_number(f, ch);
+		case 1: return tsf_channel_get_preset_bank(f, ch);
+		case 2: return (int)(tsf_channel_get_volume(f, ch) * 1000.0f + 0.5f);
+		case 3: return (int)(tsf_channel_get_pan(f, ch) * 1000.0f + 0.5f);
+		case 4: return (int)(tsf_channel_get_pitchrange(f, ch) * 100.0f + 0.5f);
+		case 5: return tsf_channel_get_pitchwheel(f, ch);
+	}
+	return -1;
+}

@@ -853,3 +853,7 @@ extern int qb_state_load_file(const char *path);
 int np2kai_state_qb_busy(void) { return qb_state_busy(); }
 int np2kai_state_qb_save(const char *path) { return qb_state_save_file(path); }
 int np2kai_state_qb_load(const char *path) { return qb_state_load_file(path); }
+
+/* ステートセーブの MIDI の控えの検証用 (tools/statesave_midi_test.js)。qb_tsf.c の qb_midi_debug_ch 参照。 */
+extern int qb_midi_debug_ch(int hdl, int ch, int what);
+int np2kai_debug_midi_ch(int hdl, int ch, int what) { return qb_midi_debug_ch(hdl, ch, what); }
