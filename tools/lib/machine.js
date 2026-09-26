@@ -433,6 +433,9 @@ class Machine {
             // (2 桁年ソフトのセーブ破壊保護)。計測器 (quubee_run CLI / MCP) は false で実時計に
             // する — 2026 年の実機相当の挙動 (Y2K バグの煙) を隠さないため。
             y2kClamp: true,
+            // MIDI: true で reset 前に soundfont を読み TinySoundFont + MPU98II を有効化する
+            // (ブラウザの ensureMidiLoaded と同じ順序 = MIDI を使うレシピの Run)。
+            midi: false,
             ...opts,
         };
         const M = await Machine._load(o.quiet);
@@ -467,6 +470,10 @@ class Machine {
         if (o.extmem) M.ccall('np2kai_set_extmem', 'number', ['number'], [o.extmem]);
         if (!o.y2kClamp) M.ccall('np2kai_set_y2k_clamp', 'number', ['number'], [0]);
 
+        if (o.midi) {
+            M.FS.writeFile('/tmp/soundfont.sf2', new Uint8Array(fs.readFileSync(path.join(WEB, 'assets/soundfont.sf2'))));
+            if (!M.ccall('np2kai_enable_midi_now', 'number', ['number'], [h])) throw new Error('enable_midi_now 失敗 (soundfont.sf2)');
+        }
         M.FS.writeFile('/tmp/loader.d88', new Uint8Array(fs.readFileSync(path.join(WEB, 'assets/loader.d88'))));
         M.ccall('np2kai_insert_fdd', 'number', ['number', 'string', 'number', 'number'], [h, '/tmp/loader.d88', 0, 0]);
         M.ccall('np2kai_reset', null, ['number'], [h]);
