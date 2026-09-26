@@ -80,6 +80,8 @@ set(SOUND_SOURCES
     ${NP2}/sound/soundrom.c
     ${NP2}/sound/tms3631c.c
     ${NP2}/sound/tms3631g.c
+    ${NP2}/sound/ymzadpcmc.c
+    ${NP2}/sound/ymzadpcmg.c
 )
 file(GLOB GETSND_SOURCES    ${NP2}/sound/getsnd/*.c)
 file(GLOB MAME_SOURCES      ${NP2}/sound/mame/*.c)

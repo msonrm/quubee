@@ -43,6 +43,7 @@ fs.writeFileSync(path.join(RUN, 'R.BAT'), 'RAY.EXE SILK_FLD.RAY\r\n');
     console.log(JSON.stringify({
         wasm: m.info().wasm.sha256.slice(0, 16),
         multiple, audioRms: rms, screenAnimated: h1 !== h2,
+        screen: m.screenHash().toString(16),   // 計測区間後の画面。CPU 最適化 A/B の挙動不変チェック用
         frames: MEAS,
         ms_per_frame: +(ms / MEAS).toFixed(3),
         fps: +(1000 / (ms / MEAS)).toFixed(1),

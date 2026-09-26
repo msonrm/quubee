@@ -306,6 +306,10 @@ void np2kai_debug_midi_fx(int enable) { midiout_fx_setenable(enable); }
  * 応答済みなので、>0 は「この方式の HLE 実装価値あり」のシグナル。dos_loader.c が更新。 */
 extern uint32_t qb_dos_memprobe_count(int which);   /* dos_loader.c */
 uint32_t np2kai_debug_memprobe(np2kai_handle h, int which) { if (!h) return 0; return qb_dos_memprobe_count(which); }
+/* L0 暫定 (NP2kai 追従中): patch 07 を外している間だけ、07 が cpumem.c に定義する
+ * 溢れヒストグラムの代わりを置く。07 を移し直したら削除する。 */
+UINT32 qb_dbg_read8_hist[16];
+UINT32 qb_dbg_read8cf_hist[16];
 
 /* XMS (HIMEM 相当) HLE の制御/診断 (qbDebug.xms)。enable: 1=有効化/0=無効化、戻り値=反映後の実効状態。
  * stat which: 0=有効か / 1=確保中ハンドル数 / 2=使用バイト / 3=空きバイト。dos_xms.c が実装。 */
