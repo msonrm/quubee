@@ -20,7 +20,15 @@
   倍率 27 化 07-11 の組み合わせで最初から鳴っていなかった公算)。MPU へ直接 note-on する極小 COM
   (mpu_midi_test) は全組み合わせで鳴り、MIMPI も鳴る = MMD の使い方の側。CS4231 と MPU の割り込み・
   タイミングの絡みが疑わしいが未調査。回帰は倍率 20 で回すので拾えていなかった
-- [ ] **フェーズ 2: ステートセーブ** (東方旧作で検証)。手順書の「新パッチ 08 (HRTIMER)」は番号が埋まったので **09** にする
+- [ ] **フェーズ 2: ステートセーブ** (東方旧作で検証)。手順書の「新パッチ 08 (HRTIMER)」は番号が埋まったので **09** にする。
+  決定 (2026-09-27、ユーザー): フェーズ 1 はデプロイせず同じブランチに積む / ロード後のファイル一覧は巻き戻った
+  `/run` に追随 / NP2kai を上げたら古いセーブは断る (版とパッチ一式の識別子を記録) / 保存先は IndexedDB。
+  PC98PLAYER に倣い「ロード失敗時は直前の状態へ戻す」を入れる。手順 A (statsave 配線 + patch 09 + 一致テスト) →
+  B (HLE-DOS 区画・断る条件) → C (音声バッファ消去) → D (MIDI の控え) → E (形式・IndexedDB) → F (東方 4 作) → G (UI)
+- [ ] **PC98PLAYER (MIT) からの取り込み候補** (フェーズ 2 の後に別計画): INT 21h の FCB 系・56h/57h・59h・5Ah/5Bh・
+  67h/68h/6Ch・65h/66h・00h・2Bh/2Dh / バッチの FOR・IF EXIST・COPY・DEL・MD/RD・REN・TYPE・XCOPY・COMMAND /C・EXIT /
+  EMS 4.0 HLE (D000h・マップ時に 16KB 写し替え) / FindFirst の検索番号を DTA 予約域に。移すなら CREDITS に表記。
+  比較の詳細 = memory reference_pc98player
 
 ## 🧰 headless の土台 `tools/lib/machine.js` — 着手済 (2026-07-10)
 
