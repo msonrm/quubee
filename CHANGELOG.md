@@ -1,5 +1,52 @@
 # CHANGELOG
 
+## [NP2kai 追従 — 5939e0c6 (NP21/W rev.101〜104) へ・ADPCM 退行の修正・patch 07 の移し直し] — 2026-09-27
+
+ステートセーブ (次段) の形式は NP2kai の構造体レイアウトに依存するため、公開前に最新版へ追従した。
+手順書 = `~/plan_np2kai_bump_and_statesave.md` (claude.ai での事前調査) のフェーズ 1。
+ブランチ `np2kai-bump`。
+
+- **サブモジュール eebb95c0 (2026-05-09) → 5939e0c6 (2026-09-05)**。26 コミット先行・単純な遅れ。
+  NP21/W rev.101〜104 の取り込みを含み、QuuBee がビルドするコア部分で約 180 ファイル。CMake は本家新設の
+  `sound/ymzadpcm{c,g}.c` を `SOUND_SOURCES` に追加 (無いとリンクで未定義)。`cbus/*.c` 等は GLOB。
+- **patch 04/05 を削除 = 本家で解決済み**。05 (LIO GCIRCLE の円弧・楕円) は**本家が QuuBee の実装を
+  取り込んだ** (`LICENSES/LICENSE-LIO.TXT` に「参照元 QuuBee、MIT © msonrm」)。`lio_gcircle_test` PASS、
+  04 (GSCREEN の表示ページ) は MIMPI + KNGNACHT.mid のミキサー画面が 04 なしで全表示されることを headless で確認。
+  LIO は本家で他にも前進: GPAINT1/2 (A9h/AAh、塗り) と GROLL (AEh) が新規実装 (旧版は分岐がコメントアウトで
+  塗りが無かった)、GLINE/GPUT1/GPSET も書き直し。GCOPY はファイルのみで分岐はまだコメントアウト。
+- **新 patch 08 = 本家の ADPCM 退行 2 件** (rev.103/104 merge a14bb65 で混入)。症状はちびおと (86+ADPCM)
+  の ADPCM が無音: FMP は起動時に ADPCM RAM へ 23 バイト書いて読み戻し、一致しないと「ADPCM 無し」として
+  音色を送らない。
+  1. `adpcm_readsample` のメモリ読み出し判定が `(ctrl1 & 0x60) == 0x20` から `!(ctrl2 & 2)` (RAM 種別
+     ビット) に書き換わっていて、FMP の設定 (ctrl2=0x02) では読み戻しが常に 0。
+  2. 新設の CPU FIFO が共用体で ADPCM RAM (`buf[0x20000..]`) と重なり、control1 のリセット (0x01) の度に
+     RAM を壊す (x1-bit モードのビット 4 プレーン = `'T'` が `'D'` に化ける)。
+  見つけ方: `adpcm_beepgain_test` の「ADPCM 音量 0⇄128 で音が変わる」検出力ガードが落ちた → 旧版と新版に
+  同じプローブ (OPNA 拡張レジスタの読み書き) を入れて FMP の操作列を並べ、読み戻し値の差 (0x54→0x44) から
+  2 を特定。修正後は操作列が旧版と完全一致。3 件目の疑い (CPU FIFO へのデータ投入が delta レジスタの case に
+  入っている) は CPU 直流しモード専用で QuuBee の扱うドライバが使わないため未修正。3 件とも本家への報告候補。
+- **patch 07 (CPU メモリ fast path) の移し直し**。本家は `memp_*_fast` (MMIO 登録表で直アクセス可否を判定する
+  out-of-line 関数) を新設したが、07 なし (L0) は Suika3 10.2ms / Ray 16.8ms と旧版 (7.7 / 9.3) より大幅に遅い。
+  - 物理アクセスは固定の 2 窓を inline で直アクセスし、窓の外は本家 `memp_*_fast` が判定後に呼ぶのと同じ
+    `*_slow` へ直接落とす (static を外して公開)。本家の既定の MMIO 登録は窓のちょうど外側 = 意味論は同一。
+  - 本家の登録表を inline で引く版も作って A/B: **固定窓の方が Suika3 3%・Ray 1% 速く、wasm も 130KB 小さい**
+    (表の判定が呼び出し箇所ごとに展開される)。固定窓を採用。
+  - 安全装置: 窓の上限を幅別に引き算済みのグローバルで持ち、窓と重なる MMIO が `memp_mmio_range_add` に
+    来たら窓を空にして全部 `*_slow` へ (stderr 警告、次のリセットで張り直し)。一時フックで発動・解除を確認。
+    拡張メモリ 0 のとき `EXTLIMIT16 - 1` が 0xFFFFFFFF へ回り込む旧 07 の潜在バグもこれで解消
+    (QuuBee は常に 32MB なので実害は無かった)。
+  - 命令フェッチ / 実モード vmemory・load_segreg の逐語インライン / 16bit 直接ディスパッチは、コピー元が
+    本家で不変なのを確認してそのまま移植。
+  - 結果 (旧版と交互に計測): **Suika3 7.24〜7.32ms (旧 7.65〜7.73、約 5% 速い) / Ray 9.24〜9.29ms (旧と同等)**。
+    画面ハッシュは Suika3 8b3d55d7 / Ray a30e6dc5 で L0・旧版と一致。wasm 1.38MB (旧 1.39MB)。
+- `tools/bench_ray.js` が計測後の画面ハッシュも出すように (CPU 最適化 A/B の挙動不変チェック用)。
+- 回帰: **全 82 本 PASS** (旧版の基準も 82/82。手順書にあった「既存の FAIL 2 本」は claude.ai 環境の事情で、
+  手元では再現しない)。所要 138s → 122s。
+- ライセンス: 新たにビルドに入った本家ファイル 7 本 (`cbus/boardws.c`・`cbus/cbuspnp.c`・`sound/ymzadpcm{c,g}.c`・
+  `lio/{gpaint,groll,gcopy}.c`) はいずれも本家の包括ライセンス (NP2 developer team、BSD-3-Clause) に該当。
+  GPL の混入なし。CREDITS.md の NP2kai 節に包括ライセンスの全文・LIO の経緯・ビルド対象の版を追記。
+- 後の候補: 本家の新オプション `USE_CPU_BULKREP` (REP 系命令の一括処理と思われる) は挙動が変わりうるので未採用。
+
 ## [GitHub issue 対応 — EXEC の e_maxalloc honor / 名乗る DOS バージョンの設定] — 2026-08-28
 
 外部からの issue 2 件 (報告者 vyv03354 氏) の対応と、自動セキュリティ PR 1 件の判断。

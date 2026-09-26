@@ -3,6 +3,14 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
+# Emscripten は 3.1.69 を前提にしている (apt 版)。手順書 (2026-09 の調査) によれば 6.0 系では
+# NP2kai 5939e0c6 の cbus/boardlol.c が incompatible-pointer でエラーになる。違う版でも止めはしない。
+EMCC_WANT="3.1.69"
+EMCC_HAVE="$(emcc --version 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
+if [ "$EMCC_HAVE" != "$EMCC_WANT" ]; then
+    echo "WARNING: emcc ${EMCC_HAVE:-not found} (想定は $EMCC_WANT)。ビルドや挙動が変わる可能性があります。" >&2
+fi
+
 # NP2kai サブモジュールへの qb 固有パッチを per-patch 冪等で適用。
 # 詳細は tools/np2kai_patches/README.md を参照。
 echo "Applying NP2kai patches..."

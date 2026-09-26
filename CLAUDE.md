@@ -38,7 +38,7 @@ MS-DOS も使わず（HLE-DOS + 合成 BIOS + MIT の NP2kai）、書庫ドロ�
 - ✓ **Mate-X PCM (CS4231) 検出対応 (2026-07-09)**: DOS/4GW 近代エンジン (Suika3 移植版等、FM を見ず SB16/Mate-X PCM だけ検出) の「No supported sound card found.」を根治。既定 `SOUND_SW` を段階選択化 (設定 Sound Board: 86 / 86+ADPCM / **86+ADPCM+Mate-X PCM=0x64 既定**)。0x64 は 0x14 の上位互換で FM/ADPCM 発音同一 (回帰なし実証)。**残=PCM 途切れはエンジン側の構造** (デコード律速ではない — 下記)。正典=[[reference_matex_pcm_wss]]
 - ✓ **XMS の 15〜16MB ホール対応 (2026-07-09)**: DOS エクステンダ (DOS/4GW) の `Out of memory` を根治。PC-98 の物理 15〜16MB は RAM ではなく PEGC VRAM/未接続/先頭 1MB エイリアス (`CPU_EXTLIMIT16 = MIN(extsize+0x100000, 0xf00000)`)。`dos_xms.c` のプールが一枚板だったため、Lock して線形アドレスを直接触る DOS エクステンダに「1MB が RAM でない連続ブロック」を渡していた。ホールを使用中区間として除外 (`xms_occupied`)。EXTMEM=32MB で連続 EMB は 17.00MB = 実機 32MB 機と同値。診断 `qbDebug.extmem(MB)` (連続上限 = MB - 15)。ブラウザ実機で OOM 解消確認。正典=[[reference_pc98_15_16mb_hole]]
 - ✓ **Suika3 の音の途切れ = デコードではなくメインループ周期 (2026-07-09、計測で確定)**: `98main.c` は毎フレーム全画面クリア+ソフト合成+GDC プレーン変換をし、バッファ補充 (`sound_poll`) はループ 1 周に 1 回だけ。実測 1 周 4.43 エミュ秒 (multiple=20) に対し音声 half は 1.024 秒 → 古い half が鳴り直される。**音源ボードを外しても 1 周は 4.43 秒のまま** (デコードは 8% 未満)。CPU プロファイルでも SoftFloat3 は 12.5% で FPU 説も棄却。→ ホスト Vorbis デコード内蔵は無意味。直すならエンジン側で `sound_poll()` を描画ループ中からも呼ぶ。我々側の本丸はエミュ本体の高速化 → 下へ
-- ✓ **エミュ高速化 第 1+2 弾 (2026-07-10/11)**: patch 07 (統合)。第 1 弾 = メモリ/フェッチ fast path インライン化 (conventional + 拡張 2 窓。**DOS/4GW はコードを 16MB 以上に置く**のが肝) → Suika3 **1.39 倍** (11.2→8.1ms)。第 2 弾 = 16bit 実モード対応 (vmemory/load_segreg 逐語インライン + 16bit 直接ディスパッチ + USE_CPU_INLINEINST/EIPMASK) → Ray **1.43 倍** (14.0→9.8ms)。挙動不変・回帰全 PASS。ブラウザ実機 (ユーザー): 「Ray が一番体感できる。multiple 26 まで上げられる (前は 20 超で即ノイズ)」。**ベンチは `tools/bench_game.js` (32bit) + `tools/bench_ray.js` (16bit) の両方で** (bench_frame.js は BOUND 例外連発で longjmp を測ってしまう罠)。溢れ診断 = `np2kai_debug_memprobe(100+i/200+i)`。既定 multiple=20 据え置き (27 は Ray 級の実機確認後に判断)。正典=[[reference_cpu_mem_fastpath]]
+- ✓ **エミュ高速化 第 1+2 弾 (2026-07-10/11)**: patch 07 (統合)。第 1 弾 = メモリ/フェッチ fast path インライン化 (conventional + 拡張 2 窓。**DOS/4GW はコードを 16MB 以上に置く**のが肝) → Suika3 **1.39 倍** (11.2→8.1ms)。第 2 弾 = 16bit 実モード対応 (vmemory/load_segreg 逐語インライン + 16bit 直接ディスパッチ + USE_CPU_INLINEINST/EIPMASK) → Ray **1.43 倍** (14.0→9.8ms)。挙動不変・回帰全 PASS。ブラウザ実機 (ユーザー): 「Ray が一番体感できる。multiple 26 まで上げられる (前は 20 超で即ノイズ)」。**ベンチは `tools/bench_game.js` (32bit) + `tools/bench_ray.js` (16bit) の両方で** (bench_frame.js は BOUND 例外連発で longjmp を測ってしまう罠)。溢れ診断 = `np2kai_debug_memprobe(100+i/200+i)`。既定 multiple=20 据え置き (27 は Ray 級の実機確認後に判断)。**2026-09-27 に NP2kai 5939e0c6 へ移し直し** (固定窓 + MMIO 登録と重なったら窓を空にする安全装置。旧版比 Suika3 約 5% 速い・Ray 同等)。正典=[[reference_cpu_mem_fastpath]] / tools/np2kai_patches/README.md
 - ✓ **画像・文書ビューア**: MAG・PI デコーダ / readme (NEC 罫線→Unicode・VZ %タグリンク) / 仮想 30 行 BIOS (`qbDebug.lines30`)
 - ✓ **ホスト連携 QoL**: ゲームパッド / ファイル単体 Save・＋Add / 閲覧専用形式 (画像/音楽) の非破壊オープン / サブディレクトリ起動の CWD 代行
 - 動作確認: さめがめ / ザルバール / Super Depth / Ray IV / うさちゃん列車 / 東方旧作 4 作 (TH02-05 体験版・ブラウザ実機確認) / bio100 純ゲーム 31 本 (ALIVE21・CRASH0・描画到達 25・動作確認 27) / MIMPI v3.8 (MIDI プレイヤー、I/F=MPU 演奏 + LIO ミキサー画面・ブラウザ実機確認 2026-07-03)
@@ -111,12 +111,13 @@ MS-DOS も使わず（HLE-DOS + 合成 BIOS + MIT の NP2kai）、書庫ドロ�
 
 ## 環境
 - 開発機: Chromebook (aarch64) + Crostini (Debian Trixie)
-- Emscripten: `apt install emscripten`（バージョン 3.1.69、ローカルでビルド可能）
+- Emscripten: `apt install emscripten`（バージョン 3.1.69、ローカルでビルド可能。6.0 系は NP2kai 5939e0c6 の
+  `cbus/boardlol.c` でエラーになるとの調査あり = build.sh が版を確認して警告）
 - ビルド: `bash emscripten/build.sh`（NP2kai patch 自動適用 + emcmake cmake + emmake make）
 - Phase 3 ローダ disk + hello.com 再生成: `bash tools/dos_loader/build.sh`
 - ローカル確認: `node tools/devserver.js 8080` → http://localhost:8080/（COOP/COEP 付き。worker モード /
   SharedArrayBuffer に必須なので `emrun` では不可）。headless 回帰は **`node tools/run_tests.js`**
-  （全 80 本を並列一括実行・約 2 分。個別は `node tools/<name>_test.js` / filter 引数でも絞れる）
+  （全 82 本を並列一括実行・約 2 分。個別は `node tools/<name>_test.js` / filter 引数でも絞れる）
 - **headless の土台**: `tools/lib/machine.js`（ブート/キー/`runUntil`/画面/音声/`INT 21h`/`snapshot`）。
   新しい調査ハーネスはこれを使う（**音声は必ず `np2kai_audio_get_bufsize()` ちょうどで汲む**・
   応答は必ず wasm の SHA を伴う・`snapshot`/`restore` で暖機を 40〜200 倍速に）。正典=[[reference_headless_machine_snapshot]]

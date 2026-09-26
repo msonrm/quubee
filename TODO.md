@@ -1,5 +1,21 @@
 # QB 作業状況
 
+## 🔧 NP2kai 追従 (5939e0c6) → ステートセーブ — フェーズ 1 実装済・ブラウザ確認待ち (2026-09-27)
+
+手順書 = `~/plan_np2kai_bump_and_statesave.md`。ブランチ `np2kai-bump`。詳細は CHANGELOG 2026-09-27。
+
+- ✓ サブモジュール eebb95c0 → 5939e0c6、CMake に ymzadpcm 追加、patch 04/05 削除 (本家で解決済み)
+- ✓ 新 patch 08 = 本家の ADPCM 退行 2 件 (ちびおとの ADPCM が無音になる) を修正
+- ✓ patch 07 を移し直し (固定窓 + 安全装置)。Suika3 約 5% 速い・Ray 同等・画面ハッシュ一致・全 82 本 PASS
+- [ ] **ブラウザ実機確認** (ユーザー): 東方 4 作 (FM / TH02 は MIDI(MPU) も)・Ray・Suika3・MIMPI・
+  ちびおと (FMP + ADPCM)・FEP。その後デプロイと `quubee-mcp` 再公開を判断
+- [ ] 本家への報告候補 3 件 (ADPCM: 読み出し判定 / FIFO と RAM の重なり / FIFO 投入が delta の case)
+- [ ] ライセンス全文の同梱: NP2kai 側 (ラッパ MIT・i386c BSD・SoftFloat3・fmgen・mamebsd) の全文が
+  `licenses/` にも CREDITS にも無い (既存の穴。今回は包括ライセンス = NP2 developer team BSD の全文だけ
+  CREDITS に追加)。バイナリ再配布条項を厳密に満たすなら同梱する
+- [ ] 本家の新オプション `USE_CPU_BULKREP` (REP 系の一括処理と思われる) の評価 — 挙動が変わりうるので未採用
+- [ ] **フェーズ 2: ステートセーブ** (東方旧作で検証)。手順書の「新パッチ 08 (HRTIMER)」は番号が埋まったので **09** にする
+
 ## 🧰 headless の土台 `tools/lib/machine.js` — 着手済 (2026-07-10)
 
 **動機**: `tools/` の headless スクリプトはブート手順を毎回コピペしており、そのたびに微妙に違うバグを
@@ -187,7 +203,16 @@ Shift+←→ (ResizeSegment、ラッパー API 追加要) / FEP 流派 API (INT 
 カタカナ語→英語変換 (実測で辞書未収録と確認済み。やるならユーザー辞書 or JS 側候補追記、
 鍵は対訳データのライセンス — ユーザー「いまは不要」)
 
-## 📝 NP2kai へ PR 素案: LIO GCIRCLE 円弧+楕円 (2026-07-04 実装・デプロイ済) — 次セッションで整える
+## ✓ NP2kai へ PR 素案: LIO GCIRCLE 円弧+楕円 — **本家が取り込み済み = クローズ (2026-09-27 判明)**
+
+PR を出す前に、本家が NP21/W rev.103/104 の merge (a14bb65, 2026-09-05) で QuuBee の実装を取り込んでいた
+(`core/np2kai/LICENSES/LICENSE-LIO.TXT` = 「円・楕円・円弧・楕円弧の輪郭計算部分、参照元 QuuBee、
+MIT © msonrm」)。NP2kai 追従で patch 05 は削除、`tools/lio_gcircle_test.js` は PASS のまま。素案に
+「別途」とあった GPAINT の塗り (scope B) も本家が `lio/gpaint.c` として実装済み。以下は経緯の記録として残す。
+
+---
+
+(以下、当時の素案)
 
 QuuBee 側は実装・回帰・デプロイ済 (patch `tools/np2kai_patches/05_lio_gcircle_arc.patch` /
 回帰 `tools/lio_gcircle_test.js` / CHANGELOG 2026-07-04)。**上流 NP2kai への PR はまだ出していない**。
