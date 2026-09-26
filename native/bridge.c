@@ -842,3 +842,14 @@ int np2kai_state_np2_load(const char *path) {
 	g_u8ControlState = 0;
 	return statsave_load_d();
 }
+
+/* ---- ステートセーブ: QuuBee 区画 (HLE-DOS 等、qb_state.c) ------------------------------------
+ * busy: セーブを断る理由 (0 = セーブ可 / 1 = FEP の変換中)。save/load: 0 = 成功 / 負 = 失敗
+ * (区画が無い・版が違う・大きさの食い違い・ファイルを開き直せない等。値の内訳は各 *_state_load)。
+ * NP2kai 区画と同じくフレーム境界で呼ぶ。load が失敗したら呼び出し側がロード前の状態へ戻すこと。 */
+extern int qb_state_busy(void);
+extern int qb_state_save_file(const char *path);
+extern int qb_state_load_file(const char *path);
+int np2kai_state_qb_busy(void) { return qb_state_busy(); }
+int np2kai_state_qb_save(const char *path) { return qb_state_save_file(path); }
+int np2kai_state_qb_load(const char *path) { return qb_state_load_file(path); }

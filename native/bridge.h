@@ -269,6 +269,14 @@ __attribute__((visibility("default")))
 int np2kai_state_np2_save(const char *path);
 __attribute__((visibility("default")))
 int np2kai_state_np2_load(const char *path);
+/* ステートセーブの QuuBee 区画 (HLE-DOS・XMS・INT 33h)。busy = セーブを断る理由 (0=可 / 1=FEP 変換中)。
+ * save/load の戻り値: 0=成功 / 負=失敗 (load 失敗時は呼び出し側がロード前の状態へ戻す)。 */
+__attribute__((visibility("default")))
+int np2kai_state_qb_busy(void);
+__attribute__((visibility("default")))
+int np2kai_state_qb_save(const char *path);
+__attribute__((visibility("default")))
+int np2kai_state_qb_load(const char *path);
 
 #ifdef __cplusplus
 }

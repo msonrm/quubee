@@ -171,3 +171,7 @@ void qb_fep_reset(void) {
 	g_shown = 0;
 	g_cells = 0;
 }
+
+/* ステートセーブ (フェーズ 2): FEP の変換を表示中はセーブを断る (未確定文字列と候補は JS 側の
+ * hechima と Mozc の Worker にあり、ここだけ戻しても整合しない)。 */
+int qb_fep_busy(void) { return g_shown ? 1 : 0; }

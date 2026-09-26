@@ -9,10 +9,11 @@
 // ごとに音程を変える。CPU・画面・タイミング・FM・HLE-DOS のファイル状態を一度に試せる。
 //
 // 段階ごとに合格条件を増やす (段階の定義 = TODO.md「フェーズ 2」):
-//   A (現在): NP2kai 区画 (statsave) — ロードの戻り値 0 (HRTIMER の WARNING が無い = patch 09) /
-//            1 行目のカウンタ一致 (CPU・画面・VSYNC タイミング) / INT 21h の呼び出し増分一致
-//   以下は表示のみ (PENDING): 2 行目 = ファイル状態 (段階 B で HLE-DOS 区画) /
-//            画面ハッシュ (2 行目に依存) / 音声の先頭の食い違い (段階 C でホスト側バッファ消去)
+//   A: NP2kai 区画 (statsave) — ロードの戻り値 0 (HRTIMER の WARNING が無い = patch 09) /
+//      1 行目のカウンタ一致 (CPU・画面・VSYNC タイミング) / INT 21h の呼び出し増分一致
+//   B (現在): QuuBee 区画 (HLE-DOS 等) — 2 行目 = DATA.BIN から読んだ内容 (開いているファイルの
+//      位置) の一致 / 画面ハッシュの一致
+//   以下は表示のみ (PENDING): 音声の先頭の食い違い (段階 C でホスト側バッファ消去)
 //
 // T.COM (nasm -f bin) のソース:
 //   org 100h
@@ -176,7 +177,10 @@ function observeTail(m) {
     const A = await Machine.boot({ dir, bat: 'RUN.BAT' });
     A.runFrames(WARM);
     const saveRet = A.M.ccall('np2kai_state_np2_save', 'number', ['string'], ['/tmp/s.np2']);
+    const busy = A.M.ccall('np2kai_state_qb_busy', 'number', [], []);
+    const qbSaveRet = A.M.ccall('np2kai_state_qb_save', 'number', ['string'], ['/tmp/s.qb']);
     const blob = A.M.FS.readFile('/tmp/s.np2');
+    const qbBlob = A.M.FS.readFile('/tmp/s.qb');
     const at = { frame: A.frame, produced: A.produced };
     const obsA = observeTail(A);
 
@@ -185,20 +189,23 @@ function observeTail(m) {
     B.runFrames(1);
     B.M.FS.writeFile('/tmp/s.np2', blob);
     const loadRet = B.M.ccall('np2kai_state_np2_load', 'number', ['string'], ['/tmp/s.np2']);
+    B.M.FS.writeFile('/tmp/s.qb', qbBlob);
+    const qbLoadRet = B.M.ccall('np2kai_state_qb_load', 'number', ['string'], ['/tmp/s.qb']);
     B.frame = at.frame; B.produced = at.produced;   // 音声の汲み出し位置を A にそろえる
     const obsB = observeTail(B);
 
-    console.log(`statsave: save=${saveRet} load=${loadRet} size=${blob.length} bytes / wasm=${A.info().wasm.sha256.slice(0, 16)}`);
+    console.log(`statsave: save=${saveRet} load=${loadRet} size=${blob.length} bytes / qb: busy=${busy} save=${qbSaveRet} load=${qbLoadRet} size=${qbBlob.length} bytes / wasm=${A.info().wasm.sha256.slice(0, 16)}`);
     console.log(`  A row0=${obsA.row0} row1=${JSON.stringify(obsA.row1.trim().slice(0, 40))}`);
     console.log(`  B row0=${obsB.row0} row1=${JSON.stringify(obsB.row1.trim().slice(0, 40))}`);
 
     chk(saveRet === 0, `statsave の保存が成功 (戻り値 ${saveRet})`);
     chk(loadRet === 0, `statsave の読み込みが WARNING なしで成功 (戻り値 0x${(loadRet >>> 0).toString(16)}。0x80 = HRTIMER 等のイベント欠落)`);
+    chk(busy === 0 && qbSaveRet === 0 && qbLoadRet === 0, `QuuBee 区画の保存・読み込みが成功 (busy=${busy} save=${qbSaveRet} load=${qbLoadRet})`);
     chk(obsA.row0 === obsB.row0 && /^[0-9A-F]{4}$/.test(obsA.row0), `1 行目のカウンタが一致 (CPU・画面・VSYNC タイミング): ${obsA.row0} / ${obsB.row0}`);
     chk(JSON.stringify(obsA.int21) === JSON.stringify(obsB.int21), `続きの INT 21h 呼び出しが一致: ${JSON.stringify(obsA.int21)} / ${JSON.stringify(obsB.int21)}`);
 
-    pending(obsA.row1 === obsB.row1, '2 行目 (DATA.BIN から読んだ内容 = HLE-DOS のファイル状態) が一致 — 段階 B');
-    pending(obsA.screen === obsB.screen, `画面ハッシュが一致 (${obsA.screen.toString(16)} / ${obsB.screen.toString(16)}) — 2 行目に依存`);
+    chk(obsA.row1 === obsB.row1, '2 行目 (DATA.BIN から読んだ内容 = HLE-DOS の開いているファイルの位置) が一致');
+    chk(obsA.screen === obsB.screen, `画面ハッシュが一致 (${obsA.screen.toString(16)} / ${obsB.screen.toString(16)})`);
     let firstDiff = -1, lastDiff = -1;
     const n = Math.min(obsA.pcm.length, obsB.pcm.length);
     for (let i = 0; i < n; i++) if (obsA.pcm[i] !== obsB.pcm[i]) { if (firstDiff < 0) firstDiff = i; lastDiff = i; }

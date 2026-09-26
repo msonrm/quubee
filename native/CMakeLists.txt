@@ -165,6 +165,7 @@ set(QB_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dos_loader.c
     ${CMAKE_CURRENT_SOURCE_DIR}/dos_int21.c
     ${CMAKE_CURRENT_SOURCE_DIR}/dos_xms.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/qb_state.c
     ${CMAKE_CURRENT_SOURCE_DIR}/dos_mouse33.c
     ${CMAKE_CURRENT_SOURCE_DIR}/dos_fep.c
 )
@@ -218,6 +219,9 @@ set(EXPORTED_FUNCTIONS
     _np2kai_debug_memprobe
     _np2kai_state_np2_save
     _np2kai_state_np2_load
+    _np2kai_state_qb_busy
+    _np2kai_state_qb_save
+    _np2kai_state_qb_load
     _np2kai_xms_enable
     _np2kai_xms_stat
     _np2kai_dos_stage_com

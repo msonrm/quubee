@@ -337,3 +337,23 @@ uint32_t qb_xms_stat(int which) {
         default: return 0;
     }
 }
+
+/* ---- ステートセーブ (フェーズ 2): 区画 "XMS_" -----------------------------------------------
+ * ハンドル表とプールの範囲。EMB の中身は拡張メモリ (CPU_EXTMEM) にあり NP2kai の statsave に入る。 */
+#include "qb_state.h"
+#define XMS_STATE_VER 1u
+
+int qb_xms_state_save(qb_sw *w) {
+    size_t mark = qb_sw_begin(w, "XMS_", XMS_STATE_VER);
+    qb_sw_var(w, g_enabled); qb_sw_var(w, g_h); qb_sw_var(w, g_pool_base); qb_sw_var(w, g_pool_end);
+    qb_sw_end(w, mark);
+    return 0;
+}
+
+int qb_xms_state_load(const uint8_t *blob, size_t n) {
+    qb_sr r; uint32_t ver;
+    if (!qb_sr_section(blob, n, "XMS_", &r, &ver)) return -30;
+    if (ver != XMS_STATE_VER) return -31;
+    qb_sr_var(&r, g_enabled); qb_sr_var(&r, g_h); qb_sr_var(&r, g_pool_base); qb_sr_var(&r, g_pool_end);
+    return r.err ? -32 : 0;
+}

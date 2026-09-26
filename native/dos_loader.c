@@ -2176,3 +2176,59 @@ int qb_dos_overlay_load(const uint8_t *image, size_t size,
             load_seg, is_exe ? "EXE" : "COM", body_bytes, (unsigned)e_crlc, (unsigned)reloc_factor);
     return 0;
 }
+
+/* ---- ステートセーブ (フェーズ 2): 区画 "DLDR" ----------------------------------------------
+ * 方針は qb_state.h。EXEC スタック・MCB 先頭・PSP・終了コード・バッチの実行位置 (文列 + PC + ECHO 池)・
+ * 環境変数・音楽セッション・起動待ちの stage。g_probe_* (需要計測の診断) は保存しない。
+ * stage の 640KB バッファは起動待ち (ready) のときだけ中身を書く (起動後は使わないので大きさだけ)。
+ * 状態を増やしたら、ここに足して DLDR_VER を上げること。 */
+#include "qb_state.h"
+#define DLDR_VER 1u
+extern int g_qb_dos_version;   /* bridge.c: 名乗る DOS の版 (AH=30h)。DOS の振る舞いなのでここに入れる */
+
+int qb_dos_loader_state_save(qb_sw *w) {
+    size_t mark = qb_sw_begin(w, "DLDR", DLDR_VER);
+    qb_sw_var(w, g_exec_stack); qb_sw_var(w, g_exec_sp);
+    qb_sw_var(w, g_last_exit_code); qb_sw_var(w, g_last_exit_type);
+    qb_sw_var(w, g_first_mcb); qb_sw_var(w, g_alloc_strategy); qb_sw_var(w, g_prog_shrunk); qb_sw_var(w, g_cur_psp);
+    qb_sw_var(w, g_batch_stmts); qb_sw_var(w, g_batch_nstmts); qb_sw_var(w, g_batch_pc);
+    qb_sw_var(w, g_batch_active); qb_sw_var(w, g_batch_done); qb_sw_var(w, g_batch_echo);
+    qb_sw_var(w, g_music_active); qb_sw_var(w, g_music_pending); qb_sw_var(w, g_music_cleared);
+    qb_sw_var(w, g_music_pmp_path); qb_sw_var(w, g_music_pmp_tail); qb_sw_var(w, g_music_song);
+    qb_sw_var(w, g_env_buf); qb_sw_var(w, g_env_len);
+    qb_sw_var(w, g_run); qb_sw_var(w, g_qb_dos_version);
+    /* stage: buf 以外のフィールド + (ready なら) buf の使用分 */
+    qb_sw_var(w, g_stage.kind); qb_sw_var(w, g_stage.size); qb_sw_var(w, g_stage.file_bytes);
+    qb_sw_var(w, g_stage.cmdline); qb_sw_var(w, g_stage.name); qb_sw_var(w, g_stage.dir); qb_sw_var(w, g_stage.ready);
+    qb_sw_var(w, g_stage.exe_cs); qb_sw_var(w, g_stage.exe_ip); qb_sw_var(w, g_stage.exe_ss); qb_sw_var(w, g_stage.exe_sp);
+    qb_sw_var(w, g_stage.exe_minalloc); qb_sw_var(w, g_stage.exe_maxalloc);
+    qb_sw_blob(w, g_stage.buf, (g_stage.ready && g_stage.size <= sizeof(g_stage.buf)) ? g_stage.size : 0);
+    qb_sw_end(w, mark);
+    return 0;
+}
+
+int qb_dos_loader_state_load(const uint8_t *blob, size_t n) {
+    qb_sr r; uint32_t ver;
+    if (!qb_sr_section(blob, n, "DLDR", &r, &ver)) return -20;
+    if (ver != DLDR_VER) return -21;
+    qb_sr_var(&r, g_exec_stack); qb_sr_var(&r, g_exec_sp);
+    qb_sr_var(&r, g_last_exit_code); qb_sr_var(&r, g_last_exit_type);
+    qb_sr_var(&r, g_first_mcb); qb_sr_var(&r, g_alloc_strategy); qb_sr_var(&r, g_prog_shrunk); qb_sr_var(&r, g_cur_psp);
+    qb_sr_var(&r, g_batch_stmts); qb_sr_var(&r, g_batch_nstmts); qb_sr_var(&r, g_batch_pc);
+    qb_sr_var(&r, g_batch_active); qb_sr_var(&r, g_batch_done); qb_sr_var(&r, g_batch_echo);
+    qb_sr_var(&r, g_music_active); qb_sr_var(&r, g_music_pending); qb_sr_var(&r, g_music_cleared);
+    qb_sr_var(&r, g_music_pmp_path); qb_sr_var(&r, g_music_pmp_tail); qb_sr_var(&r, g_music_song);
+    qb_sr_var(&r, g_env_buf); qb_sr_var(&r, g_env_len);
+    qb_sr_var(&r, g_run); qb_sr_var(&r, g_qb_dos_version);
+    qb_sr_var(&r, g_stage.kind); qb_sr_var(&r, g_stage.size); qb_sr_var(&r, g_stage.file_bytes);
+    qb_sr_var(&r, g_stage.cmdline); qb_sr_var(&r, g_stage.name); qb_sr_var(&r, g_stage.dir); qb_sr_var(&r, g_stage.ready);
+    qb_sr_var(&r, g_stage.exe_cs); qb_sr_var(&r, g_stage.exe_ip); qb_sr_var(&r, g_stage.exe_ss); qb_sr_var(&r, g_stage.exe_sp);
+    qb_sr_var(&r, g_stage.exe_minalloc); qb_sr_var(&r, g_stage.exe_maxalloc);
+    {
+        uint32_t len = qb_sr_u32(&r);
+        if (r.err || len > sizeof(g_stage.buf)) return -22;
+        qb_sr_bytes(&r, g_stage.buf, len);
+    }
+    if (r.err) return -23;
+    return 0;
+}

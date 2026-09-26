@@ -423,3 +423,23 @@ void qb_mouse33_overlay(uint16_t *fb, int w, int h) {
         }
     }
 }
+
+/* ---- ステートセーブ (フェーズ 2): 区画 "M33_" -----------------------------------------------
+ * INT 33h マウスドライバの状態 (位置・範囲・ボタン計数・マスク等)。ポインタを含まない。 */
+#include "qb_state.h"
+#define M33_STATE_VER 1u
+
+int qb_mouse33_state_save(qb_sw *w) {
+    size_t mark = qb_sw_begin(w, "M33_", M33_STATE_VER);
+    qb_sw_var(w, g_m33);
+    qb_sw_end(w, mark);
+    return 0;
+}
+
+int qb_mouse33_state_load(const uint8_t *blob, size_t n) {
+    qb_sr r; uint32_t ver;
+    if (!qb_sr_section(blob, n, "M33_", &r, &ver)) return -40;
+    if (ver != M33_STATE_VER) return -41;
+    qb_sr_var(&r, g_m33);
+    return r.err ? -42 : 0;
+}

@@ -1455,6 +1455,8 @@ static struct {
     char  dir[256];      /* opendir 中のホストディレクトリ (case-insensitive 解決済) */
     char  pattern[64];   /* DOS wildcard (原文。dos_wildcard_match が大小無視で照合) */
     uint8_t attr_mask;
+    uint32_t pos;        /* readdir で読み進めた件数 (一致しなかった分も含む)。ステートセーブの
+                          * ロードで開き直して同じ件数を読み飛ばすのに使う */
 } g_find;
 
 /* DOS wildcard match: '?' は任意 1 文字、'*' は 0 文字以上。大小無視。 */
@@ -1570,6 +1572,7 @@ static void dta_write_find(const char *fname, long fsize, time_t mtime, int is_d
 static int find_scan(void) {
     struct dirent *de;
     while ((de = readdir(g_find.dirp)) != NULL) {
+        g_find.pos++;
         if (de->d_name[0] == '.') continue;
         /* DOS 側に見せる名前は生 SJIS。pattern (生 SJIS) との照合も DTA 書き込みも
          * 畳んだ名前で行い、open 経路 (ci_equal_fsname) と round-trip するようにする。
@@ -1602,6 +1605,7 @@ static int find_first_match(const char *dir, const char *pattern_dos) {
     g_find.dir[sizeof(g_find.dir) - 1] = '\0';
     strncpy(g_find.pattern, pattern_dos, sizeof(g_find.pattern) - 1);
     g_find.pattern[sizeof(g_find.pattern) - 1] = '\0';
+    g_find.pos = 0;
 
     g_find.dirp = fs_opendir(dir);
     if (!g_find.dirp) return 1;
@@ -3598,4 +3602,101 @@ int qb_dos_int20_hook(void) {
             (unsigned)CPU_CS, (unsigned)CPU_IP);
     qb_dos_signal_exit(0);
     return 1;
+}
+
+/* ---- ステートセーブ (フェーズ 2): 区画 "DI21" ----------------------------------------------
+ * 方針は qb_state.h。ここに無い file-scope の状態は意図して保存しない:
+ *   g_inject_buf/head/tail (ホスト IME の注入待ち = 捨てる) / g_dbg_* ・g_tty_echo_dbg ・g_int21_trace (診断)。
+ * キー待ち (AH=01/07/08/0Ah/3Fh) は「IP を戻して次フレームで INT 21h をやり直す」作りなので、フレーム
+ * 境界では常に INT 21h の手前にいる。途中経過 (g_la_* / g_con_* / g_0c_flushing) を戻せば続きから再開する。
+ * 開いているファイルはパス・モード・位置で開き直す (書き込みモードは fh_reopen_mode で中身を消さない
+ * モードへ)。FindFirst は読み進めた件数を戻して同じ位置から続ける。
+ * 状態を増やしたら、ここに足して DI21_VER を上げること (大きさの食い違いは読み込みで失敗になる)。 */
+#include "qb_state.h"
+#define DI21_VER 1u
+
+int qb_dos_int21_state_save(qb_sw *w) {
+    size_t mark = qb_sw_begin(w, "DI21", DI21_VER);
+    /* tty */
+    qb_sw_var(w, g_text_rows); qb_sw_var(w, g_cur_row); qb_sw_var(w, g_cur_col);
+    qb_sw_var(w, g_tty_state); qb_sw_var(w, g_sjis_lead); qb_sw_var(w, g_esc_eq_row);
+    qb_sw_var(w, g_graph_mode); qb_sw_var(w, g_csi_param); qb_sw_var(w, g_csi_nparam);
+    qb_sw_var(w, g_csi_has_digit); qb_sw_var(w, g_csi_priv); qb_sw_var(w, g_tty_attr);
+    qb_sw_var(w, g_tty_lines20); qb_sw_var(w, g_tty_sysline); qb_sw_var(w, qb_lines30_enabled);
+    /* キー入力 (ソフトキー・INT DCh のキー定義) */
+    qb_sw_var(w, g_softkey_len); qb_sw_var(w, g_softkey_pos); qb_sw_var(w, g_softkey_buf);
+    qb_sw_var(w, g_keytbl); qb_sw_var(w, g_keytbl_set);
+    /* キー待ち・行入力の途中経過 */
+    qb_sw_var(w, g_int21_repoll); qb_sw_var(w, g_la_active); qb_sw_var(w, g_la_buf); qb_sw_var(w, g_la_len);
+    qb_sw_var(w, g_con_line); qb_sw_var(w, g_con_len); qb_sw_var(w, g_con_building);
+    qb_sw_var(w, g_con_pend_len); qb_sw_var(w, g_con_pend_pos); qb_sw_var(w, g_con_raw);
+    qb_sw_var(w, g_0c_flushing);
+    /* INT 23h・その他 */
+    qb_sw_var(w, g_int23_pending); qb_sw_var(w, g_int23_ss); qb_sw_var(w, g_int23_sp);
+    qb_sw_var(w, g_ctrl_break); qb_sw_var(w, g_switch_char);
+    /* ファイル系 */
+    qb_sw_var(w, g_cwd); qb_sw_var(w, g_dta_linear); qb_sw_var(w, g_dta_seg); qb_sw_var(w, g_dta_off);
+    for (int h = 0; h < DOS_HANDLE_MAX; h++) {
+        qb_fh_t *f = &g_fh[h];
+        int32_t has_fp = (f->used && f->fp) ? 1 : 0;
+        int64_t pos = 0;
+        if (has_fp) { fflush(f->fp); pos = (int64_t)ftell(f->fp); }   /* fflush = /run の保存に書き込みを含める */
+        qb_sw_var(w, f->used); qb_sw_var(w, has_fp); qb_sw_var(w, f->path); qb_sw_var(w, f->mode);
+        qb_sw_var(w, f->neg_pos); qb_sw_var(w, pos);
+    }
+    {
+        int32_t active = g_find.dirp ? 1 : 0;
+        qb_sw_var(w, active); qb_sw_var(w, g_find.dir); qb_sw_var(w, g_find.pattern);
+        qb_sw_var(w, g_find.attr_mask); qb_sw_var(w, g_find.pos);
+    }
+    qb_sw_end(w, mark);
+    return 0;
+}
+
+int qb_dos_int21_state_load(const uint8_t *blob, size_t n) {
+    qb_sr r; uint32_t ver;
+    if (!qb_sr_section(blob, n, "DI21", &r, &ver)) return -10;
+    if (ver != DI21_VER) return -11;
+    qb_sr_var(&r, g_text_rows); qb_sr_var(&r, g_cur_row); qb_sr_var(&r, g_cur_col);
+    qb_sr_var(&r, g_tty_state); qb_sr_var(&r, g_sjis_lead); qb_sr_var(&r, g_esc_eq_row);
+    qb_sr_var(&r, g_graph_mode); qb_sr_var(&r, g_csi_param); qb_sr_var(&r, g_csi_nparam);
+    qb_sr_var(&r, g_csi_has_digit); qb_sr_var(&r, g_csi_priv); qb_sr_var(&r, g_tty_attr);
+    qb_sr_var(&r, g_tty_lines20); qb_sr_var(&r, g_tty_sysline); qb_sr_var(&r, qb_lines30_enabled);
+    qb_sr_var(&r, g_softkey_len); qb_sr_var(&r, g_softkey_pos); qb_sr_var(&r, g_softkey_buf);
+    qb_sr_var(&r, g_keytbl); qb_sr_var(&r, g_keytbl_set);
+    qb_sr_var(&r, g_int21_repoll); qb_sr_var(&r, g_la_active); qb_sr_var(&r, g_la_buf); qb_sr_var(&r, g_la_len);
+    qb_sr_var(&r, g_con_line); qb_sr_var(&r, g_con_len); qb_sr_var(&r, g_con_building);
+    qb_sr_var(&r, g_con_pend_len); qb_sr_var(&r, g_con_pend_pos); qb_sr_var(&r, g_con_raw);
+    qb_sr_var(&r, g_0c_flushing);
+    qb_sr_var(&r, g_int23_pending); qb_sr_var(&r, g_int23_ss); qb_sr_var(&r, g_int23_sp);
+    qb_sr_var(&r, g_ctrl_break); qb_sr_var(&r, g_switch_char);
+    qb_sr_var(&r, g_cwd); qb_sr_var(&r, g_dta_linear); qb_sr_var(&r, g_dta_seg); qb_sr_var(&r, g_dta_off);
+    fh_reset_all();          /* 今開いているホストのファイルを閉じてから、セーブ時点の表を作り直す */
+    g_inject_head = g_inject_tail = 0;
+    int rc = 0;
+    for (int h = 0; h < DOS_HANDLE_MAX; h++) {
+        qb_fh_t *f = &g_fh[h];
+        int32_t has_fp = 0; int64_t pos = 0;
+        qb_sr_var(&r, f->used); qb_sr_var(&r, has_fp); qb_sr_var(&r, f->path); qb_sr_var(&r, f->mode);
+        qb_sr_var(&r, f->neg_pos); qb_sr_var(&r, pos);
+        f->fp = NULL;
+        if (r.err || !f->used || !has_fp) continue;
+        const char *rm = fh_reopen_mode(f->mode);   /* w+b → r+b 等 (開き直しで中身を消さない) */
+        f->fp = fs_fopen(f->path, rm);
+        if (!f->fp) { fprintf(stderr, "[state] cannot reopen handle %d: %s\n", h, f->path); f->used = 0; rc = -12; continue; }
+        if (pos > 0) fseek(f->fp, (long)pos, SEEK_SET);
+    }
+    {
+        int32_t active = 0;
+        if (g_find.dirp) { closedir(g_find.dirp); g_find.dirp = NULL; }
+        qb_sr_var(&r, active); qb_sr_var(&r, g_find.dir); qb_sr_var(&r, g_find.pattern);
+        qb_sr_var(&r, g_find.attr_mask); qb_sr_var(&r, g_find.pos);
+        if (!r.err && active) {
+            g_find.dirp = fs_opendir(g_find.dir);
+            if (!g_find.dirp) { fprintf(stderr, "[state] cannot reopen find dir: %s\n", g_find.dir); rc = -13; }
+            else for (uint32_t i = 0; i < g_find.pos; i++) if (!readdir(g_find.dirp)) break;
+        }
+    }
+    if (r.err) return -14;
+    return rc;
 }
