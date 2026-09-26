@@ -1,0 +1,96 @@
+diff --git a/sound/fmgen/fmgen_psg.cpp b/sound/fmgen/fmgen_psg.cpp
+index ba519e2..c8878da 100755
+--- a/sound/fmgen/fmgen_psg.cpp
++++ b/sound/fmgen/fmgen_psg.cpp
+@@ -231,6 +231,8 @@ void PSG::DataLoad(struct PSGData* data) {
+ 	nperiodbase = data->nperiodbase;
+ 	volume = data->volume;
+ 	mask = data->mask;
++	// QuuBee patch 11: エンベロープの形 (ポインタ) は保存されないので、戻したレジスタ 0x0D から作り直す
++	envelop = enveloptable[reg[13] & 15];
+ }
+ 
+ // ---------------------------------------------------------------------------
+diff --git a/sound/opna.c b/sound/opna.c
+index 976688d..b8a591f 100755
+--- a/sound/opna.c
++++ b/sound/opna.c
+@@ -196,6 +196,9 @@ void opna_reset(POPNA opna, REG8 cCaps)
+ static void restore(POPNA opna)
+ {
+ 	UINT i;
++#if defined(SUPPORT_FMGEN)
++	const int qb_skip_fmgen = enable_fmgen && opna->qb_fmgen_loaded;	/* QuuBee patch 11 (下の FM 節で倒す) */
++#endif
+ 
+ 	// FM
+ 	writeRegister(opna, 0x22, opna->s.reg[0x22]);
+@@ -237,7 +240,13 @@ static void restore(POPNA opna)
+ 		writeRegister(opna, 0x28, opna->s.keyreg[i]);
+ 	}
+ #if defined(SUPPORT_FMGEN)
+-	if(enable_fmgen) {
++	/* QuuBee patch 11: statsave のロードは fmgen の内部状態を DataLoad で丸ごと戻した後で bind (= ここ) を
++	 * 呼ぶ。控えのレジスタを書き直すとキーオン (0x28) で鳴っている音のエンベロープがやり直しになり、SSG の
++	 * 0x0D でエンベロープのカウンタが戻る等、戻した状態が乱れる (東方の BGM がロード直後からずれた)。
++	 * 読み込み直後だけ fmgen への書き直しを省く (リセット時は従来どおり書く)。 */
++	if(enable_fmgen && opna->qb_fmgen_loaded) {
++		opna->qb_fmgen_loaded = 0;
++	} else if(enable_fmgen) {
+ 		OPNA_SetReg(opna->fmgen, 0x22, opna->s.reg[0x22]);
+ 		for (i = 0x30; i < 0xa0; i++)
+ 		{
+@@ -285,7 +294,7 @@ static void restore(POPNA opna)
+ 		writeRegister(opna, i, opna->s.reg[i]);
+ 	}
+ #if defined(SUPPORT_FMGEN)
+-	if(enable_fmgen) {
++	if(enable_fmgen && !qb_skip_fmgen) {
+ 		for (i = 0; i < 0x10; i++)
+ 		{
+ 			OPNA_SetReg(opna->fmgen, i, opna->s.reg[i]);
+@@ -300,7 +309,7 @@ static void restore(POPNA opna)
+ 		writeRegister(opna, i, opna->s.reg[i]);
+ 	}
+ #if defined(SUPPORT_FMGEN)
+-	if(enable_fmgen) {
++	if(enable_fmgen && !qb_skip_fmgen) {
+ 		OPNA_SetReg(opna->fmgen, 0x11, opna->s.reg[0x11]);
+ 		for (i = 0x18; i < 0x1e; i++)
+ 		{
+@@ -693,6 +702,7 @@ int opna_sfload(POPNA opna, STFLAGH sfh, const SFENTRY *tbl)
+ 			ret |= statflag_read(sfh, buf, fmgen_opnadata_size);
+ 			OPNA_DataLoad(opna->fmgen, buf);
+ 			free(buf);
++			opna->qb_fmgen_loaded = 1;	/* QuuBee patch 11: restore() で fmgen へ書き直さない */
+ 			getbiospath(path, "", NELEMENTS(path));
+ 			OPNA_LoadRhythmSample(opna->fmgen, path);
+ 		}
+diff --git a/sound/opna.h b/sound/opna.h
+index 6939902..8cca2b4 100755
+--- a/sound/opna.h
++++ b/sound/opna.h
+@@ -64,6 +64,7 @@ struct tagOpna
+ #if defined(SUPPORT_FMGEN)
+ 	UINT8 usefmgen;
+ 	void* fmgen;
++	UINT8 qb_fmgen_loaded;	/* QuuBee patch 11: statsave で fmgen の内部状態を読み込んだ直後 (次の bind で書き直さない) */
+ #endif	/* SUPPORT_FMGEN */
+ };
+ 
+diff --git a/statsave.c b/statsave.c
+index 74362a4..afa6ba1 100755
+--- a/statsave.c
++++ b/statsave.c
+@@ -1190,7 +1190,10 @@ static int flagload_fm(STFLAGH sfh, const SFENTRY *tbl) {
+   if (nSaveFlags & FLAG_PCM86) {
+     fmboard_extenable((REG8)(g_pcm86.soundflags & 1));
+   }
+-  if (nSaveFlags & FLAG_CS4231) {
++  /* QuuBee patch 11: 86 ボード + CS4231 (86+Mate-X PCM = 0x64 等) では OPNA は 86 ボードのもので、拡張ポートの
++   * 有効状態は上の pcm86 の旗が正しい。CS4231 の旗で上書きするとロード後に 18Ch/18Eh の見え方が変わり、ドライバの
++   * 動きがずれる (東方の BGM で実測)。CS4231 だけのボードのときだけ CS4231 の旗で戻す */
++  if ((nSaveFlags & FLAG_CS4231) && !(nSaveFlags & FLAG_PCM86)) {
+     fmboard_extenable((REG8)(cs4231.extfunc & 1));
+   }
+ #if defined(SUPPORT_SOUND_SB16)

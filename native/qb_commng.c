@@ -71,11 +71,13 @@ int      qb_serial_midi_active(void) { return s_serial_inner != NULL; }
  * qb_vermouth_ready() ゲートで、freepats 未ロード時は VERMOUTH ストリームを登録せず com_nc に落とす
  * (idle stream を作らない = serial と同じ判定)。 */
 static COMMNG s_mpu98_inner = NULL;
+extern int qb_midi_create_role;   /* qb_tsf.c: 次に作る MIDI ハンドルの役割 */
 
 COMMNG commng_create(UINT device, BOOL onReset) {
     (void)onReset;
     if (device == COMCREATE_MPU98II && qb_vermouth_ready()) {
         if (s_mpu98_inner == NULL) {
+            qb_midi_create_role = 1;   /* QB_MIDI_ROLE_MPU (qb_tsf.c): ステートセーブの控えの対応づけ */
             s_mpu98_inner = cmmidi_create(device, cmmidi_vermouth, NULL, "GM");
         }
         if (s_mpu98_inner) return s_mpu98_inner;
@@ -90,6 +92,7 @@ COMMNG commng_create(UINT device, BOOL onReset) {
      * これは stock MPU98II の「reset で NULL → 遅延再生成」と同じパターン。MIDI 無効時は従来通り com_nc。 */
     if (device == COMCREATE_SERIAL && qb_vermouth_ready()) {
         if (s_serial_inner == NULL) {
+            qb_midi_create_role = 2;   /* QB_MIDI_ROLE_SERIAL (qb_tsf.c) */
             s_serial_inner = cmmidi_create(device, cmmidi_vermouth, NULL, "GM");
         }
         if (s_serial_inner) return (COMMNG)&com_serial;

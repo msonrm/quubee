@@ -274,6 +274,7 @@ void np2kai_reset(np2kai_handle h) {
 	if (!h) return;
 	pccore_reset();
 	qb_fep_reset();   /* FEP 表示状態を破棄 (リセット前の退避セルを書き戻さない) */
+	{ extern void qb_midi_state_forget(void); qb_midi_state_forget(); }   /* 前のロードで取っておいた MIDI の控えを捨てる */
 	LOGD("np2kai_reset");
 }
 

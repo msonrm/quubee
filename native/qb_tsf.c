@@ -86,7 +86,21 @@ typedef struct {
 	float		comb_fb, damp1, damp2;
 	float		fx_inlp;		/* リバーブ入力 pre-LPF の 1-pole 状態 */
 	QB_MIDI_SHADOW	sh[16];		/* ステートセーブ用の控え (上) */
+	int				role;		/* 役割 (QB_MIDI_ROLE_*)。控えをハンドルと対応づける鍵 */
 } QBHDL;
+
+/* ハンドルの役割。qb_commng.c が cmmidi_create の直前に qb_midi_create_role へ入れ、midiout_create が
+ * 受け取る。statsave のロードは COM 区画で MPU とシリアルの通信を作り直す (= ハンドルも作り直して並び順が
+ * 変わる) ので、控えは作成順ではなく役割で対応づける (東方 TH02 の MIDI で順番が入れ替わって判明)。 */
+#define QB_MIDI_ROLE_UNKNOWN	0
+#define QB_MIDI_ROLE_MPU		1
+#define QB_MIDI_ROLE_SERIAL		2
+int qb_midi_create_role = QB_MIDI_ROLE_UNKNOWN;
+static void shadow_replay(QBHDL *h, int ch, const QB_MIDI_SHADOW *c);
+/* ロード時にまだ無かった役割のハンドルへの控え (RS-MIDI のシリアルは最初に使われたときに作られる)。
+ * その役割のハンドルができたら送り直す。リセットで捨てる (qb_midi_state_forget) */
+static QB_MIDI_SHADOW s_pending[3][16];
+static int s_pending_set[3];
 
 /* 生きているハンドルを作成順に持つ (ステートセーブの控えをハンドルと対応づけるため)。 */
 #define QB_MAX_HDLS 8
@@ -214,7 +228,14 @@ MIDIHDL VEXPORT midiout_create(MIDIMOD mod, UINT worksize) {
 		return NULL;
 	}
 	fx_alloc(h);
+	h->role = qb_midi_create_role;
+	qb_midi_create_role = QB_MIDI_ROLE_UNKNOWN;
 	if (s_nhdls < QB_MAX_HDLS) s_hdls[s_nhdls++] = h;
+	if (h->role > 0 && h->role < 3 && s_pending_set[h->role]) {	/* ロード時に無かった役割 → 今送り直す */
+		int ch;
+		for (ch = 0; ch < 16; ch++) shadow_replay(h, ch, &s_pending[h->role][ch]);
+		s_pending_set[h->role] = 0;
+	}
 	return (MIDIHDL)(void *)h;
 }
 
@@ -336,19 +357,31 @@ const SINT32 * VEXPORT midiout_get(MIDIHDL hdl, UINT *samples) {
 void VEXPORT midiout_fx_setenable(int enable) { s_fx_enable = enable ? 1 : 0; }
 
 /* ---- ステートセーブ (フェーズ 2): 区画 "MIDI" -----------------------------------------------
- * 生きているハンドルごとの控え (QB_MIDI_SHADOW x 16)。ロードでは同じ順のハンドルへ、全音停止 (CC120) +
- * コントロール初期化 (CC121) の後に控えを送り直す。statsave のロードで通信まわりが作り直されて合成器が
- * 新品になることがあるので、NP2kai 区画より後に読むこと。セーブ側とハンドル数が違えば少ない方まで。 */
+ * 生きているハンドルごとの役割と控え (QB_MIDI_SHADOW x 16)。ロードでは**同じ役割の**ハンドルへ、全音停止
+ * (CC120) + コントロール初期化 (CC121) の後に控えを送り直す。役割が分からないハンドルは同じ順番のものへ。
+ * statsave のロードで通信まわりが作り直されて合成器が新品になるので、NP2kai 区画より後に読むこと。 */
 #include "qb_state.h"
-#define MIDI_STATE_VER 1u
+#define MIDI_STATE_VER 2u
 
 int qb_midi_state_save(qb_sw *w) {
 	int i;
 	size_t mark = qb_sw_begin(w, "MIDI", MIDI_STATE_VER);
 	qb_sw_u32(w, (uint32_t)s_nhdls);
-	for (i = 0; i < s_nhdls; i++) qb_sw_var(w, s_hdls[i]->sh);
+	for (i = 0; i < s_nhdls; i++) {
+		qb_sw_u32(w, (uint32_t)s_hdls[i]->role);
+		qb_sw_var(w, s_hdls[i]->sh);
+	}
 	qb_sw_end(w, mark);
 	return 0;
+}
+
+static QBHDL *find_hdl(uint32_t role, uint32_t index) {
+	int i;
+	if (role != QB_MIDI_ROLE_UNKNOWN) {
+		for (i = 0; i < s_nhdls; i++) if ((uint32_t)s_hdls[i]->role == role) return s_hdls[i];
+		return NULL;
+	}
+	return ((int)index < s_nhdls) ? s_hdls[index] : NULL;
 }
 
 static void shadow_replay(QBHDL *h, int ch, const QB_MIDI_SHADOW *c) {
@@ -378,27 +411,37 @@ static void shadow_replay(QBHDL *h, int ch, const QB_MIDI_SHADOW *c) {
 	h->sh[ch] = *c;
 }
 
+void qb_midi_state_forget(void) { s_pending_set[1] = s_pending_set[2] = 0; }
+
 int qb_midi_state_load(const uint8_t *blob, size_t n) {
 	qb_sr r; uint32_t ver, nh, i;
 	int ch;
+	qb_midi_state_forget();
 	if (!qb_sr_section(blob, n, "MIDI", &r, &ver)) return -60;
 	if (ver != MIDI_STATE_VER) return -61;
 	nh = qb_sr_u32(&r);
 	for (i = 0; i < nh && !r.err; i++) {
 		QB_MIDI_SHADOW sh[16];
+		QBHDL *h;
+		uint32_t role = qb_sr_u32(&r);
 		qb_sr_var(&r, sh);
 		if (r.err) break;
-		if ((int)i >= s_nhdls) continue;			/* ロード側に無いハンドル (MIDI 未読み込み等) は捨てる */
-		for (ch = 0; ch < 16; ch++) shadow_replay(s_hdls[i], ch, &sh[ch]);
+		h = find_hdl(role, i);
+		if (h == NULL) {							/* まだ無い: 役割が分かればできたときに送り直す */
+			if (role > 0 && role < 3) { memcpy(s_pending[role], sh, sizeof(sh)); s_pending_set[role] = 1; }
+			continue;
+		}
+		for (ch = 0; ch < 16; ch++) shadow_replay(h, ch, &sh[ch]);
 	}
 	return r.err ? -62 : 0;
 }
 
 /* テスト用の読み出し口 (bridge.c の np2kai_debug_midi_ch)。hdl 番目のハンドルの ch の TSF 上の値。
- * what: 0=音色番号 1=バンク 2=音量x1000 3=パンx1000 4=ベンド幅x100 5=ピッチベンド / -1=ハンドル数 */
+ * what: 0=音色番号 1=バンク 2=音量x1000 3=パンx1000 4=ベンド幅x100 5=ピッチベンド / -1=ハンドル数 / -2=役割 */
 int qb_midi_debug_ch(int hdl, int ch, int what) {
 	tsf *f;
-	if (what < 0) return s_nhdls;
+	if (what == -1) return s_nhdls;
+	if (what == -2) return (hdl >= 0 && hdl < s_nhdls) ? s_hdls[hdl]->role : -1;
 	if (hdl < 0 || hdl >= s_nhdls || ch < 0 || ch > 15) return -1;
 	f = s_hdls[hdl]->synth;
 	switch (what) {

@@ -1,5 +1,5 @@
 diff --git a/io/upd4990.c b/io/upd4990.c
-index c8f48f0..4324e61 100755
+index c8f48f0..d300139 100755
 --- a/io/upd4990.c
 +++ b/io/upd4990.c
 @@ -99,16 +99,15 @@ static void IOOUTCALL upd4990_o20(UINT port, REG8 dat) {
@@ -34,6 +34,24 @@ index c8f48f0..4324e61 100755
  		}
  	}
  	upd4990_hrtimer_setinterval(0);
+@@ -231,9 +230,14 @@ void uPD4990_bind(void) {
+ 	iocore_attachout(0x0128, upd4990_o128);
+ 	iocore_attachinp(0x0128, upd4990_i128);
+ 
+-	uPD4990HRT.hrtimerdiv = 32;
+-	uPD4990HRT.hrtimerclock = pccore.baseclock/uPD4990HRT.hrtimerdiv;
+-	upd4990_hrtimer_setinterval(1);
++	/* QuuBee patch 09: statsave のロードは EVENT 区画と uPD4990HRT を戻した後でこの bind を呼ぶ。ここで
++	 * 分周比とイベントを張り直すと保存した位相が消え、ロード後の CPU の区切りが変わって FM の書き込み位置が
++	 * ずれる (東方の BGM で実測)。イベントが既に動いていればそのままにする (リセットでは消えた後に来る) */
++	if (!nevent_iswork(NEVENT_HRTIMER)) {
++		uPD4990HRT.hrtimerdiv = 32;
++		uPD4990HRT.hrtimerclock = pccore.baseclock/uPD4990HRT.hrtimerdiv;
++		upd4990_hrtimer_setinterval(1);
++	}
+ #endif
+ }
+ 
 diff --git a/io/upd4990.h b/io/upd4990.h
 index 8bc6ba8..f4913d2 100755
 --- a/io/upd4990.h

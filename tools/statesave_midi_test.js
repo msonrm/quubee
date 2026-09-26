@@ -27,12 +27,14 @@ function chk(ok, msg) { console.log(`  ${ok ? 'PASS' : 'FAIL'}: ${msg}`); ok ? p
 const WHAT = ['preset', 'bank', 'volume', 'pan', 'pitchrange', 'pitchwheel'];
 function snapshot(m) {
     const q = (h, ch, w) => m.M.ccall('np2kai_debug_midi_ch', 'number', ['number', 'number', 'number'], [h, ch, w]);
+    // キーはハンドルの役割 (r1=MPU r2=シリアル)。作成順は statsave のロードで入れ替わりうる
     const n = q(0, 0, -1);
     const out = { handles: n };
     for (let h = 0; h < n; h++) {
-        for (const ch of [0, 1, 9]) out[`h${h}c${ch}`] = WHAT.map((_, w) => q(h, ch, w)).join(',');
+        const role = q(h, 0, -2);
+        for (const ch of [0, 1, 9]) out[`r${role}c${ch}`] = WHAT.map((_, w) => q(h, ch, w)).join(',');
     }
-    return out;
+    return Object.fromEntries(Object.entries(out).sort());
 }
 
 (async () => {

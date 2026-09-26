@@ -32,7 +32,14 @@
   - ✓ E: 保存ファイル (web/player/statefmt.js、NP2K は疎な形で gzip) + IndexedDB (statedb.js) + worker/メインスレッド
     への配線 + qbDebug.save/load/undoLoad/slots (tools/statesave_file_test.js、ビルドまたぎ = tools/statesave_cross_build_check.sh)。
     保存ファイル ~11KB (T.COM)・セーブ ~210ms・ロード ~170ms (headless)。**ブラウザでの qbDebug による確認待ち**
-  - [ ] F: 東方 4 作の場面 (タイトル・ステージ途中・ボス・BGM 途中・面の切り替わり直後)。TH02 の MIDI はちびおと構成で
+  - [x] F: 東方 4 作の場面 (tools/statesave_touhou_test.js)。FM 15 場面は画面・音声とも完全一致。途中で見つけた本家の
+    不具合 3 件を patch 11 で修正 (SSG エンベロープのポインタ未復元 / ロード直後の bind で fmgen へ控えのレジスタを
+    書き直してキーオン等がやり直し / 86+CS4231 で拡張ポートの有効状態を CS4231 の旗で上書き) + patch 09 に uPD4990 の
+    bind が HRTIMER を張り直す件のガード。MIDI の控えは役割 (MPU/シリアル) で対応づけ
+  - [ ] RS-MIDI (シリアル) の MIDI ハンドルは statsave のロード後に作り直されて控えが届かないことがある (TH02 は MPU なので
+    影響なし)。RS-MIDI のゲーム (TW212 等) で要確認。案 = 役割ごとの控えを持ち、ハンドル作成時に送り直す (リセットで捨てる)
+  - [ ] F の残り: ボス戦はブラウザでの実プレイで確認 (無入力では手前でゲームオーバー)
+  - [ ] (旧) F: 東方 4 作の場面 (タイトル・ステージ途中・ボス・BGM 途中・面の切り替わり直後)。TH02 の MIDI はちびおと構成で
   - [ ] G: UI (入力バーのクイックセーブ/ロード・元に戻す・フォーカス戻し・スロット一覧)
 - [ ] **PC98PLAYER (MIT) からの取り込み候補** (フェーズ 2 の後に別計画): INT 21h の FCB 系・56h/57h・59h・5Ah/5Bh・
   67h/68h/6Ch・65h/66h・00h・2Bh/2Dh / バッチの FOR・IF EXIST・COPY・DEL・MD/RD・REN・TYPE・XCOPY・COMMAND /C・EXIT /
