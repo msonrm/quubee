@@ -1,0 +1,56 @@
+diff --git a/sound/sound.c b/sound/sound.c
+index d8ce8f2..5441e56 100755
+--- a/sound/sound.c
++++ b/sound/sound.c
+@@ -416,6 +416,36 @@ const SINT32 *ret;
+ 	return(ret);
+ }
+ 
++/* QuuBee patch 10: ステートセーブ用。合成済みで未再生のサンプル (buffer..ptr) を取り出す / 戻す。
++ * セーブの瞬間に鳴りかけていた音を、ロード後にそのまま続けて鳴らすため (statsave のロードは
++ * sound_reset でこれを捨てるので、ロード後に sound_pending_set で差し戻す)。 */
++UINT sound_pending_get(SINT32 *dst, UINT maxsamples) {
++
++	UINT	n;
++
++	if (sndstream.buffer == NULL) {
++		return 0;
++	}
++	n = (UINT)((sndstream.ptr - sndstream.buffer) / 2);
++	if (dst) {
++		CopyMemory(dst, sndstream.buffer, MIN(n, maxsamples) * 2 * sizeof(SINT32));
++	}
++	return n;
++}
++
++void sound_pending_set(const SINT32 *src, UINT samples) {
++
++	if (sndstream.buffer == NULL) {
++		return;
++	}
++	SNDCSEC_ENTER;
++	samples = MIN(samples, sndstream.samples + sndstream.reserve);
++	CopyMemory(sndstream.buffer, src, samples * 2 * sizeof(SINT32));
++	sndstream.ptr = sndstream.buffer + (samples * 2);
++	sndstream.remain = sndstream.samples + sndstream.reserve - samples;
++	SNDCSEC_LEAVE;
++}
++
+ void sound_pcmunlock(const SINT32 *hdl) {
+ 
+ 	int		leng;
+diff --git a/sound/sound.h b/sound/sound.h
+index 6cda71b..6f26975 100755
+--- a/sound/sound.h
++++ b/sound/sound.h
+@@ -40,6 +40,10 @@ void sound_sync(void);
+ 
+ const SINT32 *sound_pcmlock(void);
+ void sound_pcmunlock(const SINT32 *hdl);
++/* QuuBee patch 10: ステートセーブ用。合成済みで未再生のサンプル (sndstream.buffer..ptr、ステレオ
++ * SINT32 対) の取り出しと差し戻し。get は dst=NULL なら件数だけ返す。set は sound_reset 後に呼ぶ */
++UINT sound_pending_get(SINT32 *dst, UINT maxsamples);
++void sound_pending_set(const SINT32 *src, UINT samples);
+ 
+ #if defined(SUPPORT_WAVEREC)
+ BRESULT sound_recstart(const OEMCHAR *filename);

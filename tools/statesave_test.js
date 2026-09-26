@@ -11,9 +11,11 @@
 // 段階ごとに合格条件を増やす (段階の定義 = TODO.md「フェーズ 2」):
 //   A: NP2kai 区画 (statsave) — ロードの戻り値 0 (HRTIMER の WARNING が無い = patch 09) /
 //      1 行目のカウンタ一致 (CPU・画面・VSYNC タイミング) / INT 21h の呼び出し増分一致
-//   B (現在): QuuBee 区画 (HLE-DOS 等) — 2 行目 = DATA.BIN から読んだ内容 (開いているファイルの
+//   B: QuuBee 区画 (HLE-DOS 等) — 2 行目 = DATA.BIN から読んだ内容 (開いているファイルの
 //      位置) の一致 / 画面ハッシュの一致
-//   以下は表示のみ (PENDING): 音声の先頭の食い違い (段階 C でホスト側バッファ消去)
+//   C (現在): 音声が全区間一致。statsave のロードは sound_reset で「合成済みで未再生」の分を捨て、
+//      最後に合成した時刻を付け替えるため、そのままでは先頭 ~16000 サンプル (約 0.37 秒) が食い違った。
+//      QuuBee 区画 SND_ (patch 10 の sound_pending_get/set + soundcfg.lastclock) で差し戻す
 //
 // T.COM (nasm -f bin) のソース:
 //   org 100h
@@ -148,7 +150,6 @@ const WARM = 300, TAIL = 300;
 
 let pass = 0, fail = 0;
 function chk(ok, msg) { console.log(`  ${ok ? 'PASS' : 'FAIL'}: ${msg}`); ok ? pass++ : fail++; }
-function pending(ok, msg) { console.log(`  ${ok ? 'ok  ' : 'PENDING'}: ${msg}`); }
 
 function int21Delta(a, b) {
     const d = {};
@@ -209,8 +210,8 @@ function observeTail(m) {
     let firstDiff = -1, lastDiff = -1;
     const n = Math.min(obsA.pcm.length, obsB.pcm.length);
     for (let i = 0; i < n; i++) if (obsA.pcm[i] !== obsB.pcm[i]) { if (firstDiff < 0) firstDiff = i; lastDiff = i; }
-    pending(firstDiff < 0 && obsA.pcm.length === obsB.pcm.length,
-        `音声が全区間一致 (${n / 2} サンプル中、食い違い ${firstDiff < 0 ? 'なし' : `${firstDiff >> 1}〜${lastDiff >> 1}`}) — 段階 C`);
+    chk(firstDiff < 0 && obsA.pcm.length === obsB.pcm.length,
+        `音声が全区間一致 (${n / 2} サンプル中、食い違い ${firstDiff < 0 ? 'なし' : `${firstDiff >> 1}〜${lastDiff >> 1}`})`);
 
     fs.rmSync(dir, { recursive: true, force: true });
     console.log(`\nstatesave_test: pass=${pass} fail=${fail}`);

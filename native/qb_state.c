@@ -102,6 +102,7 @@ int qb_state_save_file(const char *path) {
     if (!rc) rc = qb_dos_loader_state_save(&w);
     if (!rc) rc = qb_xms_state_save(&w);
     if (!rc) rc = qb_mouse33_state_save(&w);
+    if (!rc) rc = qb_sound_state_save(&w);
     if (!rc && w.err) rc = -2;
     if (!rc) {
         FILE *fp = fopen(path, "wb");
@@ -128,6 +129,7 @@ int qb_state_load_file(const char *path) {
     if (!rc) rc = qb_dos_loader_state_load(b, (size_t)n);
     if (!rc) rc = qb_xms_state_load(b, (size_t)n);
     if (!rc) rc = qb_mouse33_state_load(b, (size_t)n);
+    if (!rc) rc = qb_sound_state_load(b, (size_t)n);
     free(b);
     return rc;
 }

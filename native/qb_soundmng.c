@@ -131,3 +131,37 @@ void qb_audio_fill(SINT16 *dst, UINT frames) {
 
 UINT qb_audio_get_rate(void)    { return s_rate; }
 UINT qb_audio_get_bufsize(void) { return s_samples; }
+
+/* ---- ステートセーブ (フェーズ 2): 区画 "SND_" ------------------------------------------------
+ * sndstream の「合成済みで未再生」のサンプルと、最後に合成した時刻 (soundcfg.lastclock/writecount)。
+ * statsave のロードは sound_reset でこれらを捨てて lastclock を現在のクロックに付け替えるので、
+ * そのままだとセーブの瞬間に鳴りかけていた音 (と、合成が CPU を追いかけていた遅れの分) が欠ける。
+ * 差し戻すと、ロード後の音声は保存しなかった場合と 1 サンプルも違わず続く (tools/statesave_test.js)。
+ * NP2kai 区画より後に読むこと (sound_reset の後で上書きする)。 */
+#include <stdlib.h>
+#include "qb_state.h"
+#define SND_STATE_VER 1u
+
+int qb_sound_state_save(qb_sw *w) {
+	UINT n = sound_pending_get(NULL, 0);
+	SINT32 *buf = n ? (SINT32 *)malloc((size_t)n * 2 * sizeof(SINT32)) : NULL;
+	if (n && !buf) return -50;
+	if (n) sound_pending_get(buf, n);
+	size_t mark = qb_sw_begin(w, "SND_", SND_STATE_VER);
+	qb_sw_var(w, soundcfg.lastclock); qb_sw_var(w, soundcfg.writecount);
+	qb_sw_blob(w, buf, (size_t)n * 2 * sizeof(SINT32));
+	qb_sw_end(w, mark);
+	free(buf);
+	return 0;
+}
+
+int qb_sound_state_load(const uint8_t *blob, size_t n) {
+	qb_sr r; uint32_t ver;
+	if (!qb_sr_section(blob, n, "SND_", &r, &ver)) return -51;
+	if (ver != SND_STATE_VER) return -52;
+	qb_sr_var(&r, soundcfg.lastclock); qb_sr_var(&r, soundcfg.writecount);
+	uint32_t bytes = qb_sr_u32(&r);
+	if (r.err || bytes % (2 * sizeof(SINT32)) || r.pos + bytes > r.n) return -53;
+	sound_pending_set((const SINT32 *)(r.p + r.pos), bytes / (2 * sizeof(SINT32)));
+	return 0;
+}
