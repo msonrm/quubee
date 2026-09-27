@@ -73,7 +73,7 @@ typedef struct {
 	UINT8	bend_set;
 } QB_MIDI_SHADOW;
 
-typedef struct {
+typedef struct QBHDL_ {
 	UINT	samprate;		/* MIDIHDL 公開ビュー (samprate, worksize) に一致 */
 	UINT	worksize;
 	tsf		*synth;			/* tsf_copy。ボイス状態は独立、サンプルデータは共有 */
@@ -87,6 +87,7 @@ typedef struct {
 	float		fx_inlp;		/* リバーブ入力 pre-LPF の 1-pole 状態 */
 	QB_MIDI_SHADOW	sh[16];		/* ステートセーブ用の控え (上) */
 	int				role;		/* 役割 (QB_MIDI_ROLE_*)。控えをハンドルと対応づける鍵 */
+	struct QBHDL_	*zombie;	/* 破棄済みで解放待ちの連結 (下の s_zombies) */
 } QBHDL;
 
 /* ハンドルの役割。qb_commng.c が cmmidi_create の直前に qb_midi_create_role へ入れ、midiout_create が
@@ -106,6 +107,15 @@ static int s_pending_set[3];
 #define QB_MAX_HDLS 8
 static QBHDL *s_hdls[QB_MAX_HDLS];
 static int    s_nhdls;
+
+/* 破棄済みで解放を待つハンドル。cmmidi は作るときに音声ストリーム (sound.c の cbreg) へ
+ * vermouth_getpcm(hdl) を登録するが、登録を外す API は無く、全消去 (streamreset) まで残る。statsave の
+ * ロードは sound_reset の後で「mpu98ii_reset が作る → COM 区画が破棄して作り直す」を行うので、破棄した
+ * ハンドルが次の sound_reset まで登録されたまま = 解放すると use-after-free (ASan で確認。ヒープを壊し、
+ * MIDI を後から有効にしたセッションへのロードで malloc が止まった)。そこで破棄では synth 等だけ捨てて
+ * 本体を残し、midiout_get は NULL を返す。本体は streamreset の直前に呼ばれる soundmng_reset で解放する
+ * (qb_midi_reap)。 */
+static QBHDL *s_zombies;
 
 static int s_fx_enable = 1;		/* 全 hdl 共通リバーブ on/off (midiout_fx_setenable) */
 
@@ -253,6 +263,17 @@ void VEXPORT midiout_destroy(MIDIHDL hdl) {
 		if (h->out)   _MFREE(h->out);
 		if (h->fbuf)  _MFREE(h->fbuf);
 		if (h->fpool) _MFREE(h->fpool);
+		h->synth = NULL; h->out = NULL; h->fbuf = NULL; h->fpool = NULL;
+		h->zombie = s_zombies;			/* 本体は音声ストリームの登録が消えるまで残す (上) */
+		s_zombies = h;
+	}
+}
+
+/* 解放待ちのハンドルを解放する。soundmng_reset (直後に sound.c が登録を全消去する) から呼ぶ */
+void qb_midi_reap(void) {
+	while (s_zombies) {
+		QBHDL *h = s_zombies;
+		s_zombies = h->zombie;
 		_MFREE(h);
 	}
 }
@@ -336,7 +357,7 @@ void VEXPORT midiout_longmsg(MIDIHDL hdl, const void *msg, UINT size) {
 const SINT32 * VEXPORT midiout_get(MIDIHDL hdl, UINT *samples) {
 	QBHDL *h = (QBHDL *)(void *)hdl;
 	UINT n, i, k;
-	if (h == NULL || samples == NULL) return NULL;
+	if (h == NULL || samples == NULL || h->synth == NULL) return NULL;	/* 破棄済み (解放待ち) */
 	n = *samples;
 	if (n == 0) return NULL;
 	if (n > QB_MAXBLOCK) n = QB_MAXBLOCK;
@@ -448,7 +469,11 @@ int qb_midi_debug_ch(int hdl, int ch, int what) {
 		case 0: return tsf_channel_get_preset_number(f, ch);
 		case 1: return tsf_channel_get_preset_bank(f, ch);
 		case 2: return (int)(tsf_channel_get_volume(f, ch) * 1000.0f + 0.5f);
-		case 3: return (int)(tsf_channel_get_pan(f, ch) * 1000.0f + 0.5f);
+		case 3: {	/* tsf_channel_get_pan は確保済みのチャンネルで panOffset - 0.5 を返す (正しくは + 0.5。
+					 * 未確保なら 0.5) ので、確保の有無で値が食い違わないようここで求める */
+			float pan = (f->channels && ch < f->channels->channelNum) ? f->channels->channels[ch].panOffset + 0.5f : 0.5f;
+			return (int)(pan * 1000.0f + 0.5f);
+		}
 		case 4: return (int)(tsf_channel_get_pitchrange(f, ch) * 100.0f + 0.5f);
 		case 5: return tsf_channel_get_pitchwheel(f, ch);
 	}

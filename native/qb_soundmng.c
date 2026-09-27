@@ -82,8 +82,12 @@ void soundmng_destroy(void) {
 	s_opened = 0;
 }
 
+void qb_midi_reap(void);	/* qb_tsf.c */
+
 void soundmng_reset(void) {
-	/* pull 型では sndstream 側が状態を持つので、ここで触ることは無い */
+	/* pull 型では sndstream 側が状態を持つので、ここで触ることは無い。ただしこの直後に sound.c が音声
+	 * ストリームの登録を全消去するので、登録されたまま残っていた破棄済みの MIDI ハンドルをここで解放する */
+	qb_midi_reap();
 }
 
 void soundmng_play(void) { }

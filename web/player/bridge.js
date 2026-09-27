@@ -1731,7 +1731,7 @@ async function makeWorkerEmu() {
         const r = await emu.stateSave({ gameId: g.gameId, gameName: g.gameName, settings });
         if (!r.ok) return { ok: false, reason: r.reason, detail: r.detail };
         const rec = { gameId: g.gameId, slot: String(slot), gameName: g.gameName, created: r.header.created,
-                      thumb: r.thumb, bytes: r.bytes };
+                      settings, thumb: r.thumb, bytes: r.bytes };
         if (rec.slot === 'quick') await QBStateDB.putQuick(rec); else await QBStateDB.put(rec);
         return { ok: true, size: r.bytes.length, created: r.header.created };
     }
@@ -1740,6 +1740,9 @@ async function makeWorkerEmu() {
         if (!stateSession) return { ok: false, reason: 'idle' };
         const rec = await QBStateDB.get(stateSession.gameId, String(slot));
         if (!rec) return { ok: false, reason: 'empty' };
+        // MIDI を鳴らしていたセーブを MIDI 未ロードのセッションで読むときは、先に合成器を用意する
+        // (後から有効にしても statsave のロードが MPU・シリアルの MIDI を作り直すので鳴る)
+        if (rec.settings && rec.settings.midi && midiLoadState !== 'ready') await ensureMidiLoaded();
         const r = await emu.stateLoad(rec.bytes);
         if (r.ok) await syncRunTick();   // ファイル一覧を巻き戻った /run に追随させる (決定 2026-09-27)
         return r;

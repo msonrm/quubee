@@ -1,7 +1,8 @@
 // statedb.js — ステートセーブの保存先 (IndexedDB、フェーズ 2 段階 E)。メインスレッドで使う。
 //
 // DB "quubee-state" / ストア "slots" (キー = "<gameId>:<slot>")。1 件 =
-//   { key, gameId, slot, gameName, created (ISO), thumb (160x100 RGB Uint8Array), bytes (保存ファイル) }
+//   { key, gameId, slot, gameName, created (ISO), settings ({ soundBoard, midi }), thumb (160x100 RGB Uint8Array),
+//     bytes (保存ファイル) }
 // slot は 'quick' (クイックセーブ) / 'quick-prev' (上書き前の 1 つ前 = 上書きの「元に戻す」) / '1'〜'8'。
 // 一覧は gameId の索引で引く。IndexedDB が使えない環境 (プライベートブラウズの一部等) では例外を投げるので、
 // 呼び出し側でセーブ機能を出さない判断に使う。

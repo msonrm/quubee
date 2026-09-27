@@ -1,5 +1,28 @@
 # CHANGELOG
 
+## [ステートセーブ: RS-MIDI の確認 + 破棄した MIDI ハンドルの use-after-free の修正] — 2026-09-27
+
+- **RS-MIDI (シリアル) の控え**: TW212 の TWMIDI.BAT (MIDDRV -X1) で曲が鳴っているところでセーブ → 無関係の IDLE
+  セッションへ読み込み。合成器のチャンネル設定は全ハンドル・全チャンネル (32 項目) が読み込み直後に一致し、その後も
+  シリアルの MIDI バイトが届いて鳴る。役割ごとの控え (段階 F) で足りていた。
+- **use-after-free (普段から起きていた)**: 「MIDI 無効で起動 → ロード直前に MIDI を有効化 → 読み込み」で読み込みが
+  戻らない (opna_sfload の malloc で止まる)。AddressSanitizer 入りのビルドで追うと、statsave のロードは sound_reset の
+  後で mpu98ii_reset が MPU の MIDI ハンドルを作り (= 音声ストリームに vermouth_getpcm を登録)、続く COM 区画
+  (flagload_com) がそれを破棄して作り直す。登録を外す API は無く、破棄したハンドルは次の sound_reset まで登録された
+  まま = 次の MIDI 送信の sound_sync が解放済みメモリを読み書きしていた。**起動時から MIDI 有効の普通のケースでも同じ
+  報告が出た** (たまたま壊れた領域が使われずに動いていた。解放した領域が同じ大きさの新しいハンドルに使い回されると、
+  1 つのハンドルを 2 回鳴らしうる形でもあった — こちらは確かめていない)。修正は QuuBee 側だけ: 破棄では合成器等だけ
+  捨てて本体を残し (midiout_get は NULL)、本体は sound.c が登録を全消去する直前に呼ぶ soundmng_reset で解放する
+  (qb_midi_reap)。ASan 入りでステートセーブ系 6 本すべて報告 0。
+- **ブラウザ**: IndexedDB の記録にセーブ時の設定 (音源・MIDI) を持たせ、MIDI を鳴らしていたセーブを MIDI 未ロードの
+  セッションで読むときは先に soundfont を読み込む (これまでは無音。上の修正で後から有効にしても鳴るようになった)。
+- テスト用の読み出し口 (np2kai_debug_midi_ch) のパン: TSF の getter が確保済みチャンネルで panOffset - 0.5 を返す
+  (正しくは + 0.5・未確保は 0.5) ため、使っていないチャンネルが「未確保」と「確保済みの中央」で違う値に見えていた。
+  読み出し口で正しい値を求める。
+- 回帰 = 新設 `tools/statesave_rsmidi_test.js` (TW212、上の 2 ケース。修正前は MIDI 後有効化のケースが戻らない)。
+  ASan の確認手順 = 新設 `tools/asan_check.sh <テスト名>...` (別ビルドを作って写しの上で回す。初回約 3.5 分)。
+  全 89 本 PASS。
+
 ## [ステートセーブ 段階 F (東方 4 作) + TH02 の MIDI が Mate-X で鳴らない件の根治 (patch 12)] — 2026-09-27
 
 - **段階 F**: `tools/statesave_touhou_test.js` = TH02〜05 を公式配布書庫から展開し、タイトル・ステージ開始直後・
