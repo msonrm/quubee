@@ -59,6 +59,8 @@ int qb_sound_state_save(qb_sw *w);
 int qb_sound_state_load(const uint8_t *blob, size_t n);
 int qb_midi_state_save(qb_sw *w);
 int qb_midi_state_load(const uint8_t *blob, size_t n);
+int qb_batch_state_save(qb_sw *w);
+int qb_batch_state_load(const uint8_t *blob, size_t n);
 int qb_fep_busy(void);   /* FEP の変換を表示中なら 1 (セーブを断る) */
 
 #endif

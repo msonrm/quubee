@@ -453,6 +453,8 @@ class Machine {
             // MIDI: true で reset 前に soundfont を読み TinySoundFont + MPU98II を有効化する
             // (ブラウザの ensureMidiLoaded と同じ順序 = MIDI を使うレシピの Run)。
             midi: false,
+            // 旧方式の .bat 実行 (JS の buildStatements → C の文インタプリタ)。前後比較用
+            legacyBat: false,
             ...opts,
         };
         const M = await Machine._load(o.quiet);
@@ -479,17 +481,27 @@ class Machine {
         })(Buffer.from(o.dir), '');
         const batName = o.bat || names.find((n) => /\.bat$/i.test(n));
         if (!batName) throw new Error('.bat が見つからない (bat: を指定してください)');
-        const bat = require(path.join(WEB, 'player', 'batscript.js'));
-        // readEntry: `call X.BAT` のインライン展開が呼び先を読むのに使う (ブラウザと同じ契約)
-        const readEntry = (n) => { try { return M.FS.readFile('/run/' + n); } catch (_) { return null; } };
-        const stmts = bat.buildStatements(bat.parse(M.FS.readFile('/run/' + batName)), names, o.args || '', readEntry);
-        if (!stmts) throw new Error('buildStatements が null');
-        const prog = Buffer.from(bat.serializeStatements(stmts), 'latin1');
-        const ptr = M._malloc(prog.length); M.HEAPU8.set(prog, ptr);
-        const r = M.ccall('np2kai_dos_stage_batch', 'number', ['number', 'number', 'string'],
-            [ptr, prog.length, batName.toUpperCase()]);
-        M._free(ptr);
-        if (r !== 0) throw new Error('stage_batch failed r=' + r);
+        let r;
+        if (o.legacyBat) {
+            // 旧方式 (2026-09-27 まで): JS が文の列へ直して C の文インタプリタへ。前後比較用に残す
+            const bat = require(path.join(WEB, 'player', 'batscript.js'));
+            // readEntry: `call X.BAT` のインライン展開が呼び先を読むのに使う (ブラウザと同じ契約)
+            const readEntry = (n) => { try { return M.FS.readFile('/run/' + n); } catch (_) { return null; } };
+            const stmts = bat.buildStatements(bat.parse(M.FS.readFile('/run/' + batName)), names, o.args || '', readEntry);
+            if (!stmts) throw new Error('buildStatements が null');
+            const prog = Buffer.from(bat.serializeStatements(stmts), 'latin1');
+            const ptr = M._malloc(prog.length); M.HEAPU8.set(prog, ptr);
+            r = M.ccall('np2kai_dos_stage_batch', 'number', ['number', 'number', 'string'],
+                [ptr, prog.length, batName.toUpperCase()]);
+            M._free(ptr);
+        } else {
+            // .bat を C が実行時に 1 行ずつ解釈する (native/dos_batch.c)。パスは SJIS 生バイトのまま渡す
+            const bytes = (s) => { const b = Buffer.from(s + '\0', 'latin1'); const p = M._malloc(b.length); M.HEAPU8.set(b, p); return p; };
+            const pb = bytes(batName), pa = bytes(o.args || '');
+            r = M.ccall('np2kai_dos_stage_bat', 'number', ['number', 'number'], [pb, pa]);
+            M._free(pb); M._free(pa);
+        }
+        if (r !== 0) throw new Error('stage failed r=' + r);
 
         // 音源ボード / 拡張メモリ は reset より前に適用する (ブラウザの run 経路と同じ順序)
         if (o.soundboard === 'matex') M.ccall('np2kai_set_wss', 'number', ['number'], [1]);

@@ -341,7 +341,36 @@
             MIDI_DRIVER_NAMES.has(l.base.toLowerCase().replace(/\.(com|exe|bat)$/, '')));
     }
 
-    const api = { parse, resolveMain, buildStatements, serializeStatements, buildCmdline, programBasename, usesMidi, DRIVER_NAMES };
+    // C の実行時解釈 (native/dos_batch.c) が内部コマンドとして扱う語
+    const INTERNAL_COMMANDS = new Set(['type', 'del', 'erase', 'copy', 'xcopy', 'ren', 'rename', 'md', 'mkdir',
+        'rd', 'rmdir', 'pause', 'shift', 'call', 'exit', 'for', 'command', 'path', 'lh', 'loadhigh', 'loadfix',
+        'dir', 'set', 'cd', 'chdir', 'if', 'goto']);
+
+    // 本体を直接起動 (①) してよい「本当に単純な」.bat か: 外部コマンドが 1 つだけで、ほかは
+    // echo / rem / cls / 空行、制御構文・set/cd・内部コマンド・リダイレクト (< > |)・.bat 呼び出しが無い。
+    // それ以外は C の実行時解釈 (シェルが常駐する) で走らせる。① はシェルの 8KB を使わず、
+    // サブディレクトリの本体を「そこで起動」する従来の挙動を保つためだけに残している。
+    function isSimpleLaunch(recipe) {
+        if (!recipe || !recipe.lines || recipe.hasControlFlow || recipe.hasEnvOps) return false;
+        let ncmd = 0;
+        for (const l of recipe.lines) {
+            if (l.kind === 'directive') {
+                const t = l.text.toLowerCase();
+                if (/[<>|]/.test(l.text) && !/^rem\b/.test(t)) return false;
+                if (t.startsWith('pause')) return false;
+                continue;
+            }
+            if (l.kind !== 'command') return false;
+            const key = l.base.toLowerCase().replace(/\.(com|exe|bat)$/, '');
+            if (INTERNAL_COMMANDS.has(key) || /\.bat$/i.test(l.base)) return false;
+            if (l.args.some((a) => /[<>|%]/.test(a)) || /[<>|]/.test(l.program)) return false;
+            ncmd++;
+        }
+        return ncmd === 1;
+    }
+
+    const api = { parse, resolveMain, buildStatements, serializeStatements, buildCmdline, programBasename, usesMidi,
+        isSimpleLaunch, DRIVER_NAMES };
     if (typeof module !== 'undefined' && module.exports) {
         module.exports = api;
     } else {

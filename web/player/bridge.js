@@ -274,6 +274,7 @@ async function makeWorkerEmu() {
         async enableMidiNow()        { return (await call({ type: 'call', fn: 'np2kai_enable_midi_now', ret: 'number', argTypes: ['number'], prependHandle: true, args: [] })).r; },
         async stageImage(bytes, cmdline, path, isExe) { return (await call({ type: isExe ? 'stageExe' : 'stageCom', bytes, cmdline, path })).r; },
         async stageBatch(bytes, label)  { return (await call({ type: 'stageBatch', bytes, label })).r; },
+        async stageBat(name, args)      { return (await call({ type: 'stageBat', name, args })).r; },
         async stageMusic()           { return (await call({ type: 'stageMusic' })).r; },
         async musicPlay(song)        { return (await call({ type: 'musicPlay', song })).r; },
         async getExit()              { return await call({ type: 'getExit' }); },
@@ -972,10 +973,10 @@ async function makeWorkerEmu() {
     function resolveBat(ent) {
         const recipe = qbBatScript.parse(ent.data);
         const m = qbBatScript.resolveMain(recipe, loadedEntries.map((e) => e.name));
-        if (!m) return null;
-        const target = loadedEntries.find((e) => e.name === m.name);
-        if (!target) return null;
-        return { targetEntry: target, args: m.args, recipe };
+        // 本体が見つからなくても Run できる (C が実行時に解釈する: DEL だけの .bat や、
+        // 別の .bat へ制御を渡すだけの .bat もある)。targetEntry は ① 単一起動のときだけ使う
+        const target = m ? loadedEntries.find((e) => e.name === m.name) || null : null;
+        return { targetEntry: target, args: m ? m.args : [], recipe };
     }
 
     function selectEntry(ent) {
@@ -1385,6 +1386,12 @@ async function makeWorkerEmu() {
         async stageBatch(bytes, label) {
             const ptr = M._malloc(bytes.length); M.HEAPU8.set(bytes, ptr);
             const r = dosStageBatch(ptr, bytes.length, label || ''); M._free(ptr); return r;
+        },
+        async stageBat(name, args) {
+            const pn = M._malloc(name.length); M.HEAPU8.set(name, pn);
+            const pa = M._malloc(args.length); M.HEAPU8.set(args, pa);
+            const r = M.ccall('np2kai_dos_stage_bat', 'number', ['number', 'number'], [pn, pa]);
+            M._free(pn); M._free(pa); return r;
         },
         async stageMusic() { return dosStageMusic(); },
         async musicPlay(song) { return dosMusicPlay(song); },
@@ -2004,22 +2011,13 @@ async function makeWorkerEmu() {
         await runStaged(label);
     }
 
-    // 起動 .bat の実行: buildStatements の文列を直列化して C 側文インタプリタ (ミニ COMMAND.COM)
-    // へ。複数コマンドは 1 DOS セッション内で順次 EXEC され (音源ドライバ TSR が本体に効く)、
-    // if errorlevel/goto の分岐は実行中に errorlevel (EXEC 子の終了コード) で評価される。
-    // 子イメージのバイトは渡さない (展開済 /run から AH=4Bh が読む)。文字列は latin1
-    // (= FS キーと同じ符号化) で C へ。
-    async function stageAndRunBatch(stmts, label) {
-        const progStr = qbBatScript.serializeStatements(stmts);
-        const bytes = new Uint8Array(progStr.length);
-        for (let i = 0; i < progStr.length; i++) bytes[i] = progStr.charCodeAt(i) & 0xff;
-        const r = await emu.stageBatch(bytes, label);
-        if (r !== 0) {
-            // C 側の容量上限 (文数 96 / cmd 48 / echo 2KB 等) 超過は JS で事前検査して
-            // いない → throw せず false を返し、呼び元が ① 単一起動へフォールバックする。
-            console.warn(`stage_batch failed r=${r} — ① 単一起動へフォールバック`);
-            return false;
-        }
+    // 起動 .bat を C が実行時に 1 行ずつ解釈して走らせる (2026-09-27、native/dos_batch.c)。
+    // %VAR%・IF の後ろの任意のコマンド・CALL・内部コマンドも実 DOS と同じく実行時に決まる。
+    // name = /run 相対パス、args = Run 欄のユーザー引数 (%1..)。どちらも latin1 (= SJIS 生バイト) で渡す。
+    async function stageAndRunBat(name, args, label) {
+        const z = (s) => { const b = new Uint8Array(s.length + 1); for (let i = 0; i < s.length; i++) b[i] = s.charCodeAt(i) & 0xff; return b; };
+        const r = await emu.stageBat(z(name), z(args || ''));
+        if (r !== 0) { console.warn(`stage_bat failed r=${r} — ① 単一起動へフォールバック`); return false; }
         await runStaged(label);
         return true;
     }
@@ -2201,37 +2199,16 @@ async function makeWorkerEmu() {
                 const ok = await ensureMidiLoaded();
                 if (!ok) runStatusEl.textContent = 'MIDI setup failed — launching without MIDI';
             }
-            // .bat の実行は C 側文インタプリタ (stage_batch) に一本化 (2026-07-11、旧 ② 線形列
-            // 経路を統合)。複数コマンドは 1 DOS セッション内で順次 EXEC (音源ドライバ TSR が本体に
-            // 効く)。set は env を更新し以降の EXEC 子へ継承、cd はカレント移動 (環境変数でデータ
-            // 位置を知るソフト / 本体ディレクトリへ cd するレシピのため)。if errorlevel/goto は
-            // 実行時評価。未対応構文 (buildStatements=null) なら ① 単一起動へ。
-            if (selectedRecipe) {
-                const names = loadedEntries.map((e) => e.name);
-                // readEntry: `call X.BAT` のインライン展開が呼び先の中身を読むのに使う
-                const readEntry = (n) => {
-                    const e = loadedEntries.find((x) => x.name === n);
-                    return e ? e.data : null;
-                };
-                const stmts = qbBatScript.buildStatements(
-                    selectedRecipe.recipe, names, userArgs, readEntry);
-                const r = selectedRecipe.recipe;
-                if (stmts) {
-                    const ncmd = stmts.filter((s) => s.op === 'cmd').length;
-                    // 単一 cmd で set/cd も分岐も無ければシェル不要 → 下の ① 単一起動へ
-                    // (画像バイト直 stage + サブディレクトリ CWD 代行の従来挙動を保つ)。
-                    if (r.hasControlFlow || r.hasEnvOps || ncmd > 1) {
-                        const how = r.hasControlFlow
-                            ? `if/goto 分岐を実行時評価, ${ncmd} cmd`
-                            : r.hasEnvOps
-                            ? `set/cd を逐次実行, ${ncmd} cmd`
-                            : `→ ${sjisName(baseName(selectedRecipe.targetEntry.name))} +${ncmd - 1} cmd`;
-                        const label = `${sjisName(selectedEntry.name)} (${how})`;
-                        runStatusEl.textContent = `Launching ${label}…`;
-                        if (await stageAndRunBatch(stmts, label)) return;
-                        // stage 失敗 (C 側上限超過) → 下の ① 単一起動へフォールスルー
-                    }
-                }
+            // .bat はミニ COMMAND.COM (シェル) を最上位に立て、C が 1 行ずつ実行時に解釈する
+            // (2026-09-27、native/dos_batch.c。旧: JS が事前に文の列へ直す buildStatements)。複数コマンドは
+            // 1 DOS セッション内で順次 EXEC されるので音源ドライバ TSR が本体に効く。
+            if (selectedRecipe && !(selectedRecipe.targetEntry && qbBatScript.isSimpleLaunch(selectedRecipe.recipe))) {
+                // .bat は C が実行時に 1 行ずつ解釈する (native/dos_batch.c)。本体を直接起動 (下の ①) するのは
+                // 外部コマンドが 1 つだけの単純な .bat に限る (isSimpleLaunch)
+                const label = sjisName(selectedEntry.name);
+                runStatusEl.textContent = `Launching ${label}…`;
+                if (await stageAndRunBat(selectedEntry.name, userArgs, label)) return;
+                if (!selectedRecipe.targetEntry) throw new Error(`${label} を実行できません`);
             }
             // 単一プログラム: .bat 主のみ / 制御フロー入り .bat (① フォールバック) / 素の EXE・COM。
             // .bat はレシピ引数 (%N にユーザー入力を差し込み)、素のファイルは cmdline 欄を素の引数で。

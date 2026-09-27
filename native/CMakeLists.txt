@@ -164,6 +164,7 @@ set(QB_SOURCES
     # Phase 3 ミニマル DOS ローダ (boot sector → 0xFFE0 → C トランポリン)
     ${CMAKE_CURRENT_SOURCE_DIR}/dos_loader.c
     ${CMAKE_CURRENT_SOURCE_DIR}/dos_int21.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/dos_batch.c
     ${CMAKE_CURRENT_SOURCE_DIR}/dos_xms.c
     ${CMAKE_CURRENT_SOURCE_DIR}/qb_state.c
     ${CMAKE_CURRENT_SOURCE_DIR}/dos_mouse33.c
@@ -230,6 +231,7 @@ set(EXPORTED_FUNCTIONS
     _np2kai_dos_stage_com
     _np2kai_dos_stage_exe
     _np2kai_dos_stage_batch
+    _np2kai_dos_stage_bat
     _np2kai_dos_stage_music
     _np2kai_dos_music_play
     _np2kai_set_fmgen

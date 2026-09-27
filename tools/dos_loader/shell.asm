@@ -16,6 +16,8 @@
 ;   文テーブル (cmd/echo/goto/iferr) を解釈し、
 ;     AX=1: 次の EXEC あり — DX=path オフセット / CX=cmdtail オフセット (本セグメント内)
 ;     AX=0: 列が尽きた — AH=4Ch でセッション終了
+;     AX=2: いま実行する物は無い — 一拍 hlt して再問い合わせ (音楽セッションの曲待ち)
+;     AX=3: PAUSE — キーを 1 つ待って (AH=08h) から再問い合わせ
 ;   を返す。errorlevel 分岐は C が直近 EXEC 子の終了コードで遅延評価する (実 DOS の意味論)。
 ;   echo もこの問い合わせの中で C が tty へ流す。
 ;
@@ -58,6 +60,8 @@ start:
     call    0xF000:0xEE90                ; = QB_TRAMP_BATCH_NEXT (native/dos_loader.h)
     cmp     ax, 2                        ; AX=2: いま実行する物は無いが「待機して再問い合わせ」
     je      .wait                        ;        (音楽セッション: PMD86 常駐のまま曲を待つ)
+    cmp     ax, 3                        ; AX=3: .bat の PAUSE — キー入力を待ってから続ける
+    je      .pause
     test    ax, ax
     jz      .done                        ; AX=0: 列が尽きた
 
@@ -65,6 +69,11 @@ start:
     mov     bx, pblock                   ; ES:BX = EXEC パラメータブロック
     mov     ax, 0x4B00                   ; AH=4Bh AL=00 (load & execute)、DS:DX = path
     int     0x21                         ; 失敗 (CF=1) でも続行 = 次コマンドへ (errorlevel 不変)
+    jmp     .next
+
+.pause:
+    mov     ah, 0x08                     ; 1 文字入力 (エコー無し・キーが来るまで待つ)
+    int     0x21
     jmp     .next
 
 .wait:

@@ -3079,6 +3079,17 @@ int qb_dos_chdir(const char *raw_dos) {
     return 0;
 }
 
+/* ---- .bat 解釈器 (dos_batch.c) 向けの公開口 ---- */
+/* DOS パス文字列 (drive・'\\'・相対可) を /run 配下の host パスへ。戻り値は dos_rel_to_host と同じ
+ * (0 = 実在 / 1 = 親まで実在 / 2 = 途中のディレクトリが無い)。 */
+int qb_dos_path_to_host(const char *dos, char *host, size_t cap) {
+    char rel[192];
+    cstr_dos_rel(dos, rel, sizeof(rel));
+    return dos_rel_to_host(rel, host, cap);
+}
+/* 論理カレント (/run 相対・'/' 区切り・'' = ルート) */
+const char *qb_dos_cwd(void) { return g_cwd; }
+
 /* 論理カレントを /run 相対パスで直接設定する (検証なし)。g_cwd と同じ正規形を要求:
  * '/' 区切り・先頭/末尾スラッシュ無し・'' = ルート。loader-start が image のサブ
  * ディレクトリを「ユーザが cd した状態」として仕込むのに使う (dos_int21.h 参照)。 */

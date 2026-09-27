@@ -141,6 +141,8 @@ int qb_dos_stage_exe(const uint8_t *image, size_t size, const char *cmdline,
  * (= 直近 EXEC 子の終了コード) を遅延評価して次コマンドを返す。
  * 戻り値 0=OK / <0=エラー (dos_loader.c の定義参照)。エラー時は stage されない。 */
 int qb_dos_stage_batch(const char *prog, size_t len, const char *name);
+/* 起動 .bat を実行時解釈 (dos_batch.c) で走らせるシェルを stage する */
+int qb_dos_stage_bat(const char *bat, const char *args);
 
 /* 「次コマンド?」フック (0xFEE90 で biosfunc から呼ばれる)。常に 1 を返す。 */
 int qb_dos_batch_next_hook(void);

@@ -778,6 +778,13 @@ int np2kai_dos_stage_batch(const char *prog, int len, const char *name) {
 	return qb_dos_stage_batch(prog, (size_t)len, name);
 }
 
+/* 起動 .bat を実行時解釈で走らせる (2026-09-27、native/dos_batch.c)。bat = /run 相対パス
+ * (SJIS 生バイト可)、args = ユーザー引数 (%1..)。0 = OK / 負 = 失敗 */
+int np2kai_dos_stage_bat(const char *bat, const char *args) {
+	if (!bat || !bat[0]) return -1;
+	return qb_dos_stage_bat(bat, args ? args : "");
+}
+
 int np2kai_dos_get_exit(int *code_out) {
 	return qb_dos_get_exit(code_out);
 }

@@ -260,6 +260,7 @@ async function init(msg) {
     c.stageCom   = M.cwrap('np2kai_dos_stage_com', 'number', ['number', 'number', 'string', 'string']);
     c.stageExe   = M.cwrap('np2kai_dos_stage_exe', 'number', ['number', 'number', 'string', 'string']);
     c.stageBatch = M.cwrap('np2kai_dos_stage_batch', 'number', ['number', 'number', 'string']);
+    c.stageBat   = M.cwrap('np2kai_dos_stage_bat', 'number', ['number', 'number']);
     c.stageMusic = M.cwrap('np2kai_dos_stage_music', 'number', []);
     c.musicPlay  = M.cwrap('np2kai_dos_music_play', 'number', ['string']);
     c.getExitFn  = M.cwrap('np2kai_dos_get_exit', 'number', ['number']);
@@ -388,6 +389,8 @@ onmessage = (ev) => {
         case 'stageCom': reply(m.id, { r: withHeapBytes(m.bytes, (p, n) => c.stageCom(p, n, m.cmdline || '', m.path || '')) }); break;
         case 'stageExe': reply(m.id, { r: withHeapBytes(m.bytes, (p, n) => c.stageExe(p, n, m.cmdline || '', m.path || '')) }); break;
         case 'stageBatch': reply(m.id, { r: withHeapBytes(m.bytes, (p, n) => c.stageBatch(p, n, m.label || '')) }); break;
+        // .bat を C が実行時に解釈する (native/dos_batch.c)。名前と引数は NUL 終端の SJIS 生バイト
+        case 'stageBat': reply(m.id, { r: withHeapBytes(m.name, (pn) => withHeapBytes(m.args, (pa) => c.stageBat(pn, pa))) }); break;
         case 'stageMusic': g_musicStarted = false; reply(m.id, { r: c.stageMusic() }); break;   // 新セッション = 初曲の無音化スキップを復活
         case 'musicPlay':
             audioActiveReported = false;

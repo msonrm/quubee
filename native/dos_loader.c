@@ -20,6 +20,7 @@
 
 #include <compiler.h>
 #include <string.h>
+#include <ctype.h>
 #include <stdio.h>
 
 #include <i386c/cpumem.h>
@@ -32,6 +33,7 @@
 #include "dos_xms.h"          /* XMS (HIMEM 相当) HLE */
 #include "dos_mouse33.h"      /* INT 33h マウスドライバ HLE */
 #include "qb_guestmem.h"      /* poke8/poke16 等の共有メモリヘルパ (dos_int21.c と一本化) */
+#include "dos_batch.h"         /* .bat の実行時解釈 */
 #include "dos_shell_blob.h"   /* tools/dos_loader/shell.asm の assemble 済 blob (build.sh 生成) */
 
 /* 直接アクセスする NP2kai のゲスト RAM (linear address indexed) */
@@ -880,12 +882,61 @@ int qb_dos_stage_batch(const char *prog, size_t len, const char *name) {
     return 0;
 }
 
+/* .bat を実行時解釈で走らせるシェルを stage する (2026-09-27、dos_batch.c)。シェル image の末尾に
+ * 作業領域 (EXEC するパス 128 byte + コマンドテイル [len][本文 126][0Dh]) を置き、問い合わせのたびに
+ * C がそこへ書く。bat = /run 相対の .bat パス、args = ユーザー引数。
+ * 戻り値 0 = OK / -1 .bat が読めない / その他 stage の失敗 (qb_dos_stage_com) */
+int qb_dos_stage_bat(const char *bat, const char *args) {
+    static uint8_t img[QB_DOS_SHELL_BLOB_LEN + 128 + 130];
+    size_t pos = QB_DOS_SHELL_BLOB_LEN;
+    memcpy(img, qb_dos_shell_blob, pos);
+    memset(img + pos, 0, 128 + 130);
+    uint16_t path_off = (uint16_t)(0x100 + pos), tail_off = (uint16_t)(0x100 + pos + 128);
+    int r = qb_dos_stage_com(img, sizeof(img), NULL, NULL);   /* ルートで起動 (stage_shell_image と同じ理由) */
+    if (r != 0) return r;
+    if (qb_batch_begin(bat, args) != 0) {
+        fprintf(stderr, "[dos_loader] .bat を読めない: %s\n", bat);
+        return -1;
+    }
+    qb_batch_set_scratch(path_off, tail_off);
+    g_batch_active = 1;
+    fprintf(stderr, "[dos_loader] staged BAT (実行時解釈): %s %s\n", bat, args ? args : "");
+    return 0;
+}
+
+/* 実行時解釈のセッションで「次コマンド?」に答える。EXEC するならシェル (= いまの PSP) の
+ * 作業領域にパスとコマンドテイルを書いて AX=1、PAUSE なら AX=3、終わりなら AX=0。 */
+static int batch_rt_next_hook(void) {
+    char path[128], tail[128];
+    int r = qb_batch_next(path, sizeof(path), tail, sizeof(tail));
+    if (r == 1) {
+        uint32_t base = (uint32_t)qb_dos_cur_psp() << 4;
+        uint32_t pl = base + qb_batch_scratch_path(), tl = base + qb_batch_scratch_tail();
+        size_t n = strlen(path);
+        for (size_t i = 0; i < n && i < 127; i++) poke8(pl + (uint32_t)i, (uint8_t)path[i]);
+        poke8(pl + (uint32_t)(n < 127 ? n : 127), 0);
+        size_t t = strlen(tail); if (t > 126) t = 126;
+        poke8(tl, (uint8_t)t);
+        for (size_t i = 0; i < t; i++) poke8(tl + 1 + (uint32_t)i, (uint8_t)tail[i]);
+        poke8(tl + 1 + (uint32_t)t, 0x0D);
+        CPU_DX = qb_batch_scratch_path();
+        CPU_CX = qb_batch_scratch_tail();
+        CPU_AX = 1;
+        return 1;
+    }
+    if (r == 3) { CPU_AX = 3; return 1; }
+    g_batch_done = 1;
+    CPU_AX = 0;
+    return 1;
+}
+
 /* シェルの「次コマンド?」(far CALL F000:EE90 → 0xFEE90 NOP)。文テーブルを PC で解釈し、
  * 次に EXEC するコマンドがあれば AX=1 + DX=path_off + CX=tail_off、列が尽きたら AX=0
  * (シェルは 4Ch でセッション終了)。echo/goto/iferr はこの中で消化する。
  * iferr の errorlevel = 直近 EXEC 子の終了コード (g_last_exit_code、全終了経路で更新済)。 */
 int qb_dos_batch_next_hook(void) {
     if (!g_batch_active) { CPU_AX = 0; return 1; }
+    if (qb_batch_rt()) return batch_rt_next_hook();
 
     /* cmd に到達しない文だけの循環 (例 :A → goto A) はここで無限ループ = Wasm 凍結に
      * なるので、1 回の問い合わせで消化する文数に上限を置き、超えたら正直に終了する。
@@ -1003,6 +1054,7 @@ void qb_dos_reset_state(void) {
     g_batch_active = 0;
     g_batch_done = 0;
     g_batch_pc = 0;
+    qb_batch_reset();
     g_last_exit_code = 0;
     g_last_exit_type = 0;
     /* 音楽セッションもセッション境界で破棄 (Run/新規ドロップの reset → まっさら DOS) */
@@ -1412,6 +1464,31 @@ static void qb_env_set(const char *assign, size_t len) {
 }
 
 static void qb_env_set_cstr(const char *s) { qb_env_set(s, strlen(s)); }
+
+/* ---- .bat 解釈器 (dos_batch.c) 向けの公開口 ---- */
+/* `set` 1 件を反映し、マスタ env ブロックを組み直す (以降 EXEC される子が継承) */
+void qb_dos_env_assign(const char *assign, size_t len) {
+    qb_env_set(assign, len);
+    build_env(QB_DOS_ENV_SEG);
+}
+/* 環境変数 name (大小無視) の値を out へ。あれば 1、無ければ 0 (out は空文字) */
+int qb_dos_env_get(const char *name, char *out, size_t cap) {
+    size_t nl = strlen(name);
+    if (cap) out[0] = '\0';
+    for (size_t i = 0; i < g_env_len; ) {
+        const char *e = g_env_buf + i;
+        size_t el = strlen(e), en = env_name_len(e);
+        if (en == nl) {
+            size_t k = 0;
+            while (k < nl && toupper((unsigned char)name[k]) == (unsigned char)e[k]) k++;
+            if (k == nl) { snprintf(out, cap, "%s", e + en + 1); return 1; }
+        }
+        i += el + 1;
+    }
+    return 0;
+}
+/* 直近の EXEC 子の終了コード (= errorlevel) */
+uint8_t qb_dos_errorlevel(void) { return g_last_exit_code; }
 
 /* env を既定 (COMSPEC/PATH のみ) に戻す。Run ごとに loader-start で呼び、前 Run の set を
  * 持ち越さない。COMSPEC は外部プログラム起動の起点として存在チェックするソフトがある
