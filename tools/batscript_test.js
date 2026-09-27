@@ -287,6 +287,24 @@ function mainOf(recipe, entries) {
     ok(!bat.usesMidi(rf), 'amelfm: usesMidi=false (FM 専用は MIDI ロードしない)');
 }
 
+// ---- 20b. 呼び先の .bat が MIDI ドライバを起動する場合 (2026-09-27) ----
+// AMEL の AMEL88PR.BAT は `amelmidi /m:amel_8p.dat %1 ...` だけで、MIDRV を起動するのは呼び先の
+// AMELMIDI.BAT。選んだ .bat の行しか見ていなかったので初回は soundfont が読まれず無音だった。
+{
+    const files = {
+        'AMELMIDI.BAT': batBytes(['midrv.com', 'amel.exe %1 %2 %3 %4', 'midrv.com']),
+        'SUB.BAT': batBytes(['call amelmidi']),
+        'LOOP.BAT': batBytes(['loop']),
+    };
+    const names = ['AMEL88PR.BAT', 'AMELMIDI.BAT', 'SUB.BAT', 'LOOP.BAT', 'amel.exe', 'midrv.com'];
+    const read = (n) => files[n] || null;
+    const r = bat.parse(batBytes(['amelmidi /m:amel_8p.dat %1 %2 %3 %4']));
+    ok(!bat.usesMidi(r), 'amel88pr: 呼び先を読まなければ false (従来)');
+    ok(bat.usesMidi(r, read, names), 'amel88pr: CALL なしの呼び先 AMELMIDI.BAT をたどって true');
+    ok(bat.usesMidi(bat.parse(batBytes(['call sub'])), read, names), 'call → call の 2 段でも true');
+    ok(!bat.usesMidi(bat.parse(batBytes(['loop'])), read, names), '自分を呼ぶ .bat でも止まる (false)');
+}
+
 // ---- 21. ③ call インライン展開 — NP21/W 開発者報告の bat そのままの形 (2026-07-12) ----
 // 「NPCNGCLK 8 / KANI / PWOFF / CALL END」+ END.BAT。旧 ② は CALL 行を黙殺して線形実行、
 // 7/11 の ②→③ 統合で CALL が null → ① 退避 → NPCNGCLK 単体実行に化けた (KANI が起動しない)

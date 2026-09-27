@@ -2194,7 +2194,8 @@ async function makeWorkerEmu() {
             // 音源選択が変わりうる) を持つため、確実な形式に絞る。ソフト単体で起動して後から
             // MIDI ファイルを読む型 (曲データ非同梱) はこの判定では救えない (既知の限界)。
             const midiSongRe = /\.(mid|rcp|r36|mcp)$/i;
-            if ((selectedRecipe && qbBatScript.usesMidi(selectedRecipe.recipe))
+            const readEntryData = (n) => { const e = loadedEntries.find((x) => x.name === n); return e ? e.data : null; };
+            if ((selectedRecipe && qbBatScript.usesMidi(selectedRecipe.recipe, readEntryData, loadedEntries.map((e) => e.name)))
                 || loadedEntries.some((e) => midiSongRe.test(e.name))) {
                 const ok = await ensureMidiLoaded();
                 if (!ok) runStatusEl.textContent = 'MIDI setup failed — launching without MIDI';

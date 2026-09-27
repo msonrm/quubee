@@ -333,12 +333,30 @@
     }
 
     // レシピが MIDI ドライバ (MIDDRV 等) を起動するか。Run 時に VERMOUTH (soundfont) を
-    // 遅延ロードするかの判定に使う。
-    function usesMidi(recipe) {
+    // 遅延ロードするかの判定に使う。readEntry (名前 → バイト列) と entryNames を渡すと、呼び先の .bat
+    // (`call X` も、CALL なしで制御を渡す `X` も) までたどる: AMEL の AMEL88PR.BAT は `amelmidi ...` だけで、
+    // MIDI ドライバ (MIDRV) を起動するのは呼び先の AMELMIDI.BAT (初回だけ無音になっていた、2026-09-27)。
+    function usesMidi(recipe, readEntry, entryNames, depth, seen) {
         if (!recipe || !recipe.lines) return false;
-        return recipe.lines.some((l) =>
-            l.kind === 'command' &&
-            MIDI_DRIVER_NAMES.has(l.base.toLowerCase().replace(/\.(com|exe|bat)$/, '')));
+        depth = depth || 0;
+        seen = seen || new Set();
+        const bats = new Map();
+        for (const n of entryNames || []) { const b = lcBase(n); if (/\.bat$/.test(b) && !bats.has(b)) bats.set(b, n); }
+        for (const l of recipe.lines) {
+            if (l.kind !== 'command') continue;
+            let base = l.base;
+            if (base.toLowerCase() === 'call' && l.args[0]) base = programBasename(l.args[0]);
+            const key = base.toLowerCase().replace(/\.(com|exe|bat)$/, '');
+            if (MIDI_DRIVER_NAMES.has(key)) return true;
+            if (!readEntry || depth >= CALL_DEPTH_MAX) continue;
+            const b = base.toLowerCase();
+            const name = /\.bat$/.test(b) ? bats.get(b) : bats.get(b + '.bat');
+            if (!name || seen.has(name)) continue;
+            seen.add(name);
+            const data = readEntry(name);
+            if (data && usesMidi(parse(data), readEntry, entryNames, depth + 1, seen)) return true;
+        }
+        return false;
     }
 
     // C の実行時解釈 (native/dos_batch.c) が内部コマンドとして扱う語
