@@ -1175,7 +1175,7 @@ async function makeWorkerEmu() {
         // フラグを読んでフィルタ無しになり、音楽セッションの注入エンジン (PMD86.COM/
         // PMP.COM) が「新規ファイル」として一覧に出てしまう (Stop 後の出現バグ)。
         if (currentPoll && pollDosExit._stop) await pollDosExit._stop();
-        stateSession = null; emu.stateForgetUndo();
+        setStateSession(null); emu.stateForgetUndo();
         emu.setPaused(false);       // 凍結したまま reset すると HELLO が描かれない
         musicState = 'stopped';
         musicSessionUp = false;     // セッション破棄 (C 側も qb_dos_reset_state で g_music_active=0)
@@ -1755,11 +1755,196 @@ async function makeWorkerEmu() {
     const stateList = () => (stateSession ? QBStateDB.list(stateSession.gameId) : Promise.resolve([]));
     const stateMessage = (r) => (r.ok ? 'OK' : (STATE_REASON[r.reason] || r.reason || '失敗') + (r.detail ? ` (${r.detail})` : ''));
 
+    // ---- ステートセーブの UI (段階 G) ----
+    // 入力バーの 3 ボタン (クイックセーブ / クイックロード / 一覧) はセーブできるゲームの実行中だけ出す。
+    // 結果はゲーム画面下のトーストに出し、ロードとクイックセーブの上書きには「元に戻す」を付ける (5 秒)。
+    // 一覧 (モーダル) を開いている間はゲームを止める (STG の練習で、選んでいる間に進まないように)。
+    // 枠は クイック + 手動 3 (保存の仕組みは 1〜8 を持てるが、出すのは 3 まで。ユーザー判断 2026-09-27)。
+    // var / function 宣言にしてある: setStateSession は resetToIdle (この節より上) から呼ばれるので、let/const だと
+    // 初期化前に触る恐れがある
+    var STATE_SLOTS = ['quick', '1', '2', '3'];
+    var STATE_TOAST_MS = 5000;
+    var stateOpBusy = false;       // 保存・読み込みの多重実行を防ぐ (往復に数百 ms かかる)
+    var stateToastTimer = null;
+    var stateModalPaused = false;  // 一覧を開くときにこちらで止めたか (閉じるとき戻す)
+    function stEl(id) { return document.getElementById(id); }
+
+    function setStateSession(s) { stateSession = s; updateStateUi(); }
+    function updateStateUi() {
+        const btns = stEl('state-btns');
+        if (!btns) return;
+        const on = !!stateSession && stateCapable();
+        btns.hidden = !on;
+        if (!on) { hideStateToast(); if (!stEl('state-modal').hidden) closeStateModal(); }
+    }
+    function hideStateToast() {
+        if (stateToastTimer) { clearTimeout(stateToastTimer); stateToastTimer = null; }
+        const t = stEl('state-toast');
+        if (t && !t.hidden) { t.hidden = true; if (t._onExpire) { const f = t._onExpire; t._onExpire = null; f(); } }
+    }
+    // msg を出す。undo = { label?, run: async () => 結果 } を渡すと「元に戻す」を付ける。onExpire = 押されずに消えたとき
+    function showStateToast(msg, { err = false, undo = null, onExpire = null } = {}) {
+        hideStateToast();
+        const t = stEl('state-toast'), b = stEl('st-undo');
+        stEl('st-msg').textContent = msg;
+        t.classList.toggle('err', err);
+        b.hidden = !undo;
+        b.onclick = undo ? async () => {
+            b.blur();
+            t._onExpire = null;             // 押された = 期限切れ処理は不要
+            b.hidden = true;
+            const r = await undo.run();
+            showStateToast(r.ok ? '元に戻しました' : stateMessage(r), { err: !r.ok });
+        } : null;
+        t._onExpire = onExpire;
+        t.hidden = false;
+        placeStateToast();
+        stateToastTimer = setTimeout(hideStateToast, STATE_TOAST_MS);
+    }
+    // ゲーム画面の横中央・下から 5% へ置く。狭くてはみ出すなら画面内に寄せる (表示中の幅の変化にも追従)
+    function placeStateToast() {
+        const t = stEl('state-toast'), wrap = stEl('canvas-wrap');
+        if (!t || t.hidden || !wrap) return;
+        const r = wrap.getBoundingClientRect(), half = t.offsetWidth / 2, vw = window.innerWidth;
+        const cx = Math.min(Math.max(r.left + r.width / 2, half + 8), vw - half - 8);
+        t.style.left = `${cx}px`;
+        t.style.bottom = `${Math.max(8, window.innerHeight - r.bottom + r.height * 0.05)}px`;
+    }
+    window.addEventListener('resize', placeStateToast);
+    async function stateOp(fn) {
+        if (stateOpBusy) return null;
+        stateOpBusy = true;
+        const btns = stEl('state-btns');
+        for (const b of btns.querySelectorAll('button')) b.disabled = true;
+        try { return await fn(); }
+        catch (e) { console.warn('[state]', e); return { ok: false, reason: 'error', detail: String((e && e.message) || e) }; }
+        finally { stateOpBusy = false; for (const b of btns.querySelectorAll('button')) b.disabled = false; }
+    }
+    // セーブ。quick は上書き前を quick-prev に残すので「元に戻す」= 1 つ前のクイックセーブへ
+    async function stateUiSave(slot) {
+        const gameId = stateSession && stateSession.gameId;
+        hideStateToast();   // 前のトーストの期限切れ処理 (ロードの控えを捨てる) は、次の操作より先に済ませる
+        const r = await stateOp(() => stateSaveTo(slot));
+        if (!r) return null;
+        if (!r.ok) { showStateToast(stateMessage(r), { err: true }); return r; }
+        const name = slot === 'quick' ? 'クイックセーブ' : `スロット ${slot} にセーブ`;
+        showStateToast(`${name}しました`, slot === 'quick' && gameId ? {
+            undo: { run: async () => { await QBStateDB.undoQuick(gameId); await renderStateGrid(); return { ok: true }; } },
+        } : {});
+        return r;
+    }
+    // ロード。「元に戻す」= 読み込む前の状態へ (worker が控えを持つ。トーストが消えたら捨てる)
+    async function stateUiLoad(slot) {
+        hideStateToast();   // 同上 (後にすると、いま取った控えを捨ててしまう)
+        const r = await stateOp(() => stateLoadFrom(slot));
+        if (!r) return null;
+        if (!r.ok) { showStateToast(stateMessage(r), { err: true }); return r; }
+        const name = slot === 'quick' ? 'クイックロード' : `スロット ${slot} をロード`;
+        showStateToast(`${name}しました`, {
+            undo: { run: () => stateOp(stateUndoLoad).then((x) => x || { ok: false, reason: 'error' }) },
+            onExpire: () => emu.stateForgetUndo(),
+        });
+        return r;
+    }
+
+    // 一覧のモーダル
+    function drawStateThumb(canvas, rgb) {
+        const w = QBStateFmt.THUMB_W, h = QBStateFmt.THUMB_H;
+        canvas.width = w; canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        const img = ctx.createImageData(w, h);
+        for (let i = 0, j = 0; i < w * h; i++, j += 3) {
+            img.data[i * 4] = rgb[j]; img.data[i * 4 + 1] = rgb[j + 1]; img.data[i * 4 + 2] = rgb[j + 2]; img.data[i * 4 + 3] = 255;
+        }
+        ctx.putImageData(img, 0, 0);
+    }
+    function stateTimeLabel(iso) {
+        const d = new Date(iso);
+        if (isNaN(d)) return '';
+        const p2 = (n) => String(n).padStart(2, '0');
+        const today = new Date().toDateString() === d.toDateString();
+        return (today ? '' : `${d.getMonth() + 1}/${d.getDate()} `) + `${p2(d.getHours())}:${p2(d.getMinutes())}`;
+    }
+    // 押すと「本当に?」に変わり、3 秒以内にもう一度押したら実行する (上書き・削除)
+    function confirmButton(btn, label, confirmLabel, run) {
+        let armed = null;
+        btn.textContent = label;
+        btn.addEventListener('click', async () => {
+            if (!armed) {
+                btn.textContent = confirmLabel; btn.classList.add('confirm');
+                armed = setTimeout(() => { armed = null; btn.textContent = label; btn.classList.remove('confirm'); }, 3000);
+                return;
+            }
+            clearTimeout(armed); armed = null;
+            await run();
+        });
+    }
+    async function renderStateGrid() {
+        const grid = stEl('state-grid');
+        if (!grid || stEl('state-modal').hidden) return;
+        const recs = new Map((await stateList()).map((e) => [e.slot, e]));
+        grid.textContent = '';
+        for (const slot of STATE_SLOTS) {
+            const rec = recs.get(slot);
+            const card = document.createElement('div'); card.className = 'st-card';
+            const thumb = document.createElement('div'); thumb.className = 'st-thumb' + (rec ? '' : ' empty');
+            if (rec && rec.thumb) { const c = document.createElement('canvas'); drawStateThumb(c, rec.thumb); thumb.appendChild(c); }
+            else thumb.textContent = '空き';
+            const head = document.createElement('div'); head.className = 'st-head';
+            const name = document.createElement('span'); name.className = 'st-name'; name.textContent = slot === 'quick' ? 'クイック' : `スロット ${slot}`;
+            const time = document.createElement('span'); time.className = 'st-time'; time.textContent = rec ? stateTimeLabel(rec.created) : '';
+            head.append(name, time);
+            const acts = document.createElement('div'); acts.className = 'st-acts';
+            if (rec) {
+                const ld = document.createElement('button'); ld.className = 'primary'; ld.textContent = 'ロード';
+                ld.addEventListener('click', async () => { const r = await stateUiLoad(slot); if (r && r.ok) closeStateModal(); });
+                acts.appendChild(ld);
+            }
+            const sv = document.createElement('button');
+            const doSave = async () => { await stateUiSave(slot); await renderStateGrid(); };
+            // クイックは上書きしても 1 つ前が残る (元に戻せる) ので確認しない
+            if (rec && slot !== 'quick') confirmButton(sv, '上書き', '上書きする?', doSave);
+            else { sv.textContent = 'セーブ'; sv.addEventListener('click', doSave); }
+            acts.appendChild(sv);
+            if (rec) {
+                const del = document.createElement('button'); del.className = 'del'; del.title = '削除 / Delete';
+                confirmButton(del, '×', '削除?', async () => {
+                    await QBStateDB.del(stateSession.gameId, slot);
+                    if (slot === 'quick') await QBStateDB.del(stateSession.gameId, 'quick-prev');
+                    await renderStateGrid();
+                });
+                acts.appendChild(del);
+            }
+            card.append(thumb, head, acts);
+            grid.appendChild(card);
+        }
+    }
+    async function openStateModal() {
+        if (!stateSession) return;
+        releaseHeldKeys();
+        if (musicState !== 'paused') { emu.setPaused(true); stateModalPaused = true; }
+        stEl('state-modal').hidden = false;
+        await renderStateGrid();
+    }
+    function closeStateModal() {
+        stEl('state-modal').hidden = true;
+        if (stateModalPaused) { emu.setPaused(false); stateModalPaused = false; }
+    }
+    (function setupStateUi() {
+        const btn = (id, fn) => { const b = stEl(id); if (b) b.addEventListener('click', () => { b.blur(); fn(); }); };
+        btn('state-qsave', () => stateUiSave('quick'));
+        btn('state-qload', () => stateUiLoad('quick'));
+        btn('state-list', openStateModal);
+        btn('state-close', closeStateModal);
+        const m = stEl('state-modal');
+        if (m) m.addEventListener('mousedown', (e) => { if (e.target === m) closeStateModal(); });
+    })();
+
     // staging 後の共通処理: /run 同期基準 → loader.d88 を A: に挿入してリセット → exit polling。
     async function runStaged(label) {
         runStatusEl.textContent = `${label}: starting…`;
         // ステートセーブの対象になるゲームのセッション (音楽プレーヤーは pendingStateGame=null で来る)
-        stateSession = pendingStateGame; pendingStateGame = null;
+        setStateSession(pendingStateGame); pendingStateGame = null;
         emu.stateForgetUndo();
         // 同期基準 (fsSnapshot) は必ず reset より前に撮る。loader boot は実質ゼロ遅延で、
         // 「creat→write→exit だけ」の爆速プログラムは boot 込み 1 フレームで完走する (実測)。
@@ -1773,7 +1958,7 @@ async function makeWorkerEmu() {
         stopButton.hidden = false;
         pollDosExit(async (code) => {
             stopRunSync();
-            stateSession = null;        // ゲームが終わった = セーブの対象が無い
+            setStateSession(null);      // ゲームが終わった = セーブの対象が無い
             await syncRunDir();         // 終了直前の書き込みを最終取り込み
             runStatusEl.textContent = code === -1
                 ? `${label}: stopped`
@@ -1785,7 +1970,7 @@ async function makeWorkerEmu() {
             // (常駐音源ドライバの ISR を生かすため)。マシンは止めず、表示だけ「完了」にして Run を
             // 押せるようにする。Stop は出したままにする — 常駐演奏を止める手段が要るので。
             stopRunSync();
-            stateSession = null;        // バッチが全部終わった (常駐演奏だけが残る) = セーブの対象が無い
+            setStateSession(null);      // バッチが全部終わった (常駐演奏だけが残る) = セーブの対象が無い
             await syncRunDir();         // 最後の書き込みを一覧へ取り込む
             runStatusEl.textContent = `${label}: finished`;
             runButton.disabled = false;
@@ -2140,6 +2325,7 @@ async function makeWorkerEmu() {
     // ---- 別窓ビューア (readme/テキストを大きく読む。将来 .MAG 画像も同じモーダルに相乗り) ----
     const viewerModalEl  = document.getElementById('viewer-modal');
     const settingsModalEl = document.getElementById('settings-modal');   // 設定パネル (キー/パッドガードで参照)
+    const stateModalEl = document.getElementById('state-modal');         // ステートセーブの一覧 (同上)
     const viewerTitleEl  = document.getElementById('viewer-title');
     const viewerBodyEl   = document.getElementById('viewer-body');
     const viewerCanvasEl = document.getElementById('viewer-canvas');
@@ -2538,6 +2724,8 @@ async function makeWorkerEmu() {
         if (!playerModalEl.hidden) { if (e.key === 'Escape') { e.preventDefault(); closePlayer(); } return; }
         // 設定パネルを開いている間も同様 (Esc で閉じる。ゲームは背後で続く = live 設定を聴き比べられる)
         if (!settingsModalEl.hidden) { if (e.key === 'Escape') { e.preventDefault(); settingsModalEl.hidden = true; } return; }
+        // ステートセーブの一覧を開いている間も同様 (Esc で閉じる。ゲームは止めてある)
+        if (!stateModalEl.hidden) { if (e.key === 'Escape') { e.preventDefault(); closeStateModal(); } return; }
         // HLE FEP: Ctrl+Space または Ctrl+J でトグル (実機の CTRL+XFER 相当)。Ctrl+Space は
         // ChromeOS が入力メソッド切替として OS レベルで食いページに届かないため、Ctrl+J を
         // 併設 (ブラウザのダウンロード表示ショートカットだがページで横取り可能)。画面の
@@ -2587,6 +2775,7 @@ async function makeWorkerEmu() {
         if (!viewerModalEl.hidden) return;   // ビューア表示中はゲームへ送らない
         if (!playerModalEl.hidden) return;   // 音楽ポップアップ表示中も同様
         if (!settingsModalEl.hidden) return; // 設定パネル表示中も同様
+        if (!stateModalEl.hidden) return;    // ステートセーブの一覧を表示中も同様
         const tap = normTap(e, false);
         // FEP/chord へ keyup を供給する (chord のシフトホールド/ロールオーバー判定の前提)。
         // 現行の逐次かな入力は keyup を使わないので feedUp は false を返し、ゲスト処理へ素通しする。
@@ -2648,7 +2837,7 @@ async function makeWorkerEmu() {
         let live = -1;
         // ビューア/音楽ポップアップ中は完全停止。設定パネル中は「押下ボタンの検出 (live)」だけ行い、
         // ゲームへは送らない (toGame=false → want 空 → 下のエッジ検出で padPressed が全解放される)。
-        if (viewerModalEl.hidden && playerModalEl.hidden && navigator.getGamepads) {
+        if (viewerModalEl.hidden && playerModalEl.hidden && stateModalEl.hidden && navigator.getGamepads) {
             const toGame = settingsModalEl.hidden;
             const dir = PAD_DIRS[padDir] || PAD_DIRS.arrow;
             for (const gp of navigator.getGamepads()) {

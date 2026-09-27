@@ -438,6 +438,78 @@ body.panel-hidden #stage-max::before { content: "◂"; }  /* パネルが左へ�
     background: var(--iconbtn-bg); color: var(--iconbtn-fg); border: 1px solid var(--iconbtn-border); border-radius: 5px; font-size: 16px;
 }
 #settings-toggle:hover { background: var(--iconbtn-bg-hover); }
+
+/* ステートセーブ (フェーズ 2 段階 G): 入力バーのクイックセーブ / クイックロード / 一覧。ゲームの実行中だけ出す。
+ * 歯車の margin-left:auto をこちらが引き受ける (両方に auto があると空きが二分されて歯車だけ離れる)。 */
+#state-btns { display: flex; gap: 6px; margin-left: auto; }
+#state-btns[hidden] { display: none; }
+#state-btns:not([hidden]) + #settings-toggle { margin-left: 0; }
+#state-btns button {
+    flex: 0 0 auto; width: 34px; height: 30px; cursor: pointer; line-height: 1; padding: 0;
+    background: var(--iconbtn-bg); color: var(--iconbtn-fg); border: 1px solid var(--iconbtn-border); border-radius: 5px; font-size: 17px;
+}
+#state-btns button:hover { background: var(--iconbtn-bg-hover); }
+#state-btns button:disabled { opacity: .45; cursor: default; }
+/* 結果と「元に戻す」のトースト。ゲーム画面の下寄りに重ねる (一覧のモーダルより手前。位置は bridge.js が入れる) */
+#state-toast {
+    position: fixed; left: 50%; bottom: 60px; transform: translateX(-50%); z-index: 130; box-sizing: border-box;
+    display: flex; align-items: center; gap: 12px; max-width: calc(100vw - 16px); white-space: nowrap;
+    padding: 8px 10px 8px 16px; border-radius: 8px;
+    background: rgba(24, 21, 16, .9); color: #f0ead8; border: 1px solid rgba(240, 234, 216, .28);
+    font-size: 14px; font-family: "Noto Sans CJK JP", "Migu 1M", system-ui, sans-serif;
+}
+#state-toast[hidden] { display: none; }
+#state-toast.err { border-color: #c0685c; }
+#st-undo {
+    font: inherit; font-size: 13px; padding: 5px 12px; border-radius: 5px; cursor: pointer; white-space: nowrap;
+    background: #f0ead8; color: #2a261f; border: none;
+}
+#st-undo:hover { background: #fff; }
+/* 一覧のモーダル — 設定と同じ紙トーン。枠はクイック + 手動 3 (幅が足りなければ 2 列) */
+#state-modal {
+    position: fixed; inset: 0; z-index: 115; background: rgba(20, 16, 8, .2);
+    backdrop-filter: blur(2px);
+    display: flex; align-items: center; justify-content: center;
+}
+#state-modal[hidden] { display: none; }
+#state-box {
+    position: relative; width: min(760px, 94vw); max-height: 88dvh; overflow-y: auto; box-sizing: border-box;
+    background: #fffdf6; color: #33302a; border: 1px solid #c8c0ae;
+    border-radius: 8px; box-shadow: 0 16px 56px rgba(0,0,0,.55);
+    padding: 18px 22px 18px;
+    font-family: "Noto Sans CJK JP", "Migu 1M", system-ui, sans-serif;
+}
+#state-close {
+    position: absolute; top: 8px; right: 10px; background: transparent; color: #8a8377;
+    border: none; font-size: 18px; cursor: pointer; line-height: 1; padding: 2px 6px;
+}
+#state-close:hover { color: #b3261e; }
+#state-title { font-size: 15px; font-weight: 700; color: #5a5347; margin-bottom: 2px; }
+#state-title .ja { color: #9a8f5e; font-weight: 400; font-size: 13px; margin-left: 6px; }
+#state-note { font-size: 11px; color: #9a948a; margin-bottom: 12px; }
+#state-note .en { color: #bdb5a4; margin-left: 6px; }
+#state-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+.st-card { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.st-thumb {
+    width: 100%; aspect-ratio: 16 / 10; border-radius: 4px; border: 1px solid #d8d0bd; background: #000;
+    display: flex; align-items: center; justify-content: center; overflow: hidden;
+}
+.st-thumb canvas { width: 100%; height: 100%; display: block; image-rendering: pixelated; }
+.st-thumb.empty { background: #f3efe3; color: #b0a897; font-size: 12px; }
+.st-head { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; font-size: 13px; }
+.st-name { font-weight: 700; color: #5a5347; }
+.st-time { font-size: 11px; color: #9a948a; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.st-acts { display: flex; flex-wrap: wrap; gap: 5px; }
+.st-acts button {
+    font: inherit; font-size: 12px; padding: 5px 9px; min-height: 30px; border-radius: 5px; cursor: pointer;
+    border: 1px solid #c8c0ae; background: #fbf9f3; color: #5a5344;
+}
+.st-acts button:hover { background: #e9e3d3; color: #3a352c; }
+.st-acts button.primary { background: #6b8f3f; border-color: #5b7b33; color: #fff; }
+.st-acts button.primary:hover { background: #5b7b33; }
+.st-acts button.confirm { background: #fbe3df; border-color: #dca39b; color: #b3261e; }
+.st-acts button:disabled { opacity: .45; cursor: default; }
+.st-acts .del { margin-left: auto; }
 </style>
 <script>
 /* ライトモード先読み (FOUC 防止)。localStorage の theme だけを bridge.js ロード前に <html> へ反映する。
@@ -459,6 +531,11 @@ try { var s = JSON.parse(localStorage.getItem('quubee_settings_v1')); if (s && s
             <button id="fep-toggle" title="FEP 日本語入力 (ゲスト画面内で変換) ON/OFF — Ctrl+Space または Ctrl+J">あ</button>
             <button id="ime-toggle" title="テキスト入力 (IME 可) を表示/非表示">&#x270E;</button>
             <input id="ime-input" type="text" placeholder="Type, Enter to send (empty Enter = newline)" autocomplete="off" autocapitalize="off" spellcheck="false">
+            <span id="state-btns" hidden>
+                <button id="state-qsave" title="クイックセーブ / Quick save">&#x2913;</button>
+                <button id="state-qload" title="クイックロード / Quick load">&#x2912;</button>
+                <button id="state-list" title="ステートセーブ / ロード の一覧 / Save states">&#x25A6;</button>
+            </span>
             <button id="settings-toggle" title="設定 / Settings">&#x2699;</button>
         </div>
     </div>
@@ -802,6 +879,19 @@ https://github.com/msonrm/quubee</pre>
             <button id="settings-reset">Reset defaults<span class="ja">既定に戻す</span></button>
             <button id="settings-done">Done<span class="ja">閉じる</span></button>
         </div>
+    </div>
+</div>
+
+<!-- ステートセーブの結果と「元に戻す」。一覧のモーダル (backdrop-filter) より手前に出すため body 直下の
+     fixed 配置にし、表示のたびにゲーム画面 (#canvas-wrap) の下寄りへ位置を合わせる (bridge.js) -->
+<div id="state-toast" hidden><span id="st-msg"></span><button id="st-undo" hidden>元に戻す</button></div>
+
+<div id="state-modal" hidden>
+    <div id="state-box">
+        <button id="state-close" title="閉じる / Close (Esc)">×</button>
+        <div id="state-title">State Save / Load<span class="ja">ステートセーブ / ロード</span></div>
+        <div id="state-note">開いている間はゲームを止めています。<span class="en">The game is paused while this is open.</span></div>
+        <div id="state-grid"></div>
     </div>
 </div>
 
