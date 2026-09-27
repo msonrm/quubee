@@ -56,6 +56,7 @@ void qb_dos_set_cwd_rel(const char *rel);
 /* .bat 解釈器 (dos_batch.c) 向け: DOS パス → /run 配下の host パス (0 実在 / 1 親まで / 2 途中欠)・論理カレント */
 int qb_dos_path_to_host(const char *dos, char *host, size_t cap);
 const char *qb_dos_cwd(void);
+int qb_dos_wildcard_match(const char *pat, const char *name);   /* FindFirst と同じ照合 (大小無視) */
 
 /* 仮想 30行BIOS (qbDebug.lines30 / np2kai_set_lines30) のオン/オフ。ON のとき次の Run
  * (loader-start) で 640×480・30 行表示 + 30BIOS-API が有効になる。既定 0 = ゼロ回帰。

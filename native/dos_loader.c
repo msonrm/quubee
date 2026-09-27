@@ -904,11 +904,34 @@ int qb_dos_stage_bat(const char *bat, const char *args) {
     return 0;
 }
 
+/* プログラムが COMSPEC (A:\COMMAND.COM) を "/C 行" 付きで EXEC したときの子イメージを作る。
+ * 中身は最上位と同じミニシェルで、渡された 1 行を実行時解釈の文脈として積む。シェルはその行
+ * (.bat・内部コマンド・外部プログラム) を実行し終えると AH=4Ch (終了コード 0) で親へ戻る
+ * = 実 COMMAND.COM /C と同じ中間プロセス。"/C" が無い (対話シェル) なら -1 (正直に失敗)。
+ * 戻り値 = image の長さ / 負 = 不成立。 */
+long qb_dos_comspec_image(const char *cmdtail, uint8_t *out, size_t cap) {
+    const char *p = cmdtail;
+    while (*p == ' ' || *p == '\t') p++;
+    if (p[0] != '/' || (p[1] != 'C' && p[1] != 'c')) return -1;
+    p += 2;
+    while (*p == ' ' || *p == '\t') p++;
+    if (!*p) return -1;
+    size_t n = QB_DOS_SHELL_BLOB_LEN + 128 + 130;
+    if (n > cap) return -3;
+    memcpy(out, qb_dos_shell_blob, QB_DOS_SHELL_BLOB_LEN);
+    memset(out + QB_DOS_SHELL_BLOB_LEN, 0, 128 + 130);
+    if (qb_batch_push_cmdline(p) != 0) return -2;
+    qb_batch_set_scratch((uint16_t)(0x100 + QB_DOS_SHELL_BLOB_LEN), (uint16_t)(0x100 + QB_DOS_SHELL_BLOB_LEN + 128));
+    g_batch_active = 1;
+    fprintf(stderr, "[dos_loader] COMSPEC /C \"%s\" → 入れ子のシェル\n", p);
+    return (long)n;
+}
+
 /* 実行時解釈のセッションで「次コマンド?」に答える。EXEC するならシェル (= いまの PSP) の
  * 作業領域にパスとコマンドテイルを書いて AX=1、PAUSE なら AX=3、終わりなら AX=0。 */
 static int batch_rt_next_hook(void) {
     char path[128], tail[128];
-    int r = qb_batch_next(path, sizeof(path), tail, sizeof(tail));
+    int r = qb_batch_next(qb_dos_cur_psp(), path, sizeof(path), tail, sizeof(tail));
     if (r == 1) {
         uint32_t base = (uint32_t)qb_dos_cur_psp() << 4;
         uint32_t pl = base + qb_batch_scratch_path(), tl = base + qb_batch_scratch_tail();
@@ -925,6 +948,7 @@ static int batch_rt_next_hook(void) {
         return 1;
     }
     if (r == 3) { CPU_AX = 3; return 1; }
+    if (r == 4) { CPU_AX = 4; return 1; }   /* 入れ子のシェル (COMSPEC /C) は終了して親へ */
     g_batch_done = 1;
     CPU_AX = 0;
     return 1;
@@ -1487,6 +1511,8 @@ int qb_dos_env_get(const char *name, char *out, size_t cap) {
     }
     return 0;
 }
+/* 環境ブロック (NAME=VAL\0... ) をそのまま見せる (.bat の引数なし SET の表示用) */
+const char *qb_dos_env_block(size_t *len) { *len = g_env_len; return g_env_buf; }
 /* 直近の EXEC 子の終了コード (= errorlevel) */
 uint8_t qb_dos_errorlevel(void) { return g_last_exit_code; }
 

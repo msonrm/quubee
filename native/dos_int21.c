@@ -1507,6 +1507,8 @@ static int dos_wildcard_match(const char *pat, const char *name) {
 
     return glob_field(pbase, nbase) && glob_field(pext, next);
 }
+/* .bat の内部コマンド (dos_batch.c: DEL・COPY・FOR 等) も FindFirst と同じ規則で照合する */
+int qb_dos_wildcard_match(const char *pat, const char *name) { return dos_wildcard_match(pat, name); }
 
 /* DTA に find 結果を書く。filename は "8.3" + 末尾 NUL を 13 byte 領域に詰める。
  * mtime は FAT date/time に変換 (0 なら 0 のまま)。is_dir なら attr = 0x10。 */
@@ -2704,87 +2706,12 @@ static void int21_4b_overlay(void) {
     CPU_FLAG &= ~C_FLAG;
 }
 
-/* ---- 合成 COMMAND.COM (COMSPEC /C 専用スタブ) ----
- * 実ファイル A:\COMMAND.COM は置かない方針 (env の COMSPEC は存在チェック対策のみ) のまま、
- * 「COMSPEC /C <cmd>」で子を起動するプログラム (TurboC 系 system() / SimK EXECTEST) を通す。
- * EXEC 先が COMMAND.COM かつ tail が /C の時だけ、約 40byte の COM スタブを合成して通常の
- * exec_load へ流す。実 DOS と同じく中間プロセスが立つ (独自 PSP・親子連鎖・終了コード 0 =
- * 実 COMMAND.COM /C は子の終了コードを破棄する) ので、AH=62h の PSP 連鎖も AH=4Dh も忠実。
- * スタブ: 自己縮小 (AH=4Ah, KEEP=0x40 para) → AX=4B00h で <cmd> を EXEC → AH=4Ch code=0。
- * /C 無し (対話シェル) や <cmd> 解決失敗は従来どおり正直に失敗 (呼び出し側で CF=1 AX=2)。
- * cmdtail は int21_4b_exec が組む先頭スペース込みの C 文字列。成功でスタブ長、負=不成立。 */
-static long build_comspec_stub(const char *cmdtail, uint8_t *out, size_t cap) {
-    const char *p = cmdtail;
-    while (*p == ' ' || *p == '\t') p++;
-    if (p[0] != '/' || (p[1] != 'C' && p[1] != 'c')) return -1;
-    p += 2;
-    while (*p == ' ' || *p == '\t') p++;
-    if (*p == '\0') return -1;
-    char prog[160];
-    size_t pl = 0;
-    while (*p && *p != ' ' && *p != '\t' && pl + 1 < sizeof(prog)) prog[pl++] = *p++;
-    prog[pl] = '\0';
-    if (*p == ' ') p++;                          /* 引数との区切り 1 個 (残りは生のまま渡す) */
-    const char *args = p;
-
-    /* <prog> を解決。拡張子無しなら実 COMMAND.COM 同様 .COM → .EXE を補完して実在を探す
-     * (.BAT と内部コマンドはスタブの射程外 = 不成立で正直に失敗)。 */
-    const char *leaf = strrchr(prog, '\\');
-    leaf = leaf ? leaf + 1 : prog;
-    int has_ext = (strchr(leaf, '.') != NULL);
-    char cand[172], rel[192], host[256];
-    int found = 0;
-    for (int i = has_ext ? 0 : 1; i < (has_ext ? 1 : 3); i++) {
-        static const char *sfx[3] = { "", ".COM", ".EXE" };
-        snprintf(cand, sizeof(cand), "%s%s", prog, sfx[i]);
-        cstr_dos_rel(cand, rel, sizeof(rel));
-        if (dos_rel_to_host(rel, host, sizeof(host)) == 0) { found = 1; break; }
-    }
-    if (!found) {
-        fprintf(stderr, "[int21h/4B] COMSPEC /C コマンド不在: \"%s\"\n", prog);
-        return -2;
-    }
-
-    static const uint8_t code[] = {
-        0xFA,                   /* cli */
-        0xBC, 0xFE, 0x03,       /* mov sp,03FEh (スタックを KEEP 内へ退避) */
-        0xFB,                   /* sti */
-        0xB4, 0x4A,             /* mov ah,4Ah */
-        0xBB, 0x40, 0x00,       /* mov bx,0040h (KEEP=1KB: PSP+コード+スタック) */
-        0xCD, 0x21,             /* int 21h (COM エントリの ES=PSP で自己縮小) */
-        0x8C, 0xC8,             /* mov ax,cs */
-        0xA3, 0x00, 0x00,       /* mov [pb+4],ax — tail far ptr の segment (実行時充填) */
-        0xB8, 0x00, 0x4B,       /* mov ax,4B00h */
-        0xBA, 0x00, 0x00,       /* mov dx,path */
-        0xBB, 0x00, 0x00,       /* mov bx,pb */
-        0xCD, 0x21,             /* int 21h (EXEC <cmd>) */
-        0xB8, 0x00, 0x4C,       /* mov ax,4C00h */
-        0xCD, 0x21,             /* int 21h */
-    };
-    size_t pb    = sizeof(code);                 /* パラメータブロック 14B: env=0/tail ptr/FCB×2 */
-    size_t path  = pb + 14;
-    size_t plen  = strlen(cand);
-    size_t tail  = path + plen + 1;
-    size_t alen  = strlen(args);
-    if (alen > 126) alen = 126;
-    size_t total = tail + 1 + alen + 1;
-    if (total > cap || 0x100 + total > 0x3E0) return -3;   /* KEEP 内・スタック手前に収める */
-    memset(out, 0, total);
-    memcpy(out, code, sizeof(code));
-    uint16_t pb_off = (uint16_t)(0x100 + pb), path_off = (uint16_t)(0x100 + path);
-    uint16_t tail_off = (uint16_t)(0x100 + tail);
-    out[15] = (uint8_t)(pb_off + 4); out[16] = (uint8_t)((pb_off + 4) >> 8);
-    out[21] = (uint8_t)path_off;     out[22] = (uint8_t)(path_off >> 8);
-    out[24] = (uint8_t)pb_off;       out[25] = (uint8_t)(pb_off >> 8);
-    out[pb + 2] = (uint8_t)tail_off; out[pb + 3] = (uint8_t)(tail_off >> 8);
-    /* env=0 (継承→build_child_env が argv[0] を <cmd> に正規化)、FCB ptr=null (tail から parse) */
-    memcpy(out + path, cand, plen);              /* ASCIZ (memset 済で終端 0) */
-    out[tail] = (uint8_t)alen;
-    memcpy(out + tail + 1, args, alen);
-    out[tail + 1 + alen] = 0x0D;
-    return (long)total;
-}
-
+/* ---- COMSPEC /C ----
+ * EXEC 先が (実在しない) COMMAND.COM で tail が "/C 行" のとき、dos_loader.c の qb_dos_comspec_image が
+ * 入れ子のミニシェルを子イメージとして作る。シェルは渡された行を .bat と同じ実行時解釈で実行し
+ * (.bat・内部コマンド・リダイレクト可)、終わると終了コード 0 で親へ戻る (実 COMMAND.COM /C と同じ
+ * 中間プロセス = AH=62h の PSP 連鎖も AH=4Dh も忠実)。2026-09-27 までは .COM/.EXE だけを EXEC する
+ * 約 40 byte の合成スタブだった (Turbo C 系 system() / SimK EXECTEST のため)。 */
 static void int21_4b_exec(void) {
     if (CPU_AL == 0x03) { int21_4b_overlay(); return; }   /* Load Overlay */
     int load_only = (CPU_AL == 0x01);     /* AL=01h: load & no-exec (debugger 契約) */
@@ -2843,13 +2770,13 @@ static void int21_4b_exec(void) {
         for (const char *q = host; *q; q++) if (*q == '/') hleaf = q + 1;
         long sl = -1;
         if (!load_only && ci_ascii_equal(hleaf, "COMMAND.COM"))
-            sl = build_comspec_stub(cmdtail, childbuf, sizeof(childbuf));
+            sl = qb_dos_comspec_image(cmdtail, childbuf, sizeof(childbuf));   /* 入れ子のミニシェル (dos_loader.c) */
         if (sl <= 0) {
             fprintf(stderr, "[int21h/4B] child not found (path-status %d): %s\n", st, host);
             CPU_AX = 2; CPU_FLAG |= C_FLAG;   /* file not found */
             return;
         }
-        fprintf(stderr, "[int21h/4B] COMSPEC /C → 合成 COMMAND.COM スタブ %ld bytes (tail=\"%s\")\n",
+        fprintf(stderr, "[int21h/4B] COMSPEC /C → 入れ子のミニシェル %ld bytes (tail=\"%s\")\n",
                 sl, cmdtail);
         rd = sl;
         file_bytes = (uint32_t)sl;

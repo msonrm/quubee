@@ -18,6 +18,7 @@
 ;     AX=0: 列が尽きた — AH=4Ch でセッション終了
 ;     AX=2: いま実行する物は無い — 一拍 hlt して再問い合わせ (音楽セッションの曲待ち)
 ;     AX=3: PAUSE — キーを 1 つ待って (AH=08h) から再問い合わせ
+;     AX=4: 入れ子のシェル (プログラムが COMSPEC /C で起動したもの) の仕事が終わった — 4Ch で終了
 ;   を返す。errorlevel 分岐は C が直近 EXEC 子の終了コードで遅延評価する (実 DOS の意味論)。
 ;   echo もこの問い合わせの中で C が tty へ流す。
 ;
@@ -62,6 +63,8 @@ start:
     je      .wait                        ;        (音楽セッション: PMD86 常駐のまま曲を待つ)
     cmp     ax, 3                        ; AX=3: .bat の PAUSE — キー入力を待ってから続ける
     je      .pause
+    cmp     ax, 4                        ; AX=4: COMSPEC /C の入れ子シェル — 終わったら親へ戻る
+    je      .exit
     test    ax, ax
     jz      .done                        ; AX=0: 列が尽きた
 
@@ -70,6 +73,10 @@ start:
     mov     ax, 0x4B00                   ; AH=4Bh AL=00 (load & execute)、DS:DX = path
     int     0x21                         ; 失敗 (CF=1) でも続行 = 次コマンドへ (errorlevel 不変)
     jmp     .next
+
+.exit:
+    mov     ax, 0x4C00                   ; 実 COMMAND.COM /C と同じく終了コード 0
+    int     0x21
 
 .pause:
     mov     ah, 0x08                     ; 1 文字入力 (エコー無し・キーが来るまで待つ)

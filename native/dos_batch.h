@@ -16,9 +16,12 @@ int  qb_batch_begin(const char *bat_dos, const char *args);
 int  qb_batch_active(void);
 void qb_batch_reset(void);
 
-/* 次にシェルがすること。戻り値 1 = EXEC (path_out = ルート起点の DOS パス、tail_out = コマンドテイル本文) /
- * 0 = 終わり / 3 = PAUSE (キーを 1 つ待って再問い合わせ)。 */
-int  qb_batch_next(char *path_out, size_t pcap, char *tail_out, size_t tcap);
+/* psp のシェルが次にすること。戻り値 1 = EXEC (path_out = ルート起点の DOS パス、tail_out = コマンドテイル本文) /
+ * 0 = 最上位のシェルの仕事が終わった (待機) / 3 = PAUSE (キーを 1 つ待って再問い合わせ) /
+ * 4 = 入れ子のシェル (COMSPEC /C) の仕事が終わった (終了して親へ戻る)。 */
+int  qb_batch_next(uint16_t psp, char *path_out, size_t pcap, char *tail_out, size_t tcap);
+/* プログラムが COMSPEC /C で渡した 1 行を積む (次に問い合わせる入れ子のシェルが実行する) */
+int  qb_batch_push_cmdline(const char *line);
 
 /* シェルの作業領域 (シェルのセグメント内のオフセット)。設定するとこのセッションは実行時解釈を使う */
 int      qb_batch_rt(void);

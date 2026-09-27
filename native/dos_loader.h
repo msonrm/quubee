@@ -143,6 +143,8 @@ int qb_dos_stage_exe(const uint8_t *image, size_t size, const char *cmdline,
 int qb_dos_stage_batch(const char *prog, size_t len, const char *name);
 /* 起動 .bat を実行時解釈 (dos_batch.c) で走らせるシェルを stage する */
 int qb_dos_stage_bat(const char *bat, const char *args);
+/* COMSPEC /C 行の EXEC を入れ子のミニシェルで受ける子イメージ (dos_int21.c の AH=4Bh から) */
+long qb_dos_comspec_image(const char *cmdtail, uint8_t *out, size_t cap);
 
 /* 「次コマンド?」フック (0xFEE90 で biosfunc から呼ばれる)。常に 1 を返す。 */
 int qb_dos_batch_next_hook(void);
