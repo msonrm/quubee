@@ -27,6 +27,7 @@ qb/
 │   ├── qb_soundmng.c/.h     # 音声出力 (pull 型 — JS の DAC コールバックが直接汲む)
 │   ├── qb_mousemng.c/.h     # マウス入力 (Pointer Lock 相対移動 + 左右ボタン)
 │   ├── qb_commng.c          # COM ポート — RS-MIDI/MPU-PC98 を MIDI 合成器へ結線
+│   ├── qb_state.c/.h        # ステートセーブの QuuBee 区画 (HLE-DOS・XMS・INT 33h・FEP・音声の鳴りかけ・MIDI の控え)
 │   ├── qb_tsf.c             # MIDI 合成 = TinySoundFont で SF2 をネイティブ再生 (+全体リバーブ)
 │   ├── qb_vermouth.c        # MIDI モジュール (= ロード済 SF2) のライフサイクル薄層
 │   ├── third_party/tsf.h    # TinySoundFont (MIT, 単一ヘッダ SF2 シンセ)
@@ -49,7 +50,9 @@ qb/
 │   │   ├── batscript.js     # 起動 .bat を「作者の起動レシピ」として解釈 (if/goto は C 側と分担)
 │   │   ├── magimage.js      # PC-98 .MAG (MAKI02) 画像デコーダ
 │   │   ├── piimage.js       # PC-98 .PI (Pi 形式) 画像デコーダ
-│   │   └── pmdmeta.js       # PMD (.M) 曲データ末尾 memo (曲名/作曲/編曲/コメント) パーサ
+│   │   ├── pmdmeta.js       # PMD (.M) 曲データ末尾 memo (曲名/作曲/編曲/コメント) パーサ
+│   │   ├── statefmt.js      # ステートセーブの保存ファイル (gzip: ヘッダ + 縮小画像 + NP2kai statsave + QuuBee 区画 + /run)
+│   │   └── statedb.js       # ステートセーブの保存先 (IndexedDB quubee-state、枠 = quick / quick-prev / 1〜8)
 │   ├── assets/
 │   │   ├── font.bmp         # ANK 8x16 / 漢字フォント (2048×2048 1bpp、修正 BSD — CREDITS.md)
 │   │   ├── loader.d88       # HLE-DOS ローダ用ブート disk (毎 Run pristine 再生成して挿入)
@@ -69,6 +72,10 @@ qb/
 │   │                        #   batch_test (bat 分岐) / xms_test / sft_test / sgr_test /
 │   │                        #   find_sjis_test / exec_env_test / diskimage_test / lzh_l1ext_test /
 │   │                        #   bio100_triage (互換性ベースライン) / touhou_test
+│   ├── statesave_*_test.js  # ステートセーブの一致テスト (T.COM / HLE-DOS / MIDI / RS-MIDI / 保存ファイル / 東方 4 作)。
+│   │                        #   ビルドをまたぐ確認は statesave_cross_build_check.sh (回帰外・数分)
+│   ├── asan_check.sh        # AddressSanitizer 入りの別ビルドでテストを回す (use-after-free 等の検出)
+│   ├── browser/             # ヘッドレス Chromium での UI 確認 (state_ui_check.js。準備は各ファイル冒頭)
 │   ├── bench_game.js        # CPU ベンチ (32bit PM = Suika3)。bench_ray.js = 16bit 実モード (Ray)。
 │   │                        #   最適化 A/B は両方で測る。bench_frame.js (boot.d88) は例外連発で
 │   │                        #   longjmp を測ってしまうため CPU 最適化には不適 (歴史的経緯で残置)
