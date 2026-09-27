@@ -24,7 +24,8 @@
   違えば AH=42h で先頭へ戻して読み直す — lseek もファイルに効かせて解決)。
 - **段階 D**: INT 21h AH=57h (開いたファイルの日時の取得・設定)。集計し直してコーパスの INT 21h 未対応は 0 件。
 - 回帰 = 新設 `tools/bat_runtime_test.js` (40 項目・life98 は書庫があれば)。全 90 本 PASS。
-  `docs/dos_hle_gaps.md` の COMMAND.COM・COMSPEC・リダイレクトの節を書き直し。**ブラウザ実機確認待ち**。
+  `docs/dos_hle_gaps.md` の COMMAND.COM・COMSPEC・リダイレクトの節を書き直し。**ブラウザ実機確認済** (ユーザー:
+  東方 game.bat・TW212・MUAP は従来どおり、life98 と AMEL の amel88pr.bat が新しく動く)。メッセージは英語版の文言のまま。
 
 ## [ステートセーブ 段階 G — UI] — 2026-09-27
 
