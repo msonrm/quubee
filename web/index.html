@@ -465,6 +465,9 @@ body.panel-hidden #stage-max::before { content: "◂"; }  /* パネルが左へ�
     background: #f0ead8; color: #2a261f; border: none;
 }
 #st-undo:hover { background: #fff; }
+#st-undo .ja { color: #7a7060; font-size: 11px; margin-left: 4px; }
+.st-text { display: flex; flex-direction: column; line-height: 1.35; }
+#st-msg-en { font-size: 11px; color: rgba(240, 234, 216, .6); }
 /* 一覧のモーダル — 設定と同じ紙トーン。枠はクイック + 手動 3 (幅が足りなければ 2 列) */
 #state-modal {
     position: fixed; inset: 0; z-index: 115; background: rgba(20, 16, 8, .2);
@@ -486,16 +489,16 @@ body.panel-hidden #stage-max::before { content: "◂"; }  /* パネルが左へ�
 #state-close:hover { color: #b3261e; }
 #state-title { font-size: 15px; font-weight: 700; color: #5a5347; margin-bottom: 2px; }
 #state-title .ja { color: #9a8f5e; font-weight: 400; font-size: 13px; margin-left: 6px; }
-#state-note { font-size: 11px; color: #9a948a; margin-bottom: 12px; }
-#state-note .en { color: #bdb5a4; margin-left: 6px; }
-#state-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+#state-grid { margin-top: 12px; display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
 .st-card { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .st-thumb {
     width: 100%; aspect-ratio: 16 / 10; border-radius: 4px; border: 1px solid #d8d0bd; background: #000;
     display: flex; align-items: center; justify-content: center; overflow: hidden;
 }
 .st-thumb canvas { width: 100%; height: 100%; display: block; image-rendering: pixelated; }
-.st-thumb.empty { background: #f3efe3; color: #b0a897; font-size: 12px; }
+.st-thumb.empty { background: #f3efe3; color: #b0a897; font-size: 12px; flex-direction: column; }
+.st-thumb.empty .en { font-size: 10px; color: #c8c0ae; }
+.st-name .en { font-weight: 400; font-size: 10px; color: #b0a897; margin-left: 5px; }
 .st-head { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; font-size: 13px; }
 .st-name { font-weight: 700; color: #5a5347; }
 .st-time { font-size: 11px; color: #9a948a; font-variant-numeric: tabular-nums; white-space: nowrap; }
@@ -509,6 +512,7 @@ body.panel-hidden #stage-max::before { content: "◂"; }  /* パネルが左へ�
 .st-acts button.primary:hover { background: #5b7b33; }
 .st-acts button.confirm { background: #fbe3df; border-color: #dca39b; color: #b3261e; }
 .st-acts button:disabled { opacity: .45; cursor: default; }
+.st-acts button.icon { font-size: 16px; min-width: 40px; padding: 3px 8px; line-height: 1; }
 .st-acts .del { margin-left: auto; }
 </style>
 <script>
@@ -884,13 +888,12 @@ https://github.com/msonrm/quubee</pre>
 
 <!-- ステートセーブの結果と「元に戻す」。一覧のモーダル (backdrop-filter) より手前に出すため body 直下の
      fixed 配置にし、表示のたびにゲーム画面 (#canvas-wrap) の下寄りへ位置を合わせる (bridge.js) -->
-<div id="state-toast" hidden><span id="st-msg"></span><button id="st-undo" hidden>元に戻す</button></div>
+<div id="state-toast" hidden><span class="st-text"><span id="st-msg"></span><span id="st-msg-en"></span></span><button id="st-undo" hidden>Undo<span class="ja">元に戻す</span></button></div>
 
 <div id="state-modal" hidden>
     <div id="state-box">
         <button id="state-close" title="閉じる / Close (Esc)">×</button>
         <div id="state-title">State Save / Load<span class="ja">ステートセーブ / ロード</span></div>
-        <div id="state-note">開いている間はゲームを止めています。<span class="en">The game is paused while this is open.</span></div>
         <div id="state-grid"></div>
     </div>
 </div>

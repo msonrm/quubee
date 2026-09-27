@@ -49,10 +49,10 @@ const shot = (p, n) => p.screenshot({ path: `${OUT}/${n}.png` });
   await shot(p, '3_modal');
   console.log('cards', await p.locator('.st-card').count(), await p.locator('.st-card').allInnerTexts());
   // スロット 1 にセーブ
-  await p.locator('.st-card').nth(1).locator('button', { hasText: /^セーブ$/ }).click(); await p.waitForTimeout(1500);
+  await p.locator('.st-card').nth(1).locator('button[title="セーブ / Save"]').click(); await p.waitForTimeout(1500);
   await shot(p, '4_slot1');
   // 上書きの確認
-  await p.locator('.st-card').nth(1).locator('button', { hasText: '上書き' }).click(); await p.waitForTimeout(200);
+  await p.locator('.st-card').nth(1).locator('button[title^="上書き"]').click(); await p.waitForTimeout(200);
   console.log('confirm label', await p.locator('.st-card').nth(1).locator('button.confirm').innerText());
   await shot(p, '5_confirm');
   await p.keyboard.press('Escape'); await p.waitForTimeout(300);
@@ -70,7 +70,7 @@ const shot = (p, n) => p.screenshot({ path: `${OUT}/${n}.png` });
   await shot(p, '6b_narrow_before');
   await p.evaluate(() => document.getElementById('state-list').click()); await p.waitForTimeout(1200);
   await shot(p, '7_narrow_modal');
-  await p.locator('.st-card').nth(1).locator('button', { hasText: 'ロード' }).click(); await p.waitForTimeout(1200);
+  await p.locator('.st-card').nth(1).locator('button[title="ロード / Load"]').click(); await p.waitForTimeout(1200);
   await shot(p, '7b_narrow_loaded');
   await shot(p, '8_narrow_bar');
   console.log('errors', errs);

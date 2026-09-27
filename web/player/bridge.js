@@ -1717,11 +1717,17 @@ async function makeWorkerEmu() {
     // 「どのゲームの・どの枠か」と保存先 (IndexedDB、statedb.js) と、ロード後のファイル一覧の追随を持つ。
     // 枠: 'quick' (クイック。上書き前は 'quick-prev' に 1 つ残る) / '1'〜'8'。UI (段階 G) と qbDebug から使う。
     const stateCapable = () => QBStateFmt.available() && typeof indexedDB !== 'undefined';
+    // 理由は [日本語, English] (UI は日英併記)
     const STATE_REASON = {
-        idle: 'ゲームを実行していません', fep: 'FEP で変換中はセーブできません', empty: 'セーブがありません',
-        version: 'このセーブは以前の版の QuuBee のものなので読み込めません', corrupt: 'セーブが壊れています',
-        failed: '読み込みに失敗したので元の状態に戻しました', error: 'セーブに失敗しました',
-        unsupported: 'このブラウザではセーブを使えません', none: '元に戻せる状態がありません',
+        idle: ['ゲームを実行していません', 'No game is running'],
+        fep: ['FEP で変換中はセーブできません', 'Cannot save while the FEP is converting'],
+        empty: ['セーブがありません', 'No save in this slot'],
+        version: ['このセーブは以前の版の QuuBee のものなので読み込めません', 'This save is from an older QuuBee and cannot be loaded'],
+        corrupt: ['セーブが壊れています', 'The save is corrupted'],
+        failed: ['読み込みに失敗したので元の状態に戻しました', 'Loading failed; the previous state was restored'],
+        error: ['セーブに失敗しました', 'Save failed'],
+        unsupported: ['このブラウザではセーブを使えません', 'Save states are not available in this browser'],
+        none: ['元に戻せる状態がありません', 'Nothing to undo'],
     };
     async function stateSaveTo(slot) {
         if (!stateCapable()) return { ok: false, reason: 'unsupported' };
@@ -1753,7 +1759,12 @@ async function makeWorkerEmu() {
         return r;
     }
     const stateList = () => (stateSession ? QBStateDB.list(stateSession.gameId) : Promise.resolve([]));
-    const stateMessage = (r) => (r.ok ? 'OK' : (STATE_REASON[r.reason] || r.reason || '失敗') + (r.detail ? ` (${r.detail})` : ''));
+    // 失敗の理由を { ja, en } で (en に技術的な detail を付ける)。qbDebug 向けは 1 行の文字列 (stateMessage)
+    const stateReason = (r) => {
+        const t = STATE_REASON[r.reason] || [r.reason || '失敗', r.reason || 'Failed'];
+        return { ja: t[0], en: t[1] + (r.detail ? ` (${r.detail})` : '') };
+    };
+    const stateMessage = (r) => { if (r.ok) return 'OK'; const m = stateReason(r); return `${m.ja} / ${m.en}`; };
 
     // ---- ステートセーブの UI (段階 G) ----
     // 入力バーの 3 ボタン (クイックセーブ / クイックロード / 一覧) はセーブできるゲームの実行中だけ出す。
@@ -1782,11 +1793,13 @@ async function makeWorkerEmu() {
         const t = stEl('state-toast');
         if (t && !t.hidden) { t.hidden = true; if (t._onExpire) { const f = t._onExpire; t._onExpire = null; f(); } }
     }
-    // msg を出す。undo = { label?, run: async () => 結果 } を渡すと「元に戻す」を付ける。onExpire = 押されずに消えたとき
+    // msg = { ja, en } を出す (日英併記)。undo = { run: async () => 結果 } を渡すと「元に戻す」を付ける。
+    // onExpire = 押されずに消えたとき
     function showStateToast(msg, { err = false, undo = null, onExpire = null } = {}) {
         hideStateToast();
         const t = stEl('state-toast'), b = stEl('st-undo');
-        stEl('st-msg').textContent = msg;
+        stEl('st-msg').textContent = msg.ja;
+        stEl('st-msg-en').textContent = msg.en;
         t.classList.toggle('err', err);
         b.hidden = !undo;
         b.onclick = undo ? async () => {
@@ -1794,7 +1807,7 @@ async function makeWorkerEmu() {
             t._onExpire = null;             // 押された = 期限切れ処理は不要
             b.hidden = true;
             const r = await undo.run();
-            showStateToast(r.ok ? '元に戻しました' : stateMessage(r), { err: !r.ok });
+            showStateToast(r.ok ? { ja: '元に戻しました', en: 'Undone' } : stateReason(r), { err: !r.ok });
         } : null;
         t._onExpire = onExpire;
         t.hidden = false;
@@ -1826,9 +1839,10 @@ async function makeWorkerEmu() {
         hideStateToast();   // 前のトーストの期限切れ処理 (ロードの控えを捨てる) は、次の操作より先に済ませる
         const r = await stateOp(() => stateSaveTo(slot));
         if (!r) return null;
-        if (!r.ok) { showStateToast(stateMessage(r), { err: true }); return r; }
-        const name = slot === 'quick' ? 'クイックセーブ' : `スロット ${slot} にセーブ`;
-        showStateToast(`${name}しました`, slot === 'quick' && gameId ? {
+        if (!r.ok) { showStateToast(stateReason(r), { err: true }); return r; }
+        const msg = slot === 'quick' ? { ja: 'クイックセーブしました', en: 'Quick saved' }
+                                     : { ja: `スロット ${slot} にセーブしました`, en: `Saved to slot ${slot}` };
+        showStateToast(msg, slot === 'quick' && gameId ? {
             undo: { run: async () => { await QBStateDB.undoQuick(gameId); await renderStateGrid(); return { ok: true }; } },
         } : {});
         return r;
@@ -1838,9 +1852,10 @@ async function makeWorkerEmu() {
         hideStateToast();   // 同上 (後にすると、いま取った控えを捨ててしまう)
         const r = await stateOp(() => stateLoadFrom(slot));
         if (!r) return null;
-        if (!r.ok) { showStateToast(stateMessage(r), { err: true }); return r; }
-        const name = slot === 'quick' ? 'クイックロード' : `スロット ${slot} をロード`;
-        showStateToast(`${name}しました`, {
+        if (!r.ok) { showStateToast(stateReason(r), { err: true }); return r; }
+        const msg = slot === 'quick' ? { ja: 'クイックロードしました', en: 'Quick loaded' }
+                                     : { ja: `スロット ${slot} をロードしました`, en: `Loaded slot ${slot}` };
+        showStateToast(msg, {
             undo: { run: () => stateOp(stateUndoLoad).then((x) => x || { ok: false, reason: 'error' }) },
             onExpire: () => emu.stateForgetUndo(),
         });
@@ -1865,10 +1880,11 @@ async function makeWorkerEmu() {
         const today = new Date().toDateString() === d.toDateString();
         return (today ? '' : `${d.getMonth() + 1}/${d.getDate()} `) + `${p2(d.getHours())}:${p2(d.getMinutes())}`;
     }
-    // 押すと「本当に?」に変わり、3 秒以内にもう一度押したら実行する (上書き・削除)
+    // 押すと「本当に?」(赤地) に変わり、3 秒以内にもう一度押したら実行する (上書き・削除)
     function confirmButton(btn, label, confirmLabel, run) {
         let armed = null;
         btn.textContent = label;
+        btn.setAttribute('aria-label', btn.title);
         btn.addEventListener('click', async () => {
             if (!armed) {
                 btn.textContent = confirmLabel; btn.classList.add('confirm');
@@ -1889,26 +1905,29 @@ async function makeWorkerEmu() {
             const card = document.createElement('div'); card.className = 'st-card';
             const thumb = document.createElement('div'); thumb.className = 'st-thumb' + (rec ? '' : ' empty');
             if (rec && rec.thumb) { const c = document.createElement('canvas'); drawStateThumb(c, rec.thumb); thumb.appendChild(c); }
-            else thumb.textContent = '空き';
+            else { thumb.innerHTML = '空き<span class="en">Empty</span>'; }
             const head = document.createElement('div'); head.className = 'st-head';
-            const name = document.createElement('span'); name.className = 'st-name'; name.textContent = slot === 'quick' ? 'クイック' : `スロット ${slot}`;
+            const name = document.createElement('span'); name.className = 'st-name';
+            name.innerHTML = slot === 'quick' ? 'クイック<span class="en">Quick</span>' : `スロット ${slot}<span class="en">Slot ${slot}</span>`;
             const time = document.createElement('span'); time.className = 'st-time'; time.textContent = rec ? stateTimeLabel(rec.created) : '';
             head.append(name, time);
             const acts = document.createElement('div'); acts.className = 'st-acts';
             if (rec) {
-                const ld = document.createElement('button'); ld.className = 'primary'; ld.textContent = 'ロード';
+                const ld = document.createElement('button'); ld.className = 'primary icon'; ld.textContent = '\u2912';
+                ld.title = 'ロード / Load'; ld.setAttribute('aria-label', ld.title);
                 ld.addEventListener('click', async () => { const r = await stateUiLoad(slot); if (r && r.ok) closeStateModal(); });
                 acts.appendChild(ld);
             }
-            const sv = document.createElement('button');
+            const sv = document.createElement('button'); sv.className = 'icon';
+            sv.title = rec ? '上書きセーブ / Overwrite' : 'セーブ / Save';
             const doSave = async () => { await stateUiSave(slot); await renderStateGrid(); };
             // クイックは上書きしても 1 つ前が残る (元に戻せる) ので確認しない
-            if (rec && slot !== 'quick') confirmButton(sv, '上書き', '上書きする?', doSave);
-            else { sv.textContent = 'セーブ'; sv.addEventListener('click', doSave); }
+            if (rec && slot !== 'quick') confirmButton(sv, '\u2913', '\u2913?', doSave);
+            else { sv.textContent = '\u2913'; sv.setAttribute('aria-label', sv.title); sv.addEventListener('click', doSave); }
             acts.appendChild(sv);
             if (rec) {
-                const del = document.createElement('button'); del.className = 'del'; del.title = '削除 / Delete';
-                confirmButton(del, '×', '削除?', async () => {
+                const del = document.createElement('button'); del.className = 'del icon'; del.title = '削除 / Delete';
+                confirmButton(del, '\u00d7', '\u00d7?', async () => {
                     await QBStateDB.del(stateSession.gameId, slot);
                     if (slot === 'quick') await QBStateDB.del(stateSession.gameId, 'quick-prev');
                     await renderStateGrid();
