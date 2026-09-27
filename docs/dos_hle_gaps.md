@@ -20,7 +20,7 @@ TODO.md「プリンタ出力 → ブラウザ」参照。
 | **39/3A/3B** | MKDIR / RMDIR / **CHDIR** | 高（セーブ用フォルダ作成・カレント移動が破綻） | ✅ 2026-06-02 実装 |
 | **36** | Get Disk Free Space | 高（空き容量チェックで誤判定） | ✅ 2026-06-02 実装（合成値） |
 | 0F-17,21-24,27,28 | FCB 系ファイル I/O 全般 | 中（〜DOS2 系・FCB FindFirst） | 未対応 |
-| 56 / 57 | Rename / Get-Set ファイル日時 | 中（temp→rename セーブ・書庫ツール） | 未対応 |
+| 56 / 57 | Rename / Get-Set ファイル日時 | 中（temp→rename セーブ・書庫ツール） | 56 未対応 / 57 ✅ 2026-09-27 |
 | 59 | Get Extended Error | 中（エラー後の詳細コード取得） | 未対応 |
 | 63 | Get DBCS Lead-Byte Table | 中（日本語特有。多くはハードコードにフォールバック） | ✅ 2026-06-09 実装（東方 op.exe の壁①） |
 | 62 / 50 / 51 | Get/Set PSP | 中 | ✅ 2026-07-02 実装（`g_cur_psp` を BX で往復するだけ。SimK 氏 EXECTEST で顕在化 — 62h 未実装だと BX=0 のまま返り、子が ES=0 の IVT を PSP と誤読して command tail 表示が漢字化けする。回帰 `tools/exec_psp_test.js`） |
@@ -259,29 +259,36 @@ TODO.md「プリンタ出力 → ブラウザ」参照。
   さらに **DOS のマウスドライバ（MS `mouse.com` 7.06 等）を常駐させれば INT 33h API も使える**（INT 27h TSR 実装後、
   `mouse.com` が常駐し INT 33h AX=0 に AX=0xFFFF を返すまで確認済み・2026-06-25）。実マウス移動の追従は
   OPNA タイマ割り込み + 8255 読みの実時間挙動依存でブラウザ実機確認が要る。
-- **COMMAND.COM は起動 .bat 専用のミニ実装のみ**（2026-06-03、`tools/dos_loader/shell.asm` +
-  `qb_dos_stage_batch`。2026-07-11 に旧線形列 API `qb_dos_stage_script` を stage_batch へ統合・撤去）。
-  起動 .bat のコマンドを 1 セッション内で順に `AH=4Bh` EXEC する（ドライバ TSR 常駐 →
-  game → -r 解除）専用シェルで、汎用シェルではない。**対話プロンプト・環境変数展開・リダイレクトは
-  非対応**（`cd`/`set` は文インタプリタが対応）。制御フロー（`:label`/`goto`/`if errorlevel`/`if "%N"==`）は
-  ✅ 2026-06-10 の errorlevel 分岐インタプリタで対応（`IF ERRORLEVEL == N` の `=` 区切り変種も可）。
-  `call X` は ✅ 2026-07-12 に対応（.bat はインライン展開・ラベル空間は bat 単位ローカル =
-  実 DOS の「GOTO は現在のバッチ内だけを探す」準拠、%N は call 引数で置換、深さ 4 + 循環ガード。
-  .com/.exe への call は通常実行に透過。呼び先が無い時はその行だけ読み飛ばして続行 = 実 DOS 同様）。
-  `cls` も ✅ 同日対応（文 op 'L' → ESC[2J）。それ以外の構文（`for`/`choice`/`shift`、then 節が
-  goto 以外）は単一主プログラム起動にフォールバック。プログラム以外の行（`echo`/`rem`/`pause` 等）は
-  echo 表示以外読み飛ばす。シェル経由の子の `argv[0]` は **子自身のパスに正規化される**
-  （C1 解消済、2026-06-04。`build_child_env` で子固有 env を確保）。
-- **環境変数は `COMSPEC=A:\COMMAND.COM` と `PATH=A:\` の 2 つだけ**（`build_env`、2026-06-11 に COMSPEC 追加）。
-  COMSPEC は実 DOS が必ず設定する変数で、存在チェックして起動拒否するソフトがある（Canvas-98 は無いと exit 5）。
-  実ファイル A:\COMMAND.COM は置かないが、✅ 2026-07-02 から **`%COMSPEC%` を `/C <cmd>` 付きで EXEC する
-  シェルアウト（TurboC 系 `system()` / SimK 氏 EXECTEST）は通る** — EXEC 先の basename が COMMAND.COM かつ
-  tail が `/C` の時だけ、約 40byte の COM スタブ（自己縮小 → `AX=4B00h` で `<cmd>` を EXEC → `AH=4Ch` code=0）
-  を合成して通常の exec_load に流す（`build_comspec_stub`）。実 DOS 同様に中間プロセスが立つので PSP 連鎖
-  （子の PSP:16h = COMMAND の PSP）も「/C は子の終了コードを破棄して 0」（AH=4Dh=0000）も忠実。`<cmd>` の
-  拡張子無しは .COM → .EXE を補完。**差異**: `/C` 無し（対話シェル）・`.bat` ターゲット・内部コマンド
-  （`del`/`copy` 等）・リダイレクトは非対応で、従来どおり file not found（AX=2）で正直に失敗する。
-  `set` 非対応なのでゲストから変数の追加・変更はできない。回帰 `tools/exec_psp_test.js`。
+- **COMMAND.COM は .bat を実行時に解釈するミニ実装**（2026-09-27 に作り直し、`native/dos_batch.c` +
+  `tools/dos_loader/shell.asm`）。シェルが「次コマンド?」を問い合わせるたびに C が .bat の次の行を読み、
+  `%0〜%9`（SHIFT 反映）・`%%`・`%VAR%`（DOS の環境変数）を展開して実行する。制御構文 `IF [NOT] ERRORLEVEL n` /
+  `EXIST file`（ワイルドカード・`DIR\NUL` 可）/ `s1==s2` の後ろは任意のコマンド、`GOTO`（実 DOS 同様ラベルは
+  先頭 8 文字で照合・無ければ "Label not found" でその .bat を終える）、`CALL`（入れ子 8 段）、**CALL なしの
+  .bat 呼び出しは制御を渡して戻らない**、`SHIFT`・`FOR %V IN (...) DO`（中の GOTO はループを抜ける）・`EXIT`。
+  内部コマンド `ECHO`・`SET`（引数なしで一覧）・`PATH`・`CD`・`CLS`・`PAUSE`（キー待ち）・`TYPE`・`DEL/ERASE`・`REN`・
+  `MD`・`RD`・`COPY`（連結・ワイルドカード）・`XCOPY`（/S /E）・`DIR`・`COMMAND /C 行`・`LH`。リダイレクト
+  `<` `>` `>>` `NUL` とパイプ `|`（実 DOS と同じく一時ファイル `\QBPIPEn.$$$` 経由・後で消す）。外部プログラムは
+  カレント → PATH → **書庫全体を基本名で**（実 DOS には無い救済。.bat と本体の置き場所がずれた書庫のため）の順に
+  .COM/.EXE/.BAT を探し、無ければ "Bad command or file name" を出して続ける。.bat はその置き場所をカレントにして
+  始める。errorlevel は直近の EXEC 子の終了コード（内部コマンドは変えない）。
+  **差異**: 対話プロンプトは無い / コマンドのエコー（`ECHO ON` 時の行表示）はしない / `ECHO` 単独の
+  "ECHO is on" 表示なし / `CHOICE` は外部コマンドなので無い / メッセージは英語（PC-98 日本語版の文言ではない）/
+  `DEL *.*` の確認をしない / 内部コマンドの入力リダイレクトは無視 / `COPY /A` 等のスイッチは無視。
+  外部コマンドが 1 つだけの単純な .bat は、ブラウザでは従来どおりシェルを通さず本体を直接起動する
+  （`batscript.js isSimpleLaunch`）。シェル経由の子の `argv[0]` は子自身のパスに正規化される。
+  回帰 `tools/bat_runtime_test.js`・`tools/batch_test.js`（旧方式）、旧方式との比較 `tools/bat_ab_compare.js`。
+- **標準入出力のリダイレクト**（2026-09-27）: .bat の `<` `>` で差し替えた標準入力 = handle 0 の読み出しと
+  AH=01/06/07/08/0A/0B、標準出力 = handle 1 の書き込みと AH=02/06/09（入力のエコー含む）。子と孫の間だけ効き、
+  入れ子のシェルでも外側を壊さない積み上げ式。IOCTL 4400h はファイルに向いた標準入出力を「ファイル」と答え、
+  AH=42h はそのファイルを動かす。**差異**: handle 2（stderr）・INT 29h・VRAM 直書きは画面のまま（実 DOS と同じ）/
+  PSP の JFT は書き換えない（JFT を直接見て判定するソフトは差し替えに気づかない）。
+- **環境変数の既定は `COMSPEC=A:\COMMAND.COM` と `PATH=A:\` の 2 つ**（`build_env`）。COMSPEC は実 DOS が必ず
+  設定する変数で、存在チェックして起動拒否するソフトがある（Canvas-98 は無いと exit 5）。実ファイル
+  A:\COMMAND.COM は置かないが、**`%COMSPEC%` を `/C 行` 付きで EXEC するシェルアウト**（TurboC 系 `system()` /
+  SimK 氏 EXECTEST / エディタ・ファイラの外部コマンド実行）は、ミニシェルを子として立てて同じ実行時解釈で
+  1 行を実行する（2026-09-27〜。.bat・内部コマンド・リダイレクトも通る。それまでは .COM/.EXE だけを EXEC する
+  約 40 byte の合成スタブ）。実 DOS 同様に中間プロセスが立つので PSP 連鎖も「/C は子の終了コードを破棄して 0」も
+  忠実。**差異**: `/C` 無し（対話シェル）は file not found（AX=2）で正直に失敗する。回帰 `tools/exec_psp_test.js`。
 - **EXEC ネストは 8 段**（`g_exec_stack[8]`）、**子 EXE は 256KB・最上位 EXE は 640KB 上限**。
   ✅ 2026-06-11 から子 EXE の上限は**ロードイメージ（MZ ヘッダ記載の header+body+reloc 表）に対して**適用 —
   実 DOS のローダ同様、ファイル末尾の付加データは読まない（FINALTY finmain.exe = 628KB 中ロード対象 138KB が
@@ -410,19 +417,15 @@ TODO.md「プリンタ出力 → ブラウザ」参照。
 30. **INT 33h fn5/6 (MS) の BX=2（中ボタン）が右ボタン扱い**— 実 7.06 は存在しない
     中ボタンとして空カウンタを返すはず（2 ボタン前提の PC-98 では実害ほぼ無し。
     真理値表とコードの突合はこれ以外全項目一致）。
-31. **ミニ COMMAND.COM（batscript.js）の追加乖離**: `call` は ✅ 2026-07-12 対応済
-    （`for`/`choice`/`shift` は依然 null → ① 退避 = honest fallback）/
-    リダイレクト `> nul` がトークンとして子の command tail に漏れる（実 COMMAND.COM は
-    剥がす。`echo x > file` もファイルを作らず画面表示。corpus 実測では実利用は life98 の
-    `<`/`|` のみ = 1/136 書庫、2026-07-12 調査）/ tail 再構成で連続空白・タブが
-    単一空白に潰れる（実 DOS は raw tail を PSP:80h へ）/ goto ラベル照合が完全一致
-    （実 DOS は先頭 8 文字有意）/ `if "%1"==FM` の非対称 quote が実 DOS と逆判定。
+31. ~~ミニ COMMAND.COM（batscript.js）の追加乖離~~ → ✅ 2026-09-27 に C の実行時解釈へ作り直して解消
+    （`> nul` は剥がす・`echo x > file` はファイルを作る・`<`/`|` 対応・ラベルは先頭 8 文字・`for`/`shift` 対応）。
+    残る差異は上の「COMMAND.COM は .bat を実行時に解釈するミニ実装」を参照。
 
 ## まとめ（当たりやすさ・優先度）
 
 1. **CHDIR/MKDIR/RMDIR + 36h 空き容量** — セーブ機能付きゲームで顕在化しやすい → ✅ 対応済
 2. **EXEC 子のハンドル未クローズ** — ランチャ往復型の潜在バグ → ✅ 対応済
-3. 56h rename / 57h 日時 — セーブ・ファイル操作系 → 次の候補
+3. 57h 日時 → ✅ 2026-09-27 対応。56h rename は次の候補（コーパス 80 書庫では呼ばれていない = tools/compat_survey.js）
 4. 63h DBCS テーブル — 日本語ソフト特有 → 次の候補
 
 FCB I/O・EMS/XMS・INT 25h/26h・overlay(4B AL=03) は「スコープ外」と割り切った領域。

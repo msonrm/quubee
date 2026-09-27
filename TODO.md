@@ -49,10 +49,13 @@
     一覧はクイック + 手動 3 枠を縮小画像付きで・開いている間はゲームを止める。確認 = tools/browser/state_ui_check.js)
     — ブラウザ実機確認済 (ユーザー、2026-09-27。MIDI も問題なし)
   - [ ] キーボードのショートカット・ゲームパッドへの割り当て (F1〜F10 と Ctrl はゲームが使うので、キー選びから相談)
-- [ ] **PC98PLAYER (MIT) からの取り込み候補** (フェーズ 2 の後に別計画): INT 21h の FCB 系・56h/57h・59h・5Ah/5Bh・
-  67h/68h/6Ch・65h/66h・00h・2Bh/2Dh / バッチの FOR・IF EXIST・COPY・DEL・MD/RD・REN・TYPE・XCOPY・COMMAND /C・EXIT /
-  EMS 4.0 HLE (D000h・マップ時に 16KB 写し替え) / FindFirst の検索番号を DTA 予約域に。移すなら CREDITS に表記。
-  比較の詳細 = memory reference_pc98player
+- [x] **PC98PLAYER (MIT) からの取り込み候補 → まず手持ちのコーパスで需要を数えた** (2026-09-27、`tools/compat_survey.js`):
+  80 書庫 125 対象で INT 21h の未対応は AH=57h (2 書庫) だけ・EMS は 0・FCB/59h/5Ah/6Ch 等も 0。.bat は構文より
+  「実行のされ方」(事前線形化・リダイレクト/パイプが引数に漏れる・内部コマンドの黙殺) に穴があった
+  → **.bat の実行時解釈への作り直し** (ブランチ bat-runtime、段階 A〜D) で対応。PC98PLAYER のコードは参考に
+  読んだだけで移していない (FOR の展開行を文脈として積む考え方は同じ)。**ブラウザ実機確認待ち**
+  - [ ] 残りの候補 (需要が出たら): INT 21h の FCB 系・56h・59h・5Ah/5Bh・67h/68h/6Ch・65h/66h / EMS 4.0 HLE /
+    FindFirst の検索番号を DTA 予約域に。比較の詳細 = memory reference_pc98player
 
 ## 🧰 headless の土台 `tools/lib/machine.js` — 着手済 (2026-07-10)
 
