@@ -74,7 +74,7 @@ void scrnmng_surfunlock(const SCRNSURF *surf) {
 
 void scrnmng_update(void) {}
 
-static void realloc_surfs(void) {
+static BRESULT realloc_surfs(void) {
 	size_t sz = (size_t)scrnmng.width * scrnmng.height * (scrnmng.bpp / 8);
 	free(scrnmng.pc98surf);
 	free(scrnmng.dispsurf);
@@ -86,22 +86,28 @@ static void realloc_surfs(void) {
 		scrnmng.pc98surf = NULL;
 		scrnmng.dispsurf = NULL;
 		scrnmng.enable   = FALSE;
+		return FAILURE;
 	}
+	return SUCCESS;
 }
 
 void scrnmng_setwidth(int posx, int width) {
 	LOGD("scrnmng_setwidth: posx=%d width=%d (was %d)", posx, width, scrnmng.width);
 	if (width > 0 && width != scrnmng.width) {
+		int oldwidth = scrnmng.width;
 		scrnmng.width = width;
-		realloc_surfs();
+		if (!realloc_surfs())
+			scrnmng.width = oldwidth;
 	}
 }
 
 void scrnmng_setheight(int posy, int height) {
 	LOGD("scrnmng_setheight: posy=%d height=%d (was %d)", posy, height, scrnmng.height);
 	if (height > 0 && height != scrnmng.height) {
+		int oldheight = scrnmng.height;
 		scrnmng.height = height;
-		realloc_surfs();
+		if (!realloc_surfs())
+			scrnmng.height = oldheight;
 	}
 }
 
