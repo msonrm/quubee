@@ -54,7 +54,9 @@
   「実行のされ方」(事前線形化・リダイレクト/パイプが引数に漏れる・内部コマンドの黙殺) に穴があった
   → **.bat の実行時解釈への作り直し** (ブランチ bat-runtime、段階 A〜D) で対応。PC98PLAYER のコードは参考に
   読んだだけで移していない (FOR の展開行を文脈として積む考え方は同じ)。ブラウザ実機確認済 (2026-09-27)
-  - [ ] 残りの候補 (需要が出たら): INT 21h の FCB 系・56h・59h・5Ah/5Bh・67h/68h/6Ch・65h/66h / EMS 4.0 HLE /
+  - ✓ AH=6Ch・59h・65h (2026-09-27、Issue #6 の前半)。後半 = NUL 装置・DUP2 による標準ハンドルの差し替え (JFT 化) は
+    需要計測 (compat_survey の nulOpen/dup2Std) で出たら検討。2026-09-27 時点でコーパス 0 件
+  - [ ] 残りの候補 (需要が出たら): INT 21h の FCB 系・56h・5Ah/5Bh・67h/68h・66h / EMS 4.0 HLE /
     FindFirst の検索番号を DTA 予約域に。比較の詳細 = memory reference_pc98player
 
 ## 🧰 headless の土台 `tools/lib/machine.js` — 着手済 (2026-07-10)

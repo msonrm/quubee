@@ -307,6 +307,9 @@ void np2kai_debug_midi_fx(int enable) { midiout_fx_setenable(enable); }
  * 応答済みなので、>0 は「この方式の HLE 実装価値あり」のシグナル。dos_loader.c が更新。 */
 extern uint32_t qb_dos_memprobe_count(int which);   /* dos_loader.c */
 uint32_t np2kai_debug_memprobe(np2kai_handle h, int which) { if (!h) return 0; return qb_dos_memprobe_count(which); }
+/* 純正 COMMAND.COM 流のリダイレクトの需要 (compat_survey.js): 0 = NUL 装置を開いた / 1 = 標準ハンドルへ DUP2 した */
+extern uint32_t qb_dos_stdprobe_count(int which);   /* dos_int21.c */
+uint32_t np2kai_debug_stdprobe(int which) { return qb_dos_stdprobe_count(which); }
 
 /* XMS (HIMEM 相当) HLE の制御/診断 (qbDebug.xms)。enable: 1=有効化/0=無効化、戻り値=反映後の実効状態。
  * stat which: 0=有効か / 1=確保中ハンドル数 / 2=使用バイト / 3=空きバイト。dos_xms.c が実装。 */

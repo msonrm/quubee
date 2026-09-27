@@ -5,6 +5,8 @@
 // games/ の書庫を展開し、書庫ごとに起動の対象を選んで headless で走らせ、次を記録する:
 //   - INT 21h の未対応 (AH 単位、machine.js int21Stats) と、使った AH の一覧
 //   - XMS / EMS / EMMXXXX0 open / INT 33h の問い合わせ回数 (np2kai_debug_memprobe)
+//   - NUL 装置を開いた・標準ハンドル (0〜4) へ DUP2 した回数 (np2kai_debug_stdprobe。純正 COMMAND.COM 流の
+//     リダイレクトの需要。どちらも未対応なので、これが出たら JFT 化を検討する)
 //   - 終了したか・画面の色数 (動いたかの目安)
 // 対象の選び方: その書庫の .bat のうち batscript.js の文インタプリタで通るもの全部 (ブラウザの Run と同じ)。
 // 通る .bat が無ければ、実行ファイル (.exe/.com) を大きい順に 4 本 (音源ドライバ名は除く)。
@@ -92,8 +94,9 @@ async function runOne(t, frames) {
     }
     const st = m.int21Stats();
     const mp = (i) => m.M.ccall('np2kai_debug_memprobe', 'number', ['number', 'number'], [m.h, i]);
+    const sp = (i) => m.M.ccall('np2kai_debug_stdprobe', 'number', ['number'], [i]);
     return { calls: Object.keys(st.calls), unimpl: st.unimplemented,
-        probe: { xms: mp(0), ems: mp(1), emmOpen: mp(2), mouse33: mp(3) }, exited, frames: f, maxColors };
+        probe: { xms: mp(0), ems: mp(1), emmOpen: mp(2), mouse33: mp(3), nulOpen: sp(0), dup2Std: sp(1) }, exited, frames: f, maxColors };
 }
 
 // ---- 親: 並列に回して集計 ----
@@ -120,7 +123,8 @@ function report(results) {
     console.log('\nINT 21h の未対応 (AH / 踏んだ書庫の数 / 対象)');
     for (const [ah, list] of Object.entries(un).sort((a, b) => b[1].length - a[1].length))
         console.log(`  AH=${ah}  ${new Set(list.map((x) => x.k.split('|')[0])).size} 書庫  ` + list.map((x) => `${x.k.split('|')[1]}(${x.n})`).join(' '));
-    for (const [name, key] of [['EMS (INT 67h)', 'ems'], ['EMMXXXX0 open', 'emmOpen'], ['XMS (INT 2Fh 43h)', 'xms'], ['INT 33h', 'mouse33']]) {
+    for (const [name, key] of [['EMS (INT 67h)', 'ems'], ['EMMXXXX0 open', 'emmOpen'], ['XMS (INT 2Fh 43h)', 'xms'], ['INT 33h', 'mouse33'],
+                               ['NUL 装置を開く', 'nulOpen'], ['標準ハンドルへ DUP2', 'dup2Std']]) {
         const s = byArc((r) => r.probe && r.probe[key] > 0);
         console.log(`${name.padEnd(18)} ${s.size} 書庫  ${[...s].join(' ')}`);
     }

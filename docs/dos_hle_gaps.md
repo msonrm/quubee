@@ -21,7 +21,9 @@ TODO.md「プリンタ出力 → ブラウザ」参照。
 | **36** | Get Disk Free Space | 高（空き容量チェックで誤判定） | ✅ 2026-06-02 実装（合成値） |
 | 0F-17,21-24,27,28 | FCB 系ファイル I/O 全般 | 中（〜DOS2 系・FCB FindFirst） | 未対応 |
 | 56 / 57 | Rename / Get-Set ファイル日時 | 中（temp→rename セーブ・書庫ツール） | 56 未対応 / 57 ✅ 2026-09-27 |
-| 59 | Get Extended Error | 中（エラー後の詳細コード取得） | 未対応 |
+| 59 | Get Extended Error | 中（エラー後の詳細コード取得） | ✅ 2026-09-27 実装（直近で CF=1 を返した INT 21h の AX を記録し、種類・推奨処置・場所を DOS の表どおりに。純正 COMMAND.COM の "Extended Error 1" = Issue #6。回帰 `tools/dos_ext_calls_test.js`） |
+| 65 | Get Extended Country Info | 中（DOS 4+ のランタイム・純正 COMMAND.COM が起動のたびに呼ぶ） | ✅ 2026-09-27 実装（日本 81・コードページ 932。大文字表/ファイル名大文字表/禁止文字表/照合順序表/DBCS 表のポインタ = 低位 linear 0xD00〜0xEC7 に毎回書く。大文字化 20h〜22h/A0h〜A2h・Y/N 判定 23h。大文字化は ASCII のみ = SJIS は恒等） |
+| 6C | Extended Open/Create | 中（DOS 4+ のランタイム・純正 COMMAND.COM の TYPE） | ✅ 2026-09-27 実装（あるとき 失敗/開く/置き換える × 無いとき 失敗/作る、CX に処置。共有モード・属性・commit フラグは無視） |
 | 63 | Get DBCS Lead-Byte Table | 中（日本語特有。多くはハードコードにフォールバック） | ✅ 2026-06-09 実装（東方 op.exe の壁①） |
 | 62 / 50 / 51 | Get/Set PSP | 中 | ✅ 2026-07-02 実装（`g_cur_psp` を BX で往復するだけ。SimK 氏 EXECTEST で顕在化 — 62h 未実装だと BX=0 のまま返り、子が ES=0 の IVT を PSP と誤読して command tail 表示が漢字化けする。回帰 `tools/exec_psp_test.js`） |
 | 00 | Terminate（旧式） | 低（終了は INT 20h / 4Ch 想定） | 未対応 |
@@ -30,12 +32,16 @@ TODO.md「プリンタ出力 → ブラウザ」参照。
 | **60** | TRUENAME（パス正準化） | 中（ファイラ・シェルの表示用フルパス） | ✅ 2026-07-12 実装（`read_dos_rel` 再利用で "A:\PATH" 大文字化・DBCS 保護） |
 | 2B / 2D | Set Date / Set Time | 低（Get のみ実装） | 未対応 |
 | 38 | Get/Set Country Info | 中（QB 日本語ランタイム等が起動時に呼ぶ） | ✅ 2026-07-02 実装（日本 country 81 固定・YMD・通貨 "\"・24h・case-map は far RET スタブ。Set は日本以外を正直に拒否。回帰 `tools/country_info_test.js`） |
-| 5B / 5A / 67 / 68 … | 排他作成 / temp / handle 数 / commit | 低〜中 | 未対応 |
+| 5B / 5A / 67 / 68 … | 排他作成 / temp / handle 数 / commit | 低〜中 | 未対応（コーパス 80 書庫では呼ばれていない） |
 | 4B AL=01,03 | Load-only / オーバーレイ | 中（大きめゲームの overlay） | AL=03 ✅ 2026-06-09 実装（東方 op→main 遷移）。AL=01 ✅ 2026-07-02 実装（exec_load の load-only モード: CPU は切り替えずパラメータブロック +0Eh..+15h に初期 SP/SS/IP/CS を書き戻し、current PSP は子へ。COM は AX 初期値 word を積んで SP=FFFC = np21w 一致。回帰 `tools/exec_psp_test.js`） |
 
 ## 2. 実装済みだが実 DOS と挙動が異なる点
 
 1. **ファイルハンドル = ホスト `FILE*`（DOS の SFT ではない）**
+   - **標準ハンドル (0〜4) は画面/キーボードに固定**で、46h DUP2 で差し替えられない（正直に失敗）・`NUL` を開くと
+     装置ではなく `nul` という名前のファイルになる。純正 COMMAND.COM のリダイレクト（`pause >nul` 等）はこれで効かない
+     （Issue #6 の残り）。.bat のリダイレクトはミニシェルの別経路（下記「標準入出力のリダイレクト」）で効く。
+     需要は `tools/compat_survey.js` が「NUL を開いた」「標準ハンドルへ DUP2 した」回数で測る（出たら JFT 化を検討）。
    - 45h DUP / 46h DUP2 が**ファイルポインタを共有しない**（同 path/mode で開き直して seek する独立ハンドル）。read 用途では実用上等価だが、dup 後の interleaved seek/read は乖離。
    - ~~**stdin(ハンドル0)からの 3Fh Read が "invalid handle"**（`fh_get(0)`=NULL）。実 DOS はキーボードを読む。AH=0Ah 経由なら可。~~ → ✅ 2026-06-30 実装（handle 0 を CON の cooked 行入力に分岐 — Enter まで待って「行 + CR LF」を返す・BS 行編集・エコー付き。TurboC の getchar/scanf/gets が動く）。✅ 2026-07-02 さらに実 DOS の行持ち越しへ是正（takapyu 氏実機指摘）: **CX の大小はブロックに関係せず CX=1 でも Enter まで戻らない**。行はホスト側行バッファ（255+CR LF）に組み立て、CX で読み切れない分は次回 read が待たずに受け取る（getchar 型の 1 バイト読みは行を 1 バイトずつ配る形）。BS の SJIS 全角は行頭からのパリティ走査で文字境界を確定して 2 バイト消す（AH=0Ah の BS も同ヘルパ）。回帰 `tools/stdin_read_test.js` / `stdin_partial_line_test.js` / `stdin_cx1_test.js`。✅ 2026-07-02 **raw(binary) モードも実装**: IOCTL AX=4401h の bit5 (0x20) を実際に保持（AX=4400h が反映して返す・実 DOS 同様 DH≠0 はエラー）。raw の read はエコー無し・行編集無し・CR LF 変換無しで **CX バイトそろい次第返る**（CX=1 なら 1 キーごとに即返し）。takapyu 氏提供の NORMAL.COM / RAWMODE.COM（実バイナリ）で両モードとも実機挙動一致を確認。残る差異: Ctrl-C/Ctrl-Z 特別扱いなし・raw フラグは CON 全体で 1 本（handle 0/1/2 共有 = 実 DOS の SFT 単位と同じ実効）。
    - ~~**EXEC 子の終了時にハンドルを閉じない**＋ハンドル表 `g_fh` がプロセス間共有 → ランチャ往復でハンドル枯渇~~ → ✅ 2026-06-02 修正（子が開いたハンドルだけ子終了で close。TSR は常駐なので閉じない）。

@@ -2229,8 +2229,31 @@ static void int21_35_get_vec(void) {
     CPU_ES = seg;
 }
 
+/* ---- 需要の計測 (2026-09-27、tools/compat_survey.js): 純正 COMMAND.COM 流のリダイレクトに要る
+ * 「NUL 装置を開く」「標準ハンドル (0〜4) へ DUP2 する」をソフトが実際にするか数える。どちらも
+ * 未対応のまま (NUL はファイルとして開く / 標準ハンドルへの DUP2 は失敗させる)。 */
+static uint32_t g_probe_nul_open, g_probe_dup2_std;
+uint32_t qb_dos_stdprobe_count(int which) { return which == 0 ? g_probe_nul_open : which == 1 ? g_probe_dup2_std : 0; }
+static void probe_nul_name(uint16_t seg, uint16_t off) {
+    uint32_t la = lin(seg, off);
+    char nm[80];
+    int k = 0, leaf = 0;
+    for (; k < 79; k++) {
+        uint8_t c = peek8(la + (uint32_t)k);
+        if (!c) break;
+        nm[k] = (char)toupper(c);
+        if (c == '\\' || c == ':' || c == '/') leaf = k + 1;
+    }
+    nm[k] = 0;
+    if (strcmp(nm + leaf, "NUL") == 0 || strncmp(nm + leaf, "NUL.", 4) == 0) {
+        g_probe_nul_open++;
+        fprintf(stderr, "[probe] NUL 装置を開こうとした (%s)\n", nm);
+    }
+}
+
 /* path から FILE* を開き、ハンドルを返す。失敗時 -err (DOS error)。 */
 static int dos_open_common(const char *mode_str) {
+    probe_nul_name(CPU_DS, CPU_DX);
     char host[256];
     int st = dos_path_to_host(CPU_DS, CPU_DX, host, sizeof(host));
     /* ディレクトリは実 DOS 同様 open できない (error 5 = access denied)。
@@ -2290,6 +2313,39 @@ static void int21_3d_open(void) {
     int h = dos_open_common(m);
     if (h < 0) { CPU_AX = (uint16_t)-h; CPU_FLAG |= C_FLAG; return; }
     CPU_AX = (uint16_t)h;
+    CPU_FLAG &= ~C_FLAG;
+}
+
+/* AH=6Ch 拡張オープン/作成 (DOS 4+)。DS:SI = 名前、BL = 開くモード (下位 3 ビット = 読み/書き/両方)、
+ * CX = 作るときの属性、DL = 処置 (下位 4 ビット = あるとき 0 失敗 / 1 開く / 2 切り詰めて開く、
+ * 上位 4 ビット = 無いとき 0 失敗 / 1 作る)。成功で AX = ハンドル、CX = 1 開いた / 2 作った / 3 置き換えた。
+ * 純正 COMMAND.COM (MS-DOS 6.2) の TYPE はこれでファイルを開く (Issue #6)。 */
+static void int21_6c_ext_open(void) {
+    uint16_t save_dx = CPU_DX;
+    uint8_t act = CPU_DL;
+    char host[256];
+    int st = dos_path_to_host(CPU_DS, CPU_SI, host, sizeof(host));
+    struct stat sb;
+    int exists = (st == 0 && fs_stat(host, &sb) == 0);
+    if (exists && S_ISDIR(sb.st_mode)) { CPU_AX = 5; CPU_FLAG |= C_FLAG; return; }
+    const char *mode;
+    uint16_t taken;
+    if (exists) {
+        switch (act & 0x0F) {
+        case 1: mode = (CPU_BL & 0x07) == 0 ? "rb" : "r+b"; taken = 1; break;
+        case 2: mode = "w+b"; taken = 3; break;
+        default: CPU_AX = 0x50; CPU_FLAG |= C_FLAG; return;   /* 80 = file exists */
+        }
+    } else {
+        if (((act >> 4) & 0x0F) != 1) { CPU_AX = (st == 2) ? 3 : 2; CPU_FLAG |= C_FLAG; return; }
+        mode = "w+b"; taken = 2;
+    }
+    CPU_DX = CPU_SI;                          /* dos_open_common は DS:DX を読む */
+    int h = dos_open_common(mode);
+    CPU_DX = save_dx;
+    if (h < 0) { CPU_AX = (uint16_t)-h; CPU_FLAG |= C_FLAG; return; }
+    CPU_AX = (uint16_t)h;
+    CPU_CX = taken;
     CPU_FLAG &= ~C_FLAG;
 }
 
@@ -2353,6 +2409,8 @@ static void int21_46_dup2(void) {
     }
     if (src == dst) { CPU_AX = (uint16_t)dst; CPU_FLAG &= ~C_FLAG; return; }  /* 同一ハンドルは no-op (実 DOS 準拠。fh_close(dst) で src の FILE* を閉じてしまう UAF 回避) */
     if (dst < DOS_HANDLE_USER_BASE) {   /* 標準ハンドルへの redirect は未対応: 正直に失敗 */
+        g_probe_dup2_std++;
+        fprintf(stderr, "[probe] 標準ハンドル %d へ DUP2 しようとした (未対応)\n", dst);
         CPU_AX = 6; CPU_FLAG |= C_FLAG; return;
     }
     if (g_fh[dst].used) fh_close(dst);
@@ -3453,6 +3511,122 @@ static void int21_63_dbcs(void) {
     }
 }
 
+/* AH=59h 拡張エラー情報。直近で CF=1 を返した INT 21h のエラーコード (ディスパッチの後処理が記録) を
+ * AX に、種類 (BH)・推奨処置 (BL)・発生場所 (CH) を DOS の表どおりに返す。純正 COMMAND.COM は失敗の
+ * 理由をこれで訊いて表示する (未対応だと "Extended Error 1" = Issue #6)。 */
+static uint16_t g_ext_error;
+static void int21_59_ext_error(void) {
+    uint16_t e = g_ext_error;
+    uint8_t cls = 13, action = 4, locus = 1;   /* 既定 = 不明・中止・場所不明 */
+    switch (e) {
+    case 0:  cls = 0; action = 0; locus = 0; break;
+    case 1:  cls = 7;  action = 4; locus = 1; break;   /* invalid function: app error */
+    case 2: case 3: case 0x12: cls = 8; action = 3; locus = 2; break;   /* not found: user */
+    case 4:  cls = 1;  action = 4; locus = 1; break;   /* too many open files: out of resource */
+    case 5:  cls = 3;  action = 3; locus = 2; break;   /* access denied: authorization */
+    case 6:  cls = 7;  action = 4; locus = 1; break;   /* invalid handle */
+    case 7: case 8: case 9: cls = 1; action = 4; locus = 5; break;   /* memory */
+    case 0x0B: case 0x0C: case 0x0D: cls = 9; action = 3; locus = 1; break;   /* bad format/access/data */
+    case 0x0F: cls = 8; action = 3; locus = 2; break;   /* invalid drive */
+    case 0x10: cls = 3; action = 3; locus = 2; break;   /* remove current dir */
+    case 0x11: cls = 13; action = 3; locus = 2; break;  /* not same device */
+    case 0x50: cls = 12; action = 3; locus = 2; break;  /* file exists: already exists */
+    }
+    CPU_AX = e;
+    CPU_BH = cls; CPU_BL = action; CPU_CH = locus;
+    CPU_FLAG &= ~C_FLAG;
+}
+
+/* AH=65h 拡張国別情報 (DOS 3.3+)。日本 (country 81)・コードページ 932 の値を返す。表は低位の空き
+ * (SFT の上・環境ブロック MCB の下、linear 0xD00〜0xEC7) に置き、呼ぶたびに書き直す (AH=63h と同方針)。
+ *   AL=01 国別情報 (ES:DI・CX バイトまで) / 02 大文字表 / 04 ファイル名大文字表 (02 と共用) /
+ *   05 ファイル名の禁止文字表 / 06 照合順序表 / 07 DBCS 表 → ES:DI に [ID][far ptr] の 5 バイト
+ *   20h 文字 (DL) の大文字化 / 21h 文字列 (DS:DX・CX) / 22h ASCIIZ (DS:DX) / 23h Y/N 判定 (DL)
+ *   A0h〜A2h はファイル名向けの 20h〜22h (同じ)
+ * 大文字化は ASCII だけ (0x80 以上は SJIS なので恒等)。MS-DOS 6.2 の COMMAND.COM は起動のたびに
+ * AL=04 を呼ぶ (Issue #6)。 */
+#define QB_NLS_UPPER   0x0D00u   /* +0 word 0x80 + 128 byte (0x80〜0xFF の大文字 = 恒等) */
+#define QB_NLS_FTERM   0x0D90u   /* ファイル名の禁止文字表 */
+#define QB_NLS_COLL    0x0DB0u   /* +0 word 0x100 + 256 byte (照合順序 = 恒等) */
+#define QB_NLS_DBCS    0x0EC0u   /* +0 word 6 + 81 9F E0 FC 00 00 */
+static void nls_write_tables(void) {
+    poke16(QB_NLS_UPPER, 0x80);
+    for (int i = 0; i < 0x80; i++) poke8(QB_NLS_UPPER + 2 + (uint32_t)i, (uint8_t)(0x80 + i));
+    static const char bad[] = ".\"/\\[]:|<>+=;,";
+    uint32_t f = QB_NLS_FTERM;
+    poke16(f, (uint16_t)(8 + sizeof(bad) - 1));
+    poke8(f + 2, 1); poke8(f + 3, 0x00); poke8(f + 4, 0xFF);   /* 使える文字の範囲 */
+    poke8(f + 5, 0); poke8(f + 6, 0x00); poke8(f + 7, 0x20);   /* 除外範囲 (制御文字と空白) */
+    poke8(f + 8, 2); poke8(f + 9, (uint8_t)(sizeof(bad) - 1));
+    for (size_t i = 0; i + 1 < sizeof(bad); i++) poke8(f + 10 + (uint32_t)i, (uint8_t)bad[i]);
+    poke16(QB_NLS_COLL, 0x100);
+    for (int i = 0; i < 0x100; i++) poke8(QB_NLS_COLL + 2 + (uint32_t)i, (uint8_t)i);
+    poke16(QB_NLS_DBCS, 6);
+    poke8(QB_NLS_DBCS + 2, 0x81); poke8(QB_NLS_DBCS + 3, 0x9F);
+    poke8(QB_NLS_DBCS + 4, 0xE0); poke8(QB_NLS_DBCS + 5, 0xFC);
+    poke8(QB_NLS_DBCS + 6, 0x00); poke8(QB_NLS_DBCS + 7, 0x00);
+}
+static uint8_t nls_upper(uint8_t c) { return (c >= 'a' && c <= 'z') ? (uint8_t)(c - 0x20) : c; }
+static void int21_65_ext_country(void) {
+    uint8_t al = CPU_AL;
+    if (al >= 0xA0 && al <= 0xA2) al = (uint8_t)(al - 0x80);   /* ファイル名向け = 同じ */
+    switch (al) {
+    case 0x01: {                                   /* 国別情報 */
+        uint16_t cap = CPU_CX;
+        if (cap < 5) { CPU_AX = 1; CPU_FLAG |= C_FLAG; return; }
+        uint8_t tmp[41];
+        memset(tmp, 0, sizeof(tmp));
+        tmp[0] = 1; tmp[1] = 38; tmp[2] = 0;           /* 以下 38 バイト */
+        tmp[3] = 81; tmp[4] = 0;                       /* country 81 = 日本 */
+        tmp[5] = (uint8_t)(932 & 0xFF); tmp[6] = (uint8_t)(932 >> 8);   /* code page 932 */
+        /* 以降 34 バイト = AH=38h と同じ国別情報 (日付 YMD・通貨 \・24 時間制…) */
+        tmp[7] = 2; tmp[9] = 0x5C; tmp[14] = ','; tmp[16] = '.'; tmp[18] = '-'; tmp[20] = ':';
+        tmp[24] = 1;
+        tmp[25] = (uint8_t)(QB_TRAMP_FARRET & 0xFF); tmp[26] = (uint8_t)((QB_TRAMP_FARRET >> 8) & 0xFF);
+        tmp[27] = 0x00; tmp[28] = 0xF0;               /* case-map = far RET スタブ (F000:EED0) */
+        tmp[29] = ',';
+        uint32_t d = lin(CPU_ES, CPU_DI);
+        uint16_t n = cap < sizeof(tmp) ? cap : (uint16_t)sizeof(tmp);
+        for (uint16_t i = 0; i < n; i++) poke8(d + i, tmp[i]);
+        CPU_CX = n;
+        CPU_FLAG &= ~C_FLAG;
+        return;
+    }
+    case 0x02: case 0x04: case 0x05: case 0x06: case 0x07: {   /* 表のポインタ */
+        if (CPU_CX < 5) { CPU_AX = 1; CPU_FLAG |= C_FLAG; return; }
+        nls_write_tables();
+        uint32_t t = (al == 0x05) ? QB_NLS_FTERM : (al == 0x06) ? QB_NLS_COLL : (al == 0x07) ? QB_NLS_DBCS : QB_NLS_UPPER;
+        uint32_t d = lin(CPU_ES, CPU_DI);
+        poke8(d, al);
+        poke16(d + 1, (uint16_t)(t & 0x0F));          /* far ptr = (t>>4):(t&0F) */
+        poke16(d + 3, (uint16_t)(t >> 4));
+        CPU_CX = 5;
+        CPU_FLAG &= ~C_FLAG;
+        return;
+    }
+    case 0x20: CPU_DL = nls_upper(CPU_DL); CPU_FLAG &= ~C_FLAG; return;
+    case 0x21: case 0x22: {                        /* 文字列の大文字化 (SJIS の 2 バイト目は触らない) */
+        uint32_t p = lin(CPU_DS, CPU_DX);
+        uint32_t n = (al == 0x21) ? CPU_CX : 0xFFFF;
+        for (uint32_t i = 0; i < n; i++) {
+            uint8_t c = peek8(p + i);
+            if (al == 0x22 && c == 0) break;
+            if (sjis_is_lead(c) && i + 1 < n) { i++; continue; }
+            poke8(p + i, nls_upper(c));
+        }
+        CPU_FLAG &= ~C_FLAG;
+        return;
+    }
+    case 0x23: {                                   /* Y/N 判定: AX = 0 いいえ / 1 はい / 2 どちらでもない */
+        uint8_t c = nls_upper(CPU_DL);
+        CPU_AX = c == 'Y' ? 1 : c == 'N' ? 0 : 2;
+        CPU_FLAG &= ~C_FLAG;
+        return;
+    }
+    }
+    CPU_AX = 1; CPU_FLAG |= C_FLAG;
+}
+
 /* ---------------- ディスパッチ ---------------- */
 
 /* AH 別カウンタ + qbDebug.int21Stats() で読めるよう export */
@@ -3578,6 +3752,9 @@ void qb_dos_int21_dispatch(void) {
     case 0x60: int21_60_truename();  break;
     case 0x62: int21_51_get_psp();   break;   /* 62h = 51h の documented 版 */
     case 0x63: int21_63_dbcs(); break;
+    case 0x59: int21_59_ext_error(); break;
+    case 0x65: int21_65_ext_country(); break;
+    case 0x6C: int21_6c_ext_open(); break;
     default:
         fprintf(stderr, "[int21h] UNIMPL AH=%02X (AX=%04X CS:IP=%04X:%04X)\n",
                 ah, (unsigned)CPU_AX, (unsigned)CPU_CS, (unsigned)CPU_IP);
@@ -3586,6 +3763,9 @@ void qb_dos_int21_dispatch(void) {
         CPU_FLAG |= C_FLAG;
         break;
     }
+
+    /* 拡張エラー (AH=59h) の記録: CF=1 で返した呼び出しの AX (DOS エラーコード) を覚える */
+    if (!g_int21_repoll && ah != 0x59 && (CPU_FLAG & C_FLAG) && CPU_AX && CPU_AX < 0x100) g_ext_error = CPU_AX;
 
     /* blocking 入力が「キー待ち」で CPU_IP を巻き戻した場合、今回は IRET せず
      * NOP を踏み直す。スタックの FLAGS は次に本当に return する回で書くので、
