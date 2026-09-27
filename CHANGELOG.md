@@ -16,7 +16,8 @@
 - **AMEL の AMEL88PR.BAT を最初に Run すると無音** (ユーザー報告。AMELMIDI.BAT を一度 Run した後なら鳴る): MIDI を使うかの
   判定 (`batscript.js usesMidi`) が選んだ .bat の行しか見ておらず、AMEL88PR.BAT は `amelmidi ...` (呼び先の AMELMIDI.BAT が
   MIDRV を起動) だけなので soundfont を読まずに起動していた。呼び先の .bat (`call` あり/なし、入れ子 4 段・循環ガード) まで
-  たどるように。回帰 batscript_test 20b。ヘッドレスブラウザで新しいページの最初の Run が soundfont を読むことを確認。
+  たどるように。回帰 batscript_test 20b。ヘッドレスブラウザで新しいページの最初の Run が soundfont を読むことを確認、
+  ブラウザ実機で初回から鳴ることをユーザー確認。
 
 ## [.bat を C が実行時に解釈する (作り直し) + リダイレクト/パイプ + AH=57h] — 2026-09-27
 
