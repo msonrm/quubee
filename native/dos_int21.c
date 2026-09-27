@@ -920,7 +920,132 @@ static int softkey_fill(uint8_t scan) {
 /* DOS コンソール入力の 1 バイト取り出し。-1 = 入力なし。
  * 発行文字列が残っていれば優先。なければバッファから dequeue し、ソフトキー (char=0x00) は
  * install 済テーブルの発行文字列に翻訳して 1 バイト目を返す。通常キーは文字コードをそのまま。 */
+/* ---- 標準入出力のリダイレクト (.bat の < > >> | 、2026-09-27) ----
+ * .bat の解釈器 (dos_batch.c) が外部プログラムを EXEC する直前に積み、シェルが次を問い合わせたとき
+ * (= その子が終わったとき) に外す。子の子にも効く (実 DOS でハンドルが継承されるのと同じ)。入れ子の
+ * シェル (COMSPEC /C) の中でさらにリダイレクトしても外側を壊さないよう積み上げ式にする。
+ * 標準入力 = ハンドル 0 の読み出しと AH=01/06/07/08/0A/0B/0C、標準出力 = ハンドル 1 の書き込みと
+ * AH=02/06/09 (入力のエコーも)。ハンドル 2 (stderr) と INT 29h・VRAM 直書きは実 DOS 同様に画面のまま。 */
+static int  dos_rel_to_host(const char *rel_in, char *out, size_t cap);   /* 後方定義 */
+static int  ci_ascii_equal(const char *a, const char *b);
+static void cstr_dos_rel(const char *s, char *rel, size_t cap);
+#define RD_DEPTH 4
+typedef struct {
+    char in_path[256], out_path[256];   /* host パス ("" = 差し替えなし) */
+    int  in_null, out_null;             /* NUL */
+    long in_pos;                        /* ステートセーブ用 (読み出し位置) */
+} rd_entry;
+static rd_entry g_rd[RD_DEPTH];
+static int      g_rd_n;
+static FILE    *g_rd_in, *g_rd_out;     /* 一番上の差し替えの実体 */
+
+static void rd_close_files(void) {
+    if (g_rd_in)  { fclose(g_rd_in);  g_rd_in = NULL; }
+    if (g_rd_out) { fclose(g_rd_out); g_rd_out = NULL; }
+}
+/* 一番上の差し替えを開き直す (append_new = 出力を作り直さず末尾から) */
+static int rd_open_top(int truncate_out, int keep_in_pos) {
+    rd_close_files();
+    if (!g_rd_n) return 0;
+    rd_entry *e = &g_rd[g_rd_n - 1];
+    if (e->in_path[0]) {
+        g_rd_in = fopen(e->in_path, "rb");
+        if (!g_rd_in) return -1;
+        if (keep_in_pos) fseek(g_rd_in, e->in_pos, SEEK_SET);
+    }
+    if (e->out_path[0]) {
+        g_rd_out = fopen(e->out_path, truncate_out ? "wb" : "ab");
+        if (!g_rd_out) return -2;
+    }
+    return 0;
+}
+static int rd_in_active(void)  { return g_rd_n && (g_rd[g_rd_n - 1].in_null || g_rd_in); }
+static int rd_out_active(void) { return g_rd_n && (g_rd[g_rd_n - 1].out_null || g_rd_out); }
+static int rd_getc(void) {                        /* -1 = EOF */
+    if (!g_rd_in) return -1;
+    int c = fgetc(g_rd_in);
+    return c == EOF ? -1 : c;
+}
+/* 標準出力への 1 文字 (差し替え中はファイルか NUL へ、そうでなければ画面) */
+static void std_putc(uint8_t c) {
+    if (g_rd_n && g_rd[g_rd_n - 1].out_null) return;
+    if (g_rd_out) { fputc(c, g_rd_out); return; }
+    tty_putc(c);
+}
+
+/* 差し替えを積む。in/out = DOS パス (NULL = 今のまま引き継ぐ)。"NUL" は捨てる/空。
+ * 0 = 成功 / -1 = 入力ファイルが無い / -2 = 出力を作れない / -3 = 積みすぎ */
+static int rd_is_nul(const char *p) {
+    const char *l = p;
+    for (const char *q = p; *q; q++) if (*q == '\\' || *q == ':' || *q == '/') l = q + 1;
+    return ci_ascii_equal(l, "NUL") || ci_ascii_equal(l, "NUL.");
+}
+int qb_dos_redirect_push(const char *in, const char *out, int append) {
+    if (g_rd_n >= RD_DEPTH) return -3;
+    rd_entry e;
+    memset(&e, 0, sizeof(e));
+    if (g_rd_n) {                                 /* 指定の無い側は外側を引き継ぐ */
+        rd_entry *o = &g_rd[g_rd_n - 1];
+        if (!in)  { snprintf(e.in_path, sizeof(e.in_path), "%s", o->in_path); e.in_null = o->in_null; e.in_pos = g_rd_in ? ftell(g_rd_in) : 0; }
+        if (!out) { snprintf(e.out_path, sizeof(e.out_path), "%s", o->out_path); e.out_null = o->out_null; }
+        if (g_rd_in) o->in_pos = ftell(g_rd_in);
+    }
+    char rel[192];
+    if (in) {
+        if (rd_is_nul(in)) e.in_null = 1;
+        else {
+            cstr_dos_rel(in, rel, sizeof(rel));
+            if (dos_rel_to_host(rel, e.in_path, sizeof(e.in_path)) != 0) return -1;
+        }
+    }
+    if (out) {
+        if (rd_is_nul(out)) e.out_null = 1;
+        else {
+            cstr_dos_rel(out, rel, sizeof(rel));
+            int st = dos_rel_to_host(rel, e.out_path, sizeof(e.out_path));
+            if (st == 2) return -2;
+            if (st == 1) {                        /* 新しいファイル名は大文字 (実 DOS と同じ) */
+                char *sl = strrchr(e.out_path, '/');
+                for (char *q = sl ? sl + 1 : e.out_path; *q; q++) *q = (char)toupper((unsigned char)*q);
+            }
+        }
+    }
+    g_rd[g_rd_n++] = e;
+    int r = rd_open_top(out && !append, !in);
+    if (r != 0) { g_rd_n--; rd_open_top(0, 1); return r; }
+    fprintf(stderr, "[redirect] push in=%s out=%s%s\n", e.in_null ? "NUL" : e.in_path[0] ? e.in_path : "-",
+            e.out_null ? "NUL" : e.out_path[0] ? e.out_path : "-", append ? " (追記)" : "");
+    return 0;
+}
+void qb_dos_redirect_pop(void) {
+    if (!g_rd_n) return;
+    rd_close_files();
+    g_rd_n--;
+    rd_open_top(0, 1);                            /* 外側を開き直す (出力は追記・入力は続きから) */
+}
+void qb_dos_redirect_reset(void) { rd_close_files(); g_rd_n = 0; }
+int  qb_dos_redirect_depth(void) { return g_rd_n; }
+/* ステートセーブ: 積んだ差し替え (パス・読み出し位置) を丸ごと渡す / 戻して開き直す */
+size_t qb_dos_redirect_state(void *buf, size_t cap) {
+    if (g_rd_n && g_rd_in) g_rd[g_rd_n - 1].in_pos = ftell(g_rd_in);
+    if (g_rd_out) fflush(g_rd_out);
+    size_t n = sizeof(g_rd) + sizeof(g_rd_n);
+    if (cap < n) return 0;
+    memcpy(buf, g_rd, sizeof(g_rd));
+    memcpy((char *)buf + sizeof(g_rd), &g_rd_n, sizeof(g_rd_n));
+    return n;
+}
+void qb_dos_redirect_restore(const void *buf, size_t n) {
+    rd_close_files();
+    if (n != sizeof(g_rd) + sizeof(g_rd_n)) { g_rd_n = 0; return; }
+    memcpy(g_rd, buf, sizeof(g_rd));
+    memcpy(&g_rd_n, (const char *)buf + sizeof(g_rd), sizeof(g_rd_n));
+    if (g_rd_n < 0 || g_rd_n > RD_DEPTH) g_rd_n = 0;
+    rd_open_top(0, 1);
+}
+
 static int dos_next_input_byte(void) {
+    if (rd_in_active()) { int c = rd_getc(); return c < 0 ? 0x1A : c; }   /* 標準入力がファイル (終わりは ^Z) */
     if (g_softkey_pos < g_softkey_len)
         return g_softkey_buf[g_softkey_pos++];
     inject_pump();                       /* 注入 FIFO→0x502 を補充してから読む (DOS 読みも 0x502 経由に一本化) */
@@ -1624,7 +1749,7 @@ static int find_next_match(void) {
 /* AH=02h: AL = 最後に出力した文字を返すのが実 DOS の契約 (SimK PC98RET PAGE1 で確認)。
  * TAB (09h) はスペース展開されるので AL=20h、他は DL がそのまま返る。 */
 static void int21_02_putchar(void) {
-    tty_putc(CPU_DL);
+    std_putc(CPU_DL);
     CPU_AL = (CPU_DL == 0x09) ? 0x20 : CPU_DL;
 }
 
@@ -1637,7 +1762,7 @@ static void int21_06_direct_io(void) {
         if (b < 0) { CPU_AL = 0; CPU_FLAG |= Z_FLAG; }
         else       { CPU_AL = (uint8_t)b; CPU_FLAG &= ~Z_FLAG; }
     } else {
-        tty_putc(CPU_DL);
+        std_putc(CPU_DL);
         CPU_AL = CPU_DL;
         CPU_FLAG &= ~Z_FLAG;
     }
@@ -1717,9 +1842,9 @@ static int dos_getch_block(void) {
 static void int21_01_getch_echo(void) {        /* 文字入力 (echo あり)。^C は INT 23h 発火 */
     int c = dos_getch_block();
     if (c < 0) return;
-    if (c == 0x03) { int23_raise(); return; }
+    if (c == 0x03 && !rd_in_active()) { int23_raise(); return; }
     CPU_AL = (uint8_t)c;
-    tty_putc((uint8_t)c);
+    std_putc((uint8_t)c);
 }
 
 static void int21_07_getch_raw(void) {         /* 文字入力 (echo 無し・Ctrl-C 無視 = 実 DOS 契約) */
@@ -1738,6 +1863,12 @@ static void int21_08_getch_noecho(void) {      /* 文字入力 (echo 無し)。^
 static void int21_0b_instat(void) {            /* 入力状態 (非ブロッキング kbhit) */
     /* 実 DOS は状態問い合わせでも次の文字が ^C なら消費して INT 23h を発火する。
      * コンソール入力を 0Bh ポーリングで待つプログラムを ^C で中断できる本流の経路。 */
+    if (rd_in_active()) {                      /* 標準入力がファイル: 終わりまで「ある」 */
+        int c = rd_getc();
+        if (c >= 0) ungetc(c, g_rd_in);
+        CPU_AL = c >= 0 ? 0xFF : 0x00;
+        return;
+    }
     if (kb_peek_char() == 0x03) { (void)dos_next_input_byte(); int23_raise(); return; }
     CPU_AL = kb_available() ? 0xFF : 0x00;
 }
@@ -1762,6 +1893,18 @@ static void int21_0a_buffered(void) {
     uint32_t buf = lin(CPU_DS, CPU_DX);
     uint8_t maxlen = peek8(buf);
     if (maxlen == 0) return;                   /* 受け入れ 0 = 即終了 */
+    if (rd_in_active()) {                      /* 標準入力がファイル: 1 行 (CR/LF まで) を読んでエコー */
+        uint8_t len = 0;
+        int c;
+        while ((c = rd_getc()) >= 0 && c != 0x0D && c != 0x0A && c != 0x1A) {
+            if ((int)len + 1 < (int)maxlen) { poke8(buf + 2 + len, (uint8_t)c); len++; std_putc((uint8_t)c); }
+        }
+        if (c == 0x0D) { int n = rd_getc(); if (n >= 0 && n != 0x0A) ungetc(n, g_rd_in); }
+        poke8(buf + 2 + len, 0x0D);
+        poke8(buf + 1, len);
+        std_putc(0x0D);
+        return;
+    }
 
     uint8_t len;
     if (g_la_active && g_la_buf == buf) {
@@ -1927,7 +2070,7 @@ static void int21_09_putstr(void) {
     for (int i = 0; i < 4096; i++) {
         uint8_t ch = peek8(base + i);
         if (ch == '$') return;
-        tty_putc(ch);
+        std_putc(ch);
     }
     fprintf(stderr, "[int21h/09] WARN: '$' 見つからず 4KB で打ち切り\n");
 }
@@ -2312,6 +2455,15 @@ static void int21_3f_read_stdin(uint32_t dst, uint16_t want) {
 
 static void int21_3f_read(void) {
     int h = (int)CPU_BX;
+    if (h == 0 && rd_in_active()) {            /* 標準入力がファイル (.bat の <): そのまま読む */
+        uint32_t dst = lin(CPU_DS, CPU_DX);
+        uint16_t n = 0;
+        int c;
+        while (n < CPU_CX && (c = rd_getc()) >= 0) poke8(dst + n++, (uint8_t)c);
+        CPU_AX = n;
+        CPU_FLAG &= ~C_FLAG;
+        return;
+    }
     if (h == 0) {                              /* STDIN = CON cooked 行入力 (AH=40h が h=1/2 を tty へ
                                                 * 分岐するのと対称。これが無いと AX=6 で getchar 等が全滅) */
         int21_3f_read_stdin(lin(CPU_DS, CPU_DX), CPU_CX);
@@ -2345,7 +2497,7 @@ static void int21_40_write(void) {
     /* handle 1/2 = stdout/stderr へは tty へ流す */
     if (h == 1 || h == 2) {
         uint32_t src = lin(CPU_DS, CPU_DX);
-        for (uint16_t i = 0; i < want; i++) tty_putc(peek8(src + i));
+        for (uint16_t i = 0; i < want; i++) { if (h == 1) std_putc(peek8(src + i)); else tty_putc(peek8(src + i)); }
         CPU_AX = want;
         CPU_FLAG &= ~C_FLAG;
         return;
@@ -2408,6 +2560,20 @@ static void int21_41_delete(void) {
 
 static void int21_42_seek(void) {
     int h = (int)CPU_BX;
+    /* .bat の < / > でファイルに向いている標準入出力は、そのファイルを動かす (LBMP.COM は標準入力を
+     * BMP として読んでみて違えば先頭へ戻してテキストとして読み直す) */
+    FILE *rf = (h == 0 && rd_in_active()) ? g_rd_in : (h == 1 && rd_out_active()) ? g_rd_out : NULL;
+    if (rf || ((h == 0 || h == 1) && g_rd_n)) {
+        if (!rf) { CPU_AX = 0; CPU_DX = 0; CPU_FLAG &= ~C_FLAG; return; }   /* NUL */
+        int32_t off = (int32_t)(((uint32_t)CPU_CX << 16) | CPU_DX);
+        int whence = CPU_AL == 1 ? SEEK_CUR : CPU_AL == 2 ? SEEK_END : SEEK_SET;
+        if (CPU_AL > 2 || fseek(rf, off, whence) != 0) { CPU_AX = 1; CPU_FLAG |= C_FLAG; return; }
+        long pos = ftell(rf);
+        CPU_AX = (uint16_t)(pos & 0xFFFF);
+        CPU_DX = (uint16_t)((pos >> 16) & 0xFFFF);
+        CPU_FLAG &= ~C_FLAG;
+        return;
+    }
     FILE *fp = fh_get(h);
     if (!fp) { CPU_AX = 6; CPU_FLAG |= C_FLAG; return; }
     /* CX:DX は符号付き 32-bit (DOS 標準) */
@@ -2491,6 +2657,9 @@ static void int21_44_ioctl(void) {
              * 0x80D3 は実機 CON の正規値なので faithful。検証 tools/dev_info_test.js。
              * bit5 (0x20)=raw/binary モードは AX=4401h で切り替わるので現在値を反映する。 */
             CPU_DX = (uint16_t)(0x80D3 | (g_con_raw ? 0x20 : 0));
+            /* .bat の < / > でファイルに向いている標準入出力は「ファイル」(bit7=0) と答える
+             * (isatty で入力元を切り替えるプログラムのため。NUL は char device のまま) */
+            if ((h == 0 && rd_in_active() && g_rd_in) || (h == 1 && rd_out_active() && g_rd_out)) CPU_DX = 0x0000;
         } else if (h == 3 || h == 4) {
             CPU_DX = 0x0080;            /* AUX/PRN: char device のみ */
         } else if (fh_get(h)) {

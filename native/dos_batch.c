@@ -38,6 +38,8 @@ extern uint8_t qb_dos_errorlevel(void);
 #define CTX_BAT     0             /* .bat ファイル */
 #define CTX_FOR     1             /* FOR が展開した行 (GOTO するとループを抜ける) */
 #define CTX_CMDLINE 2             /* COMSPEC /C で渡された 1 行 */
+#define CTX_PIPE    3             /* パイプ a | b を一時ファイル経由の行に書き換えたもの */
+#define RD_STATE_MAX 2400         /* dos_int21.c の差し替え状態 (ステートセーブ用の控え) */
 
 typedef struct {
     uint32_t off, len;            /* 本文 (プール内) */
@@ -56,6 +58,11 @@ static struct {
     int      pause_nl;            /* PAUSE のキー待ちから戻ったら改行する */
     char     start_dir[192];      /* 起動 .bat のディレクトリ (DOS パス) */
     uint16_t top_psp;             /* 最上位のシェル (Run が立てたもの) の PSP。0 = 最上位は .bat ではない */
+    int      rd_n;                /* EXEC のために積んだ標準入出力の差し替え */
+    uint16_t rd_owner[4];         /*  それぞれを積んだシェルの PSP (そのシェルが次を問い合わせたら外す) */
+    uint32_t pipe_seq;            /* パイプの一時ファイル番号 */
+    uint32_t rd_state_len;
+    uint8_t  rd_state[RD_STATE_MAX];   /* ステートセーブ時に dos_int21.c の差し替え状態を写す */
     int      nctx;
     bat_ctx  ctx[BAT_DEPTH];
     uint32_t pool_used;
@@ -64,7 +71,15 @@ static struct {
 
 /* ---- 小道具 ---- */
 static int sjis_lead(unsigned char c) { return (c >= 0x81 && c <= 0x9F) || (c >= 0xE0 && c <= 0xFC); }
-static void out_str(const char *s) { qb_dos_tty_write((const uint8_t *)s, (int)strlen(s)); }
+/* 内部コマンドの出力先: 画面か、> で指定されたファイル (NUL は捨てる) */
+static FILE *g_cmd_out;
+static int   g_cmd_out_null;
+static void out_bytes(const uint8_t *b, size_t n) {
+    if (g_cmd_out_null) return;
+    if (g_cmd_out) { fwrite(b, 1, n, g_cmd_out); return; }
+    qb_dos_tty_write(b, (int)n);
+}
+static void out_str(const char *s) { out_bytes((const uint8_t *)s, strlen(s)); }
 static void out_line(const char *s) { out_str(s); out_str("\r\n"); }
 static int ci_eq(const char *a, const char *b) {
     while (*a && *b) { if (toupper((unsigned char)*a) != toupper((unsigned char)*b)) return 0; a++; b++; }
@@ -406,7 +421,7 @@ static void cmd_type(const char *arg) {
         int eof = 0;
         while (!eof && (r = fread(buf, 1, sizeof(buf), fp)) > 0) {
             for (size_t k = 0; k < r; k++) if (buf[k] == 0x1A) { r = k; eof = 1; break; }   /* ^Z で止める */
-            qb_dos_tty_write(buf, (int)r);
+            out_bytes(buf, r);
         }
         fclose(fp);
     }
@@ -671,10 +686,86 @@ static void cmd_set_show(void) {
     for (size_t i = 0; i < len; ) { size_t l = strlen(e + i); if (l) out_line(e + i); i += l + 1; }
 }
 
+/* ---- リダイレクトとパイプ ----
+ * 行から < file・> file・>> file を取り出す (引用符の中と SJIS の 2 バイト目は見ない)。実 DOS と同じく
+ * 最後に書いたものが効く。取り出した後の行を out へ。 */
+typedef struct { char in[160], out[160]; int append, has_in, has_out; } redir_t;
+static void parse_redir(const char *line, char *out, size_t cap, redir_t *r) {
+    memset(r, 0, sizeof(*r));
+    size_t n = 0;
+    int q = 0;
+    for (const char *p = line; *p; ) {
+        unsigned char c = (unsigned char)*p;
+        if (sjis_lead(c) && p[1]) { if (n + 2 < cap) { out[n++] = p[0]; out[n++] = p[1]; } p += 2; continue; }
+        if (c == '"') q = !q;
+        if (!q && (c == '<' || c == '>')) {
+            int app = 0;
+            p++;
+            if (c == '>' && *p == '>') { app = 1; p++; }
+            while (*p == ' ' || *p == '\t') p++;
+            char f[160]; size_t fn = 0;
+            while (*p && *p != ' ' && *p != '\t' && *p != '<' && *p != '>' && *p != '|') {
+                if (sjis_lead((unsigned char)*p) && p[1]) { if (fn + 2 < sizeof(f)) { f[fn++] = p[0]; f[fn++] = p[1]; } p += 2; continue; }
+                if (fn + 1 < sizeof(f)) f[fn++] = *p;
+                p++;
+            }
+            f[fn] = '\0';
+            if (c == '<') { snprintf(r->in, sizeof(r->in), "%s", f); r->has_in = 1; }
+            else { snprintf(r->out, sizeof(r->out), "%s", f); r->has_out = 1; r->append = app; }
+            continue;
+        }
+        if (n + 1 < cap) out[n++] = (char)c;
+        p++;
+    }
+    out[n] = '\0';
+}
+/* 引用符の外の最初の | の位置 (無ければ NULL) */
+static const char *find_pipe(const char *line) {
+    int q = 0;
+    for (const char *p = line; *p; p++) {
+        if (sjis_lead((unsigned char)*p) && p[1]) { p++; continue; }
+        if (*p == '"') q = !q;
+        if (!q && *p == '|') return p;
+    }
+    return NULL;
+}
+/* a | b | c を「a >\QBPIPE1.$$$」「b <\QBPIPE1.$$$ >\QBPIPE2.$$$」「c <\QBPIPE2.$$$」と後始末の行に
+ * 書き換え、パイプの文脈として積む (実 DOS も一時ファイルで順に実行する)。行は展開済みなので % は二重に */
+static void push_pipeline(const char *line) {
+    static char text[BAT_LINE * 8];
+    size_t tn = 0;
+    const char *seg = line;
+    int k = 0;
+    uint32_t base = ++B.pipe_seq * 10;
+    #define TPUT(ch) do { if (tn + 1 < sizeof(text)) text[tn++] = (ch); } while (0)
+    for (;;) {
+        const char *bar = find_pipe(seg);
+        size_t len = bar ? (size_t)(bar - seg) : strlen(seg);
+        for (size_t i = 0; i < len; i++) { if (seg[i] == '%') TPUT('%'); TPUT(seg[i]); }
+        char tmp[64];
+        if (k > 0) { snprintf(tmp, sizeof(tmp), " <\\QBPIPE%u.$$$", (unsigned)(base + k - 1)); for (char *c = tmp; *c; c++) TPUT(*c); }
+        if (bar)   { snprintf(tmp, sizeof(tmp), " >\\QBPIPE%u.$$$", (unsigned)(base + k));     for (char *c = tmp; *c; c++) TPUT(*c); }
+        TPUT('\r'); TPUT('\n');
+        if (!bar) break;
+        seg = bar + 1; k++;
+    }
+    char tail[64];
+    snprintf(tail, sizeof(tail), "QB$PIPEDEL %u %d\r\n", (unsigned)base, k);
+    for (char *c = tail; *c; c++) TPUT(*c);
+    #undef TPUT
+    bat_ctx *x = top();
+    char args[BAT_ARGS][BAT_ARGLEN];
+    uint32_t na = x ? x->nargs : 0;
+    for (uint32_t i = 0; i < na; i++) memcpy(args[i], x->args[i], BAT_ARGLEN);
+    push_text(text, (uint32_t)tn, args, na, 0, CTX_PIPE, "pipe");
+}
+
 /* ---- 1 行を実行する ----
  * 戻り値 0 = 次の行へ / 1 = EXEC (path_out・tail_out を設定済み) / 3 = PAUSE / -1 = バッチ終了 (EXIT) */
 static char *g_path_out, *g_tail_out;
 static size_t g_pcap, g_tcap;
+static const redir_t *g_cur_redir;   /* いま実行中の行のリダイレクト */
+static uint16_t g_cur_psp;           /* いま問い合わせてきたシェル */
 
 static int exec_line(const char *line);
 
@@ -691,6 +782,13 @@ static int run_external(const char *word, const char *tail) {
         uint32_t n = split_args(tail, args, 1);
         if (push_bat(dos, args, n, 1) != 0) out_line("Bad command or file name");
         return 0;
+    }
+    if (g_cur_redir && (g_cur_redir->has_in || g_cur_redir->has_out)) {   /* 子の標準入出力を差し替える */
+        int rr = qb_dos_redirect_push(g_cur_redir->has_in ? g_cur_redir->in : NULL,
+                                      g_cur_redir->has_out ? g_cur_redir->out : NULL, g_cur_redir->append);
+        if (rr == -1) { out_line("File not found"); return 0; }
+        if (rr != 0) { out_line("File creation error"); return 0; }
+        if (B.rd_n < 4) B.rd_owner[B.rd_n++] = g_cur_psp;
     }
     snprintf(g_path_out, g_pcap, "%s", dos);
     size_t tl = strlen(tail); if (tl > 126) tl = 126;
@@ -757,7 +855,7 @@ static int do_if(const char *p) {
 }
 
 static int do_goto(const char *arg) {
-    while (top() && top()->kind == CTX_FOR) pop();           /* FOR の中の GOTO はループを抜ける */
+    while (top() && (top()->kind == CTX_FOR || top()->kind == CTX_PIPE)) pop();   /* FOR の中の GOTO はループを抜ける */
     bat_ctx *x = top();
     if (!x) return 0;
     char lbl[BAT_LINE];
@@ -831,6 +929,16 @@ static int exec_line(const char *line) {
         else if (!*arg) cmd_set_show();
         return 0;
     }
+    if (ci_eq(word, "QB$PIPEDEL")) {                          /* パイプの一時ファイルの後始末 (内部専用) */
+        unsigned base = 0; int k = 0;
+        sscanf(arg, "%u %d", &base, &k);
+        for (int i = 0; i <= k; i++) {
+            char dos[64], host[256];
+            snprintf(dos, sizeof(dos), "\\QBPIPE%u.$$$", base + (unsigned)i);
+            if (qb_dos_path_to_host(dos, host, sizeof(host)) == 0) remove(host);
+        }
+        return 0;
+    }
     if (ci_eq(word, "TYPE")) { cmd_type(arg); return 0; }
     if (ci_eq(word, "DEL") || ci_eq(word, "ERASE")) { cmd_del(arg); return 0; }
     if (ci_eq(word, "REN") || ci_eq(word, "RENAME")) { cmd_ren(arg); return 0; }
@@ -900,7 +1008,11 @@ static int exec_line(const char *line) {
 
 /* ---- 公開 ---- */
 int qb_batch_active(void) { return B.active; }
-void qb_batch_reset(void) { B.rt = 0; B.active = 0; B.nctx = 0; B.pool_used = 0; B.started = 0; B.pause_nl = 0; B.top_psp = 0; }
+void qb_batch_reset(void) {
+    B.rt = 0; B.active = 0; B.nctx = 0; B.pool_used = 0; B.started = 0; B.pause_nl = 0; B.top_psp = 0;
+    B.rd_n = 0; B.pipe_seq = 0;
+    qb_dos_redirect_reset();
+}
 int  qb_batch_rt(void) { return B.rt; }
 void qb_batch_set_scratch(uint16_t path_off, uint16_t tail_off) { B.rt = 1; B.scratch_path = path_off; B.scratch_tail = tail_off; }
 uint16_t qb_batch_scratch_path(void) { return B.scratch_path; }
@@ -946,7 +1058,9 @@ int qb_batch_next(uint16_t psp, char *path_out, size_t pcap, char *tail_out, siz
     if (B.nctx && B.ctx[B.nctx - 1].owner == 0) {             /* 積まれたばかりの文脈を引き取る */
         for (int i = B.nctx - 1; i >= 0 && B.ctx[i].owner == 0; i--) B.ctx[i].owner = psp;
     }
-    if (B.pause_nl) { out_str("\r\n"); B.pause_nl = 0; }
+    g_cur_psp = psp;
+    while (B.rd_n && B.rd_owner[B.rd_n - 1] == psp) { qb_dos_redirect_pop(); B.rd_n--; }   /* 子が終わった */
+    if (B.pause_nl) { qb_dos_tty_write((const uint8_t *)"\r\n", 2); B.pause_nl = 0; }
     for (int steps = 0; B.nctx > 0 && B.ctx[B.nctx - 1].owner == psp; steps++) {
         if (steps > BAT_STEP_LIMIT) {
             fprintf(stderr, "[batch] EXEC の無い行が続きすぎる (空回りのループ) — 終了します\n");
@@ -957,7 +1071,27 @@ int qb_batch_next(uint16_t psp, char *path_out, size_t pcap, char *tail_out, siz
         char raw[BAT_LINE], line[BAT_LINE];
         if (!fetch_line(x, raw, sizeof(raw))) { pop(); continue; }
         expand(x, raw, line, sizeof(line));
-        int r = exec_line(line);
+        if (find_pipe(line)) { push_pipeline(line); continue; }
+        char cmd[BAT_LINE];
+        redir_t rd;
+        parse_redir(line, cmd, sizeof(cmd), &rd);
+        /* 内部コマンドの出力先 (外部プログラムは run_external が差し替えを積む) */
+        if (rd.has_out) {
+            char host[256];
+            const char *l = rd.out;
+            for (const char *q = rd.out; *q; q++) if (*q == '\\' || *q == ':') l = q + 1;
+            if (ci_eq(l, "NUL")) g_cmd_out_null = 1;
+            else {
+                int st = qb_dos_path_to_host(rd.out, host, sizeof(host));
+                if (st == 1) { char *sl = strrchr(host, '/'); if (sl) upcase(sl + 1); }
+                if (st != 2) g_cmd_out = fopen(host, rd.append ? "ab" : "wb");
+            }
+        }
+        g_cur_redir = &rd;
+        int r = exec_line(cmd);
+        g_cur_redir = NULL;
+        if (g_cmd_out) { fclose(g_cmd_out); g_cmd_out = NULL; }
+        g_cmd_out_null = 0;
         if (r == 1 || r == 3) return r;
     }
     if (psp != B.top_psp) return 4;                          /* 入れ子のシェル (COMSPEC /C) は終わって親へ */
@@ -982,6 +1116,7 @@ int qb_batch_push_cmdline(const char *line) {
 #define BATR_VER 1u
 int qb_batch_state_save(qb_sw *w) {
     size_t mark = qb_sw_begin(w, "BATR", BATR_VER);
+    B.rd_state_len = (uint32_t)qb_dos_redirect_state(B.rd_state, sizeof(B.rd_state));
     qb_sw_var(w, B);
     qb_sw_end(w, mark);
     return w->err ? -1 : 0;
@@ -992,5 +1127,7 @@ int qb_batch_state_load(const uint8_t *blob, size_t n) {
     if (!qb_sr_section(blob, n, "BATR", &r, &ver)) { qb_batch_reset(); return 0; }
     if (ver != BATR_VER) return -71;
     qb_sr_var(&r, B);
-    return r.err ? -72 : 0;
+    if (r.err) return -72;
+    qb_dos_redirect_restore(B.rd_state, B.rd_state_len);
+    return 0;
 }

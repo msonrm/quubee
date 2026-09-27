@@ -57,6 +57,14 @@ void qb_dos_set_cwd_rel(const char *rel);
 int qb_dos_path_to_host(const char *dos, char *host, size_t cap);
 const char *qb_dos_cwd(void);
 int qb_dos_wildcard_match(const char *pat, const char *name);   /* FindFirst と同じ照合 (大小無視) */
+/* 標準入出力のリダイレクト (.bat の < > >>)。in/out = DOS パス (NULL = 引き継ぐ、"NUL" 可)。
+ * 0 = 成功 / -1 入力が無い / -2 出力を作れない / -3 積みすぎ */
+int    qb_dos_redirect_push(const char *in, const char *out, int append);
+void   qb_dos_redirect_pop(void);
+void   qb_dos_redirect_reset(void);
+int    qb_dos_redirect_depth(void);
+size_t qb_dos_redirect_state(void *buf, size_t cap);        /* ステートセーブ */
+void   qb_dos_redirect_restore(const void *buf, size_t n);
 
 /* 仮想 30行BIOS (qbDebug.lines30 / np2kai_set_lines30) のオン/オフ。ON のとき次の Run
  * (loader-start) で 640×480・30 行表示 + 30BIOS-API が有効になる。既定 0 = ゼロ回帰。

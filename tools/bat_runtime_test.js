@@ -106,6 +106,48 @@ const ls = (m, d = '') => m.M.FS.readdir('/run/' + d).filter((n) => n !== '.' &&
     chk(t.includes('IN-GAMEDIR'), '.bat の置き場所がカレント');
     chk(t.includes('PATH-OK'), 'PATH のディレクトリから探す');
 
+    console.log('[7] リダイレクト < > >> NUL とパイプ |');
+    // UPPER.COM: 標準入力 (AH=3Fh handle 0) を 1 バイトずつ読み、英小文字を大文字にして標準出力 (AH=40h handle 1) へ
+    const UPPER = Buffer.from('b43f31dbb90100ba3401cd2185c0741fa034013c6172093c7a77052c20a23401b440bb0100b90100ba3401cd21ebd1b8004ccd2100', 'hex');
+    m = await run({
+        'T.BAT': '@echo off\necho HELLO>OUT.TXT\necho MORE >> OUT.TXT\ntype OUT.TXT > COPY.TXT\n' +
+                 'UPPER < IN.TXT > UP.TXT\ntype IN.TXT | UPPER > PIPED.TXT\ntype IN.TXT | UPPER | UPPER > PIPE2.TXT\n' +
+                 'echo HIDDEN > NUL\npause > nul\necho REDIR-DONE\n',
+        'IN.TXT': 'abc xyz\n', 'UPPER.COM': UPPER,
+    }, 'T.BAT', 200);
+    chk(read(m, 'OUT.TXT') === 'HELLO\r\nMORE \r\n', `echo > と >> (${JSON.stringify(read(m, 'OUT.TXT'))})`);
+    chk(read(m, 'COPY.TXT') === read(m, 'OUT.TXT'), 'TYPE の出力を > でファイルへ');
+    chk(read(m, 'UP.TXT') === 'ABC XYZ\r\n', `外部プログラムの < と > (${JSON.stringify(read(m, 'UP.TXT'))})`);
+    chk(read(m, 'PIPED.TXT') === 'ABC XYZ\r\n', `パイプ (${JSON.stringify(read(m, 'PIPED.TXT'))})`);
+    chk(read(m, 'PIPE2.TXT') === 'ABC XYZ\r\n', '3 段のパイプ');
+    chk(!ls(m).some((n) => /^QBPIPE/i.test(n)), 'パイプの一時ファイルを消す');
+    t = screen(m);
+    chk(!t.includes('HIDDEN') && !t.includes('Press any key'), '> NUL は捨てる (PAUSE の案内も)');
+    chk(!t.includes('REDIR-DONE'), 'PAUSE > NUL でもキーは待つ');
+    m.M.ccall('np2kai_key_down', null, ['number', 'number'], [m.h, 0x34]); m.runFrames(3);
+    m.M.ccall('np2kai_key_up', null, ['number', 'number'], [m.h, 0x34]); m.runFrames(30);
+    chk(screen(m).includes('REDIR-DONE'), 'キーで続く');
+
+    // 実物: life98 (ライフゲーム) の起動 .bat は LBMP.COM <パターン / RANDOM.COM | LBMP.COM で初期配置を読む。
+    // LBMP は標準入力を BMP として読んでみて、違えば AH=42h で先頭へ戻してテキストとして読み直す。
+    // 旧方式は < や | をそのまま引数に渡していて「Read Error」だった。書庫が無ければ飛ばす
+    const LIFE = path.join(__dirname, '..', 'games', 'mem_test', 'life98.lzh');
+    if (fs.existsSync(LIFE)) {
+        console.log('[8] life98 (< と | で初期配置を読む)');
+        const d = fs.mkdtempSync(path.join(os.tmpdir(), 'life98_'));
+        require('child_process').spawnSync('lha', ['xw=' + d, LIFE], { stdio: 'ignore' });
+        for (const b of ['fpent.bat', 'rnd.bat']) {
+            const lm = await Machine.boot({ dir: d, bat: b });
+            lm.runFrames(600);
+            const row0 = lm.textVram()[0].trim();
+            const fb = lm.M.ccall('np2kai_get_framebuffer', 'number', ['number', 'number', 'number', 'number'], [lm.h, lm._wP, lm._hP, lm._bP]);
+            const w = lm.M.HEAP32[lm._wP >> 2], h = lm.M.HEAP32[lm._hP >> 2];
+            let lit = 0;
+            for (let i = 0; i < w * h; i++) if (lm.M.HEAPU16[(fb >> 1) + i]) lit++;
+            chk(row0 !== 'Read Error' && lit > 20, `${b}: 初期配置を読んでライフゲームが進む (row0="${row0}"・点灯 ${lit})`);
+        }
+    }
+
     console.log(`\nbat_runtime_test: pass=${pass} fail=${fail}`);
     process.exit(fail ? 1 : 0);
 })().catch((e) => { console.error(e); process.exit(1); });
