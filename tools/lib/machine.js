@@ -461,12 +461,22 @@ class Machine {
         const h = M.ccall('np2kai_create', 'number', [], []);
         try { M.FS.mkdir('/run'); } catch (_) {}
 
+        // サブディレクトリも写す。names はブラウザと同じく /run からの相対パス ("SUB/FILE.DAT")。
+        // ホスト側のパスは Buffer のまま結合する (SJIS の名前を UTF-8 と解釈して壊さない)
         const names = [];
-        for (const nb of fs.readdirSync(o.dir, { encoding: 'buffer' })) {
-            const name = nb.toString('latin1');
-            M.FS.writeFile('/run/' + name, new Uint8Array(fs.readFileSync(Buffer.concat([Buffer.from(o.dir + '/'), nb]))));
-            names.push(name);
-        }
+        (function copyDir(hostDir, rel) {
+            for (const nb of fs.readdirSync(hostDir, { encoding: 'buffer' })) {
+                const name = nb.toString('latin1');
+                const host = Buffer.concat([hostDir, Buffer.from('/'), nb]);
+                if (fs.statSync(host).isDirectory()) {
+                    try { M.FS.mkdir('/run/' + rel + name); } catch (_) {}
+                    copyDir(host, rel + name + '/');
+                    continue;
+                }
+                M.FS.writeFile('/run/' + rel + name, new Uint8Array(fs.readFileSync(host)));
+                names.push(rel + name);
+            }
+        })(Buffer.from(o.dir), '');
         const batName = o.bat || names.find((n) => /\.bat$/i.test(n));
         if (!batName) throw new Error('.bat が見つからない (bat: を指定してください)');
         const bat = require(path.join(WEB, 'player', 'batscript.js'));
