@@ -128,6 +128,15 @@ const ls = (m, d = '') => m.M.FS.readdir('/run/' + d).filter((n) => n !== '.' &&
     m.M.ccall('np2kai_key_up', null, ['number', 'number'], [m.h, 0x34]); m.runFrames(30);
     chk(screen(m).includes('REDIR-DONE'), 'キーで続く');
 
+    console.log('[9] AH=57h (開いたファイルの日時の取得・設定)');
+    // FT.COM: DATA.TXT を開いて AH=57h AL=00 で日時を取り (日付が 0 でなければ)、AL=01 で 2000-01-01 12:34:56 に設定
+    const FT = Buffer.from('b8023dba3201cd21722389c3b80057cd21721a85d27416b80157b95c64ba2128cd217209b43ecd21b8014ccd21b8024ccd21444154412e54585400', 'hex');
+    m = await run({ 'T.BAT': '@echo off\nFT\nif errorlevel 2 echo FT-NG\nif not errorlevel 2 echo FT-OK\n', 'FT.COM': FT, 'DATA.TXT': 'x' }, 'T.BAT');
+    const mt = new Date(m.M.FS.stat('/run/DATA.TXT').mtime);
+    chk(screen(m).includes('FT-OK'), 'AH=57h AL=00 が日時を返す');
+    chk(mt.getFullYear() === 2000 && mt.getMonth() === 0 && mt.getDate() === 1 && mt.getHours() === 12 && mt.getMinutes() === 34,
+        `AH=57h AL=01 で日時を設定 (${mt.toString()})`);
+
     // 実物: life98 (ライフゲーム) の起動 .bat は LBMP.COM <パターン / RANDOM.COM | LBMP.COM で初期配置を読む。
     // LBMP は標準入力を BMP として読んでみて、違えば AH=42h で先頭へ戻してテキストとして読み直す。
     // 旧方式は < や | をそのまま引数に渡していて「Read Error」だった。書庫が無ければ飛ばす

@@ -56,6 +56,7 @@
 #include <dirent.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <utime.h>
 #include <sys/time.h>
 #include <time.h>
 
@@ -1637,6 +1638,31 @@ int qb_dos_wildcard_match(const char *pat, const char *name) { return dos_wildca
 
 /* DTA に find 結果を書く。filename は "8.3" + 末尾 NUL を 13 byte 領域に詰める。
  * mtime は FAT date/time に変換 (0 なら 0 のまま)。is_dir なら attr = 0x10。 */
+/* time_t ⇔ FAT の日付・時刻 (FindFirst の DTA と AH=57h で共用)。mtime 0 は 0/0 */
+static void fat_from_time(time_t mtime, uint16_t *ftime, uint16_t *fdate) {
+    *ftime = 0; *fdate = 0;
+    if (mtime == 0) return;
+    struct tm *tm = localtime(&mtime);
+    if (!tm) return;
+    *ftime = (uint16_t)(((tm->tm_hour & 0x1F) << 11) | ((tm->tm_min & 0x3F) << 5) | ((tm->tm_sec / 2) & 0x1F));
+    int yr = tm->tm_year + 1900 - 1980;
+    if (yr < 0)   yr = 0;
+    if (yr > 127) yr = 127;
+    *fdate = (uint16_t)(((yr & 0x7F) << 9) | (((tm->tm_mon + 1) & 0x0F) << 5) | (tm->tm_mday & 0x1F));
+}
+static time_t time_from_fat(uint16_t ftime, uint16_t fdate) {
+    struct tm tm;
+    memset(&tm, 0, sizeof(tm));
+    tm.tm_year = ((fdate >> 9) & 0x7F) + 80;
+    tm.tm_mon  = ((fdate >> 5) & 0x0F) - 1;
+    tm.tm_mday = fdate & 0x1F;
+    tm.tm_hour = (ftime >> 11) & 0x1F;
+    tm.tm_min  = (ftime >> 5) & 0x3F;
+    tm.tm_sec  = (ftime & 0x1F) * 2;
+    tm.tm_isdst = -1;
+    return mktime(&tm);
+}
+
 static void dta_write_find(const char *fname, long fsize, time_t mtime, int is_dir) {
     /* DTA レイアウト (DOS 標準):
      *  +0x00..0x14 : reserved (search state) — 触らない
@@ -1648,20 +1674,7 @@ static void dta_write_find(const char *fname, long fsize, time_t mtime, int is_d
     poke8(g_dta_linear + 0x15, (uint8_t)(is_dir ? 0x10 : 0x20));
 
     uint16_t fat_time = 0, fat_date = 0;
-    if (mtime != 0) {
-        struct tm *tm = localtime(&mtime);
-        if (tm) {
-            fat_time = (uint16_t)(((tm->tm_hour & 0x1F) << 11)
-                                | ((tm->tm_min  & 0x3F) << 5)
-                                | ((tm->tm_sec / 2) & 0x1F));
-            int yr = tm->tm_year + 1900 - 1980;
-            if (yr < 0)   yr = 0;
-            if (yr > 127) yr = 127;
-            fat_date = (uint16_t)(((yr & 0x7F) << 9)
-                                | (((tm->tm_mon + 1) & 0x0F) << 5)
-                                | (tm->tm_mday & 0x1F));
-        }
-    }
+    fat_from_time(mtime, &fat_time, &fat_date);
     poke16(g_dta_linear + 0x16, fat_time);
     poke16(g_dta_linear + 0x18, fat_date);
     poke32(g_dta_linear + 0x1A, (uint32_t)fsize);
@@ -2556,6 +2569,35 @@ static void int21_41_delete(void) {
         return;
     }
     CPU_FLAG &= ~C_FLAG;
+}
+
+/* AH=57h: 開いたファイルの日付・時刻。AL=00 取得 (CX=時刻 DX=日付) / AL=01 設定。
+ * 標準ハンドル (0〜4 = 装置) は 0 を返して成功にする。2026-09-27 の互換集計で PMD 4.8o の
+ * PMD48O.COM と FDCUST2.COM が呼んでいた唯一の未対応 AH。 */
+static void int21_57_filetime(void) {
+    int h = (int)CPU_BX;
+    if (h >= 0 && h < DOS_HANDLE_USER_BASE) {
+        if (CPU_AL == 0x00) { CPU_CX = 0; CPU_DX = 0; }
+        CPU_FLAG &= ~C_FLAG;
+        return;
+    }
+    if (h < 0 || h >= DOS_HANDLE_MAX || !g_fh[h].used) { CPU_AX = 6; CPU_FLAG |= C_FLAG; return; }
+    if (CPU_AL == 0x00) {
+        struct stat st;
+        uint16_t t = 0, d = 0;
+        fflush(g_fh[h].fp);
+        if (stat(g_fh[h].path, &st) == 0) fat_from_time(st.st_mtime, &t, &d);
+        CPU_CX = t; CPU_DX = d;
+        CPU_FLAG &= ~C_FLAG;
+    } else if (CPU_AL == 0x01) {
+        struct utimbuf ub;
+        fflush(g_fh[h].fp);
+        ub.actime = ub.modtime = time_from_fat(CPU_CX, CPU_DX);
+        utime(g_fh[h].path, &ub);
+        CPU_FLAG &= ~C_FLAG;
+    } else {
+        CPU_AX = 1; CPU_FLAG |= C_FLAG;
+    }
 }
 
 static void int21_42_seek(void) {
@@ -3531,6 +3573,7 @@ void qb_dos_int21_dispatch(void) {
     case 0x50: int21_50_set_psp();   break;
     case 0x51: int21_51_get_psp();   break;
     case 0x52: int21_52_list_of_lists(); break;
+    case 0x57: int21_57_filetime(); break;
     case 0x58: int21_58_alloc_strategy(); break;
     case 0x60: int21_60_truename();  break;
     case 0x62: int21_51_get_psp();   break;   /* 62h = 51h の documented 版 */
