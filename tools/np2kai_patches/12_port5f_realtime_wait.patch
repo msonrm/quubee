@@ -1,0 +1,19 @@
+diff --git a/io/artic.c b/io/artic.c
+index 978e846..c58a642 100755
+--- a/io/artic.c
++++ b/io/artic.c
+@@ -55,7 +55,13 @@ static void IOOUTCALL artic_o5f(UINT port, REG8 dat) {
+ 
+ 	(void)port;
+ 	(void)dat;
+-	CPU_REMCLOCK -= 20;
++	/* QuuBee patch 12: ポート 5Fh への書き込みは実機ではウェイト (約 0.6us) に I/O サイクルが加わり、CPU の速さに
++	 * 関係なく実時間で約 1.3us かかる。本家の固定 20 クロックは倍率を上げるほど実時間で短くなり、5Fh のループ回数で
++	 * 待ち時間を作るソフトの制限時間が縮む。実例: 東方封魔録の MMD 2.2f は MPU の割り込みを 5Fh x 4000 回で待ち
++	 * (Clock to Host の 5ms 周期に対し実機で約 5ms)、固定 20 クロックでは倍率 22 前後から INT2 の判定に失敗して
++	 * MIDI が鳴らなかった (Mate-X 構成。ちびおと構成は IRQ 12 に偶然便乗していた)。値は実機の実測ではなく、MMD が
++	 * 求める 1.25us 以上を満たす妥当な値として選んだ。実時間に揃えるので倍率によらず一定 */
++	CPU_REMCLOCK -= (SINT32)(pccore.realclock / 770000);
+ }
+ 
+ static REG8 IOINPCALL artic_i5c(UINT port) {

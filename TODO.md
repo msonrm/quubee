@@ -14,7 +14,8 @@
   `licenses/` にも CREDITS にも無い (既存の穴。今回は包括ライセンス = NP2 developer team BSD の全文だけ
   CREDITS に追加)。バイナリ再配布条項を厳密に満たすなら同梱する
 - [ ] 本家の新オプション `USE_CPU_BULKREP` (REP 系の一括処理と思われる) の評価 — 挙動が変わりうるので未採用
-- [ ] **TH02 の MIDI(MPU) が Mate-X PCM (0x64) × multiple 27 で鳴らない** (2026-09-27 ユーザー報告、
+- [x] **TH02 の MIDI(MPU) が Mate-X PCM (0x64) × multiple 27 で鳴らない** → 2026-09-27 解決 (patch 12 = ポート 5Fh を実時間に。
+  MMD の INT 自動判定の待ちが倍率で縮んでいた。ブラウザで倍率によらず鳴ることを確認。回帰 tools/th02_midi_test.js)。以下は当初の記録: (2026-09-27 ユーザー報告、
   headless 再現 = `node tools/th02_midi_probe.js`)。表示は MIDI のまま無音。ちびおと (0x14) なら 27 でも
   鳴り、Mate-X でも 20 なら鳴る。**追従前の旧ビルドでも同じ = 退行ではない** (Mate-X 既定化 07-09 と
   倍率 27 化 07-11 の組み合わせで最初から鳴っていなかった公算)。MPU へ直接 note-on する極小 COM

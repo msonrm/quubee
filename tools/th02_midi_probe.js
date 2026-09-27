@@ -2,11 +2,11 @@
 // th02_midi_probe.js — 東方封魔録 (TH02 体験版) の MIDI(MPU) モードが鳴るかを、音源ボード × クロック倍率で
 // 調べる調査スクリプト (回帰テストではない。既知の未解決事象の再現用)。
 //
-// 事象 (2026-09-27 ユーザー報告・headless で再現): Sound Board = Mate-X PCM (0x64) かつ multiple=27
-// (ブラウザ既定) だと、オプションで MUSIC=MIDI にしても MIDI が鳴らない (表示は MIDI のまま)。
-// ちびおと (0x14) なら 27 でも鳴り、Mate-X でも 20 (headless 既定) なら鳴る。NP2kai 追従前の
-// 旧ビルド (eebb95c0) でも同じ = 追従による退行ではない。MPU に note-on を直接送る極小 COM
-// (mpu_midi_test.js) は全組み合わせで鳴る = MMD の使い方の側でつまずいている。原因は未調査。
+// 事象 (2026-09-27 ユーザー報告・解決済み): Sound Board = Mate-X PCM (0x64) で倍率を上げると (headless では
+// 22 前後、ブラウザでは 25 から) MUSIC=MIDI にしても MIDI が鳴らなかった。原因 = MMD 2.2f の INT 自動判定が
+// Clock to Host の割り込みを「ポート 5Fh への書き込み x 4000 回」の間だけ待ち、NP2kai の 5Fh が固定 20 クロック
+// だったため倍率を上げるほど待ちが実時間で短くなって INT2 の判定に失敗 (ちびおと構成は INT5 = IRQ 12 に偶然
+// 便乗して鳴っていた)。patch 12 (5Fh を実時間 約 1.3us) で解消。回帰 = tools/th02_midi_test.js
 //
 // 手順: game.bat を MIDI 有効で起動 → タイトルで OPTION → MUSIC を右キーで MIDI に → FM/SSG/
 // リズム/ADPCM を消音して 8 秒汲む。MIDI (TinySoundFont) だけの音量を見る。
