@@ -1,5 +1,21 @@
 # CHANGELOG
 
+## [INT 21h の追加 (PC98PLAYER との突き合わせ): 56h・5Ah/5Bh・1Bh/1Ch・54h/2Eh・66h・67h・68h/6Ah] — 2026-10-02
+
+- **発端**: PC98PLAYER 260930 版のソース (MIT) と比べ、QuuBee に無い INT 21h のうち実害の出うるものを選んだ。
+  需要は先に `tools/compat_survey.js` で測った (80 書庫 125 対象): **INT 21h の未対応は 0 件** (AH=57h は前回実装済み)・
+  EMS 0・NUL/DUP2 0。浅い計測 (無入力で数回進めるだけ) なので「呼ばれた実績はない」止まり。実装は需要待ちにせず、
+  安価で実害が読めるものだけ入れた (保険)。FCB 系 (13h〜17h・24h・27h・28h) は需要待ちのまま。
+- **56h Rename** (一時ファイルに書いて名前を変える保存型): 新名が既にあれば 5 / 旧名が無ければ 2 / 新名の親が無ければ 3。
+  **5Ah** 一時ファイル (DS:DX のバッファを「ディレクトリ + QBnnnnnn」へ書き直す) / **5Bh** 排他作成 (既にあれば 80)。
+  **1Bh/1Ch** ドライブ情報 (AL=8・CX=512・DX=7FFFh・DS:BX=メディア ID F8h) は AH=36h と同じ定数を共有 (食い違うと空き容量判定が矛盾する)。
+  **54h/2Eh** ベリファイ フラグ (覚えるだけ) / **66h** コードページ (932 固定。932 以外への設定は失敗) /
+  **67h** ハンドル数 (DOS_HANDLE_MAX=32 以内だけ成功・超えたら 4 = 嘘の成功にしない) / **68h・6Ah** コミット (実際に fflush)。
+- 見送り: **AH=1Fh/32h の合成 DPB** (PC98PLAYER は返すが、QuuBee は A: を意図してリモートドライブ扱い = DPB なし。FD ファイラ Ver.3.13 のため)・
+  **空き容量の設定 knob** (QuuBee の AH=36h は元から固定値で、ホストの容量は見せない。困るタイトルが出るまで保留)・
+  5Ch/5Dh〜5Fh (PC98PLAYER も 5Dh〜5Fh はエラー)。
+- 回帰 = 新設 `tools/dos_misc_calls_test.js` (23 項目。ソース `tools/dos_misc_calls/misc.asm`)。
+
 ## [INT 21h AH=6Ch・59h・65h (Issue #6 の前半) + 純正 COMMAND.COM 流リダイレクトの需要計測] — 2026-09-27
 
 - GitHub Issue #6 (純正 MS-DOS 6.2 の COMMAND.COM で `type` が失敗し "Extended Error 1") の前半。

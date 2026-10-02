@@ -1316,6 +1316,9 @@ static int fs_mkdir(const char *path) {
 static int fs_rmdir(const char *path) {
     char u[520]; fs_path_utf8(path, u, sizeof(u)); return rmdir(u);
 }
+static int fs_rename(const char *from, const char *to) {
+    char a[520], b[520]; fs_path_utf8(from, a, sizeof(a)); fs_path_utf8(to, b, sizeof(b)); return rename(a, b);
+}
 
 /* dir 内に name と大小無視で一致する実在エントリがあれば found に実在名を書いて 1。
  * 無ければ (dir が開けない場合含む) 0 を返し found は触らない。
@@ -2629,6 +2632,100 @@ static void int21_41_delete(void) {
     CPU_FLAG &= ~C_FLAG;
 }
 
+/* AH=56h Rename。DS:DX = 旧名、ES:DI = 新名。新名が既にあれば 5 (access denied)、旧名が無ければ
+ * 2 / 途中ディレクトリが無ければ 3。ディレクトリの改名も rename(2) に任せる。開いているハンドルの
+ * パスは更新しない (MEMFS ではファイル実体に追従する)。一時ファイルに書いてから名前を変えて
+ * 保存する型のソフトが使う。 */
+static void int21_56_rename(void) {
+    char from[256], to[256];
+    int sf = dos_path_to_host(CPU_DS, CPU_DX, from, sizeof(from));
+    int stt = dos_path_to_host(CPU_ES, CPU_DI, to, sizeof(to));
+    if (sf != 0) { CPU_AX = (sf == 2) ? 3 : 2; CPU_FLAG |= C_FLAG; return; }
+    if (stt == 2) { CPU_AX = 3; CPU_FLAG |= C_FLAG; return; }
+    if (stt == 0) {
+        /* 同じファイルへの改名 (大小だけ違う等) は許す。別のものが居れば access denied */
+        struct stat a, b;
+        if (!(fs_stat(from, &a) == 0 && fs_stat(to, &b) == 0 && a.st_ino == b.st_ino && a.st_dev == b.st_dev)) {
+            CPU_AX = 5; CPU_FLAG |= C_FLAG; return;
+        }
+    }
+    if (fs_rename(from, to) != 0) {
+        fprintf(stderr, "[int21h/56] rename(%s -> %s) failed\n", from, to);
+        CPU_AX = 5; CPU_FLAG |= C_FLAG; return;
+    }
+    fprintf(stderr, "[int21h/56] rename %s -> %s\n", from, to);
+    CPU_FLAG &= ~C_FLAG;
+}
+
+/* AH=5Bh 排他的に新規作成。3Ch と同じだが、既にあれば 80 (file exists) で失敗する。 */
+static void int21_5b_create_new(void) {
+    char host[256];
+    int st = dos_path_to_host(CPU_DS, CPU_DX, host, sizeof(host));
+    if (st == 0) {
+        struct stat sb;
+        if (fs_stat(host, &sb) == 0) { CPU_AX = S_ISDIR(sb.st_mode) ? 5 : 0x50; CPU_FLAG |= C_FLAG; return; }
+    }
+    int21_3c_create();
+}
+
+/* AH=5Ah 一時ファイルの作成。DS:DX = 末尾が '\' のディレクトリ (ASCIIZ。空ならカレント)。そこに
+ * 8 桁の英数字の名前で新規作成して AX = ハンドル、DS:DX のバッファを「ディレクトリ + 名前」の
+ * ASCIIZ に書き直す (呼び手は消すときにこの名前を使う。バッファは 13 バイトの余白がある前提 = DOS の約束)。 */
+static void int21_5a_create_temp(void) {
+    static uint32_t seq;
+    char dir[128];
+    uint32_t la = lin(CPU_DS, CPU_DX);
+    size_t n = 0;
+    while (n < sizeof(dir) - 1) {
+        uint8_t c = peek8(la + (uint32_t)n);
+        if (!c) break;
+        dir[n++] = (char)c;
+    }
+    dir[n] = 0;
+    for (int tries = 0; tries < 1000; tries++) {
+        char nm[160], host[256];
+        snprintf(nm, sizeof(nm), "%sQB%06X", dir, (unsigned)((seq++) & 0xFFFFFF));
+        uint32_t k = 0;
+        for (; nm[k]; k++) poke8(la + k, (uint8_t)nm[k]);
+        poke8(la + k, 0);
+        int st = dos_path_to_host(CPU_DS, CPU_DX, host, sizeof(host));
+        if (st == 2) { CPU_AX = 3; CPU_FLAG |= C_FLAG; return; }
+        if (st == 0) continue;   /* 偶然ある名前は避ける */
+        int21_3c_create();
+        return;
+    }
+    CPU_AX = 5; CPU_FLAG |= C_FLAG;
+}
+
+/* AH=54h / 2Eh ベリファイ フラグ (書き込み後の検証)。値を覚えるだけで検証はしない (ホストの
+ * ファイルは検証済みの書き込みと同じ)。54h は現在値を AL に、2Eh は AL の bit0 を設定する。 */
+static uint8_t g_verify_flag;
+
+/* AH=66h グローバル コードページ。AL=01 取得 (BX = 現在, DX = 既定) / AL=02 設定。QuuBee は
+ * 932 (日本語) 固定なので、932 への設定だけ成功し、それ以外は正直に失敗する (AH=65h と同じ値)。 */
+static void int21_66_codepage(void) {
+    if (CPU_AL == 0x01) { CPU_BX = 932; CPU_DX = 932; CPU_FLAG &= ~C_FLAG; return; }
+    if (CPU_AL == 0x02 && CPU_BX == 932) { CPU_FLAG &= ~C_FLAG; return; }
+    CPU_AX = (CPU_AL == 0x02) ? 0x0002 : 0x0001;   /* 未知のコードページ = file not found / 未知の AL = invalid function */
+    CPU_FLAG |= C_FLAG;
+}
+
+/* AH=67h ハンドル数の上限設定 (DOS 3.3+)。QuuBee の ハンドル表は DOS_HANDLE_MAX 本固定なので、
+ * それ以内の要求だけ成功し、超えたら 4 (too many open files) で正直に失敗する。 */
+static void int21_67_set_handles(void) {
+    if (CPU_BX > DOS_HANDLE_MAX) { CPU_AX = 4; CPU_FLAG |= C_FLAG; return; }
+    CPU_FLAG &= ~C_FLAG;
+}
+
+/* AH=68h / 6Ah コミット (ファイルバッファのフラッシュ)。実際に fflush する。標準ハンドルは何もしない。 */
+static void int21_68_commit(void) {
+    int h = (int)CPU_BX;
+    if (h >= 0 && h < DOS_HANDLE_USER_BASE) { CPU_FLAG &= ~C_FLAG; return; }
+    if (h < 0 || h >= DOS_HANDLE_MAX || !g_fh[h].used || !g_fh[h].fp) { CPU_AX = 6; CPU_FLAG |= C_FLAG; return; }
+    fflush(g_fh[h].fp);
+    CPU_FLAG &= ~C_FLAG;
+}
+
 /* AH=57h: 開いたファイルの日付・時刻。AL=00 取得 (CX=時刻 DX=日付) / AL=01 設定。
  * 標準ハンドル (0〜4 = 装置) は 0 を返して成功にする。2026-09-27 の互換集計で PMD 4.8o の
  * PMD48O.COM と FDCUST2.COM が呼んでいた唯一の未対応 AH。 */
@@ -3182,12 +3279,31 @@ static void int21_4f_findnext(void) {
  *   AX = sectors/cluster, BX = available clusters, CX = bytes/sector, DX = total clusters
  * 無効ドライブは AX=0xFFFF だが、単一ドライブなので常に有効扱い。
  * 512 B/sec × 8 sec/clus (=4KB) × 16384 free = 64MB 空き (free<total、32-bit に収まる)。 */
+#define QB_DISK_SPC        8        /* sectors per cluster */
+#define QB_DISK_BPS        512      /* bytes per sector */
+#define QB_DISK_FREE_CLU   0x4000   /* 空き 16384 クラスタ = 64MB */
+#define QB_DISK_TOTAL_CLU  0x7FFF   /* 全体 32767 クラスタ = 約 128MB */
+#define QB_DISK_MEDIA_PTR  0x0ED0u  /* AH=1Bh/1Ch が DS:BX で指すメディア ID のバイト (linear。NLS 表 0xD00〜0xEC7 の上・環境 MCB 0xEF0 の下) */
+#define QB_DISK_MEDIA_ID   0xF8     /* 固定ディスク */
 static void int21_36_freespace(void) {
-    CPU_AX = 8;          /* sectors per cluster */
-    CPU_CX = 512;        /* bytes per sector */
-    CPU_BX = 0x4000;     /* available clusters = 16384 → 64MB free */
-    CPU_DX = 0x7FFF;     /* total clusters     = 32767 → ~128MB */
+    CPU_AX = QB_DISK_SPC;
+    CPU_CX = QB_DISK_BPS;
+    CPU_BX = QB_DISK_FREE_CLU;
+    CPU_DX = QB_DISK_TOTAL_CLU;
     CPU_FLAG &= ~C_FLAG;
+}
+
+/* AH=1Bh / 1Ch ドライブ情報 (CP/M 時代の関数。1Bh = 現在ドライブ / 1Ch = DL のドライブ)。
+ *   AL = sectors/cluster, CX = bytes/sector, DX = 全クラスタ数, DS:BX = メディア ID バイトの位置。
+ * 数字は AH=36h と同じ合成ジオメトリ (食い違うと空き容量判定が矛盾する)。単一ドライブなので
+ * ドライブ指定は見ず常に有効 (36h と同じ扱い)。メディア ID は 0xED0 に毎回書く。 */
+static void int21_1b_drive_info(void) {
+    poke8(QB_DISK_MEDIA_PTR, QB_DISK_MEDIA_ID);
+    CPU_AL = QB_DISK_SPC;
+    CPU_CX = QB_DISK_BPS;
+    CPU_DX = QB_DISK_TOTAL_CLU;
+    CPU_DS = 0;
+    CPU_BX = (uint16_t)QB_DISK_MEDIA_PTR;
 }
 
 /* AH=39h MKDIR。DS:DX = 作成するディレクトリパス。
@@ -3747,6 +3863,15 @@ void qb_dos_int21_dispatch(void) {
     case 0x50: int21_50_set_psp();   break;
     case 0x51: int21_51_get_psp();   break;
     case 0x52: int21_52_list_of_lists(); break;
+    case 0x1B: case 0x1C: int21_1b_drive_info(); break;
+    case 0x2E: g_verify_flag = CPU_AL & 1; break;
+    case 0x54: CPU_AL = g_verify_flag; break;
+    case 0x56: int21_56_rename();       break;
+    case 0x5A: int21_5a_create_temp();  break;
+    case 0x5B: int21_5b_create_new();   break;
+    case 0x66: int21_66_codepage();     break;
+    case 0x67: int21_67_set_handles();  break;
+    case 0x68: case 0x6A: int21_68_commit(); break;
     case 0x57: int21_57_filetime(); break;
     case 0x58: int21_58_alloc_strategy(); break;
     case 0x60: int21_60_truename();  break;
