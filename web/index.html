@@ -514,6 +514,29 @@ body.panel-hidden #stage-max::before { content: "◂"; }  /* パネルが左へ�
 .st-acts button:disabled { opacity: .45; cursor: default; }
 .st-acts button.icon { font-size: 16px; min-width: 40px; padding: 3px 8px; line-height: 1; }
 .st-acts .del { margin-left: auto; }
+/* 更新の告知 (起動時に 1 回。ステートセーブが読めなくなる日付の予告)。一覧と同じ紙トーン */
+#notice-modal {
+    position: fixed; inset: 0; z-index: 140; background: rgba(20, 16, 8, .35);
+    backdrop-filter: blur(2px);
+    display: flex; align-items: center; justify-content: center;
+}
+#notice-modal[hidden] { display: none; }
+#notice-box {
+    width: min(520px, 94vw); max-height: 88dvh; overflow-y: auto; box-sizing: border-box;
+    background: #fffdf6; color: #33302a; border: 1px solid #c8c0ae;
+    border-radius: 8px; box-shadow: 0 16px 56px rgba(0,0,0,.55);
+    padding: 20px 24px 18px;
+    font-family: "Noto Sans CJK JP", "Migu 1M", system-ui, sans-serif;
+}
+#notice-title { font-size: 15px; font-weight: 700; color: #5a5347; }
+#notice-title .ja { color: #9a8f5e; font-weight: 400; font-size: 13px; margin-left: 6px; }
+#notice-ja { margin: 14px 0 0; font-size: 14px; line-height: 1.75; }
+#notice-en { margin: 12px 0 0; font-size: 12px; line-height: 1.6; color: #8a8377; }
+#notice-ok {
+    display: block; margin: 18px 0 0 auto; font: inherit; font-size: 13px; padding: 6px 22px; min-height: 32px;
+    border-radius: 5px; cursor: pointer; background: #6b8f3f; border: 1px solid #5b7b33; color: #fff;
+}
+#notice-ok:hover { background: #5b7b33; }
 </style>
 <script>
 /* ライトモード先読み (FOUC 防止)。localStorage の theme だけを bridge.js ロード前に <html> へ反映する。
@@ -895,6 +918,15 @@ https://github.com/msonrm/quubee</pre>
         <button id="state-close" title="閉じる / Close (Esc)">×</button>
         <div id="state-title">State Save / Load<span class="ja">ステートセーブ / ロード</span></div>
         <div id="state-grid"></div>
+    </div>
+</div>
+
+<div id="notice-modal" hidden>
+    <div id="notice-box" role="dialog" aria-labelledby="notice-title">
+        <div id="notice-title">Update Notice<span class="ja">更新のお知らせ</span></div>
+        <p id="notice-ja">2026年10月10日 (土) に QuuBee を更新します。FM 音源の再現の不具合修正を含むため、更新後は、これまでに保存したステートセーブ (⤓ で保存したもの) を読み込めなくなります。更新後は、新しく保存し直してください。</p>
+        <p id="notice-en">QuuBee will be updated on 10 October 2026 (Sat). The update fixes a bug in the FM sound emulation, so state saves made before it can no longer be loaded. Please save again after the update.</p>
+        <button id="notice-ok">OK</button>
     </div>
 </div>
 

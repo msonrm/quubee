@@ -2433,6 +2433,30 @@ async function makeWorkerEmu() {
     });
     try { if (!localStorage.getItem(ABOUT_SEEN_KEY)) openAbout(); } catch (e) { /* storage 不可時は出さない */ }
 
+    // ---- 更新の告知 (ステートセーブが読めなくなる日付の予告) ----
+    // NP2kai のパッチを足すと互換識別子が変わり、既存のステートセーブは読めなくなる (patch 13 の有効化 =
+    // 2026-10-10)。それまでの間、セーブを 1 件でも持つ人にだけ起動時に 1 回出す。閉じた時点で既読にする。
+    // 日付を過ぎたら出さない (更新後は古いセーブに「版が違う」トーストが出る)。文言は index.html の #notice-modal。
+    // 更新を実施したら、次の告知のために NOTICE_SEEN_KEY の版数をバンプし、STATE_NOTICE_UNTIL を差し替える。
+    const NOTICE_SEEN_KEY = 'quubee_notice_seen_20261010';
+    const STATE_NOTICE_UNTIL = Date.parse('2026-10-11T00:00:00+09:00');
+    const noticeModalEl = document.getElementById('notice-modal');
+    const closeNotice = () => {
+        noticeModalEl.hidden = true;
+        try { localStorage.setItem(NOTICE_SEEN_KEY, '1'); } catch (e) { /* storage 不可なら毎回表示 */ }
+    };
+    document.getElementById('notice-ok').addEventListener('click', closeNotice);
+    noticeModalEl.addEventListener('mousedown', (e) => { if (e.target === noticeModalEl) closeNotice(); });
+    (async () => {
+        try {
+            if (Date.now() >= STATE_NOTICE_UNTIL || localStorage.getItem(NOTICE_SEEN_KEY)) return;
+            if (!window.QBStateDB || !(await QBStateDB.count())) return;
+        } catch (e) { return; /* storage / IndexedDB 不可 = セーブ機能も無いので出さない */ }
+        releaseHeldKeys();
+        noticeModalEl.hidden = false;
+        document.getElementById('notice-ok').focus();
+    })();
+
     // 表示中ファイルをダウンロード保存。/run ライブ反映は entry オブジェクトを同一性
     // 保持で更新するので、実行中にゲームが書き換えたセーブも最新の data が落ちる。
     textSaveBtn.addEventListener('click', () => {
@@ -2716,6 +2740,8 @@ async function makeWorkerEmu() {
         const passThru = imePassThrough(e);
         if (inField(e) && !passThru) return;
         // 別窓ビューアを開いている間はゲームへキーを送らない (Esc で閉じる)
+        // 更新の告知は最前面 (Esc で閉じる。OK ボタンにフォーカスがあるので Enter / Space はボタンが受ける)
+        if (!noticeModalEl.hidden) { if (e.key === 'Escape') { e.preventDefault(); closeNotice(); } return; }
         if (!viewerModalEl.hidden) { if (e.key === 'Escape') { e.preventDefault(); closeViewer(); } return; }
         // 音楽プレイヤーポップアップを開いている間も同様 (Esc で閉じる。演奏は背後で続く)
         if (!playerModalEl.hidden) { if (e.key === 'Escape') { e.preventDefault(); closePlayer(); } return; }
@@ -2769,6 +2795,7 @@ async function makeWorkerEmu() {
         // 入力欄にフォーカス中でも、keydown が透過したキー (= pressed に在る) は keyUp を送る。
         // さもないとゲスト側で押しっぱなしになる。透過しなかったキーは従来どおり欄に委ねる。
         if (inField(e) && !pressed.has(e.code)) return;
+        if (!noticeModalEl.hidden) return;   // 更新の告知中も同様
         if (!viewerModalEl.hidden) return;   // ビューア表示中はゲームへ送らない
         if (!playerModalEl.hidden) return;   // 音楽ポップアップ表示中も同様
         if (!settingsModalEl.hidden) return; // 設定パネル表示中も同様
@@ -2834,7 +2861,7 @@ async function makeWorkerEmu() {
         let live = -1;
         // ビューア/音楽ポップアップ中は完全停止。設定パネル中は「押下ボタンの検出 (live)」だけ行い、
         // ゲームへは送らない (toGame=false → want 空 → 下のエッジ検出で padPressed が全解放される)。
-        if (viewerModalEl.hidden && playerModalEl.hidden && stateModalEl.hidden && navigator.getGamepads) {
+        if (viewerModalEl.hidden && playerModalEl.hidden && stateModalEl.hidden && noticeModalEl.hidden && navigator.getGamepads) {
             const toGame = settingsModalEl.hidden;
             const dir = PAD_DIRS[padDir] || PAD_DIRS.arrow;
             for (const gp of navigator.getGamepads()) {

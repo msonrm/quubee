@@ -26,6 +26,27 @@
 
 対象の本家版: **AZO234/NP2kai `wx_alpha` 5939e0c6 (2026-09-05)**。サブモジュールを上げたら全パッチ (01〜03・06〜12) が当たるか (`build.sh` は当たらないと hard fail) と全回帰・両ベンチを確認する。
 
+### 保留中のパッチ (`pending/`)
+
+`build.sh` は `tools/np2kai_patches/*.patch` (直下) だけを適用し、互換識別子 (ステートセーブ) のハッシュにも直下だけを入れる。
+`pending/` に置いたものは適用もハッシュ計算もされない。**有効にすると互換識別子が変わり、利用者の既存ステートセーブが読めなくなる**ため、
+告知の期間を置いてからまとめて入れるための置き場。
+
+| ファイル | 目的 |
+|---|---|
+| `pending/13_fmgen_ssgeg_phase.patch` | **fmgen の SSG-EG 位相 assert で wasm が Abort する本家の不具合** (2026-10-04、New Horizons 体験版 Deadline 2026 で判明)。`Operator::KeyOn` が SSG-EG 無効でも `ssg_phase_ = -1` を残し、キーオン後に SSG-EG (type=8) を有効化すると `Prepare` の `assert(0 <= ssg_phase_)` が落ちる (-O2 でも assert 有効のため wasm 全体が停止。本家は -DNDEBUG で気づかれにくい)。SSG-EG 無効時は 0 を入れる。有効時の挙動は不変。ブラウザ実機で最後まで動作確認済み。**2026-10-10 に有効化予定** (起動時の告知ダイアログを先に出す。bridge.js の `STATE_NOTICE_UNTIL`) |
+
+有効化の手順 (2026-10-10):
+
+```bash
+git mv tools/np2kai_patches/pending/13_fmgen_ssgeg_phase.patch tools/np2kai_patches/
+# 上の表の行を「パッチ一覧」へ移し、対象の本家版の行の番号範囲 (01〜03・06〜12) に 13 を足す
+bash emscripten/build.sh && node tools/run_tests.js   # build.sh が submodule へ自動適用する
+```
+
+> 注: 保留中は `core/np2kai` の作業ツリーにも **適用しない** こと。適用済みのまま build すると、互換識別子は旧値のままソースだけ変わった
+> バイナリになる (2026-10-06 に動作確認用の適用を `git apply --reverse` で外した)。
+
 ### 削除したパッチ (2026-09-27、NP2kai 5939e0c6 追従時)
 
 本家で解決済みになったため削除。番号は欠番のまま (再利用しない)。

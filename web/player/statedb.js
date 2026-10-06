@@ -57,6 +57,8 @@ function list(gameId) {
         (all || []).map(({ bytes, ...rest }) => Object.assign(rest, { size: bytes ? bytes.length : 0 }))
             .sort((a, b) => String(b.created).localeCompare(String(a.created))));
 }
+// 全ゲーム合計の保存件数 (更新の告知を、セーブを持つ人にだけ出す判定用)
+function count() { return tx('readonly', (st) => req2p(st.count())); }
 // クイックセーブ: 既存のクイックを quick-prev へずらしてから書く (上書きの「元に戻す」用)
 async function putQuick(rec) {
     const cur = await get(rec.gameId, 'quick');
@@ -72,5 +74,5 @@ async function undoQuick(gameId) {
     return true;
 }
 
-root.QBStateDB = { put, get, del, list, putQuick, undoQuick };
+root.QBStateDB = { put, get, del, list, count, putQuick, undoQuick };
 })(typeof self !== 'undefined' ? self : globalThis);

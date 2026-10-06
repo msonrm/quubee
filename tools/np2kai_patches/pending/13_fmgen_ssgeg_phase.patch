@@ -1,0 +1,14 @@
+diff --git a/sound/fmgen/fmgen_fmgeninl.h b/sound/fmgen/fmgen_fmgeninl.h
+index 3a3e270..2d05fa0 100755
+--- a/sound/fmgen/fmgen_fmgeninl.h
++++ b/sound/fmgen/fmgen_fmgeninl.h
+@@ -58,7 +58,8 @@ inline void Operator::KeyOn()
+ 		keyon_ = true;
+ 		if (eg_phase_ == off || eg_phase_ == release)
+ 		{
+-			ssg_phase_ = -1;
++			// QuuBee patch 13: SSG-EG 無効のまま -1 を残すと、キーオン後に SSG-EG を有効化した時に Prepare の添字が負になる
++			ssg_phase_ = ssg_type_ ? -1 : 0;
+ 			ShiftPhase(attack);
+ 			EGUpdate();
+ 			in2_ = out_ = out2_ = 0;

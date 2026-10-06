@@ -1,5 +1,22 @@
 # CHANGELOG
 
+## [fmgen SSG-EG patch 13 を保留 + 更新予告ダイアログ (ステートセーブ失効の 2026-10-10 告知)] — 2026-10-06
+
+- **経緯**: New Horizons 体験版 (Deadline 2026) が途中で止まる真因は fmgen `Operator::KeyOn` の `ssg_phase_ = -1` (SSG-EG 無効でも残り、
+  後から SSG-EG を有効化すると `Prepare` の assert が落ちて wasm 全体が Abort)。修正 patch 13 はブラウザ実機で確認済みだが、
+  パッチを足すと互換識別子が変わり**利用者の既存ステートセーブが読めなくなる**。ユーザー判断で「予告してから 2026-10-10 (土) に有効化」。
+- **patch 13 は `tools/np2kai_patches/pending/` に置く**。`build.sh` は直下の `*.patch` だけを適用し識別子のハッシュにも入れるので、
+  pending は適用もハッシュ計算もされない = 予告の期間中のデプロイでセーブは失効しない (識別子 `…pfa31fa97a82e15ad` = 9/27 以降と同じ)。
+  **罠**: 動作確認で `core/np2kai` の作業ツリーへ適用済みだったため `git apply --reverse` で外した。適用したまま build すると
+  「識別子は旧値のままソースだけ変わったバイナリ」になる。有効化の手順は `tools/np2kai_patches/README.md`「保留中のパッチ」。
+- **更新予告のモーダル** (`#notice-modal`、日英併記): ステートセーブを 1 件以上持つ人にだけ、起動時に 1 回 (閉じた時点で既読 =
+  `quubee_notice_seen_20261010`)。2026-10-11 00:00 JST 以降は出さない (`STATE_NOTICE_UNTIL`)。セーブの有無は `QBStateDB.count()` (新設)。
+  Esc / OK / 背景クリックで閉じ、表示中はゲームへキー・パッド入力を送らない。IndexedDB / localStorage が使えない環境では出さない。
+- **検証**: ヘッドレス Chromium で 8 ケース (セーブ無し=出ない / 有り=出る・OK にフォーカス / Esc / 再訪=出ない / 390px 幅 / 10/11 以降=出ない /
+  10/10 23:59=出る) を確認、全回帰 92 本 PASS。**ダイアログはデプロイしないと利用者に届かない** (コミットだけでは出ない)。
+- **有効化の日 (10/10) の手順**: `git mv` で pending から本線へ → `bash emscripten/build.sh` → 全回帰 → `docs/deploy.md` の手順でデプロイ。
+  次の告知に流用するなら `NOTICE_SEEN_KEY` の版数と `STATE_NOTICE_UNTIL`・文面を差し替える。
+
 ## [INT 21h の追加 (PC98PLAYER との突き合わせ): 56h・5Ah/5Bh・1Bh/1Ch・54h/2Eh・66h・67h・68h/6Ah] — 2026-10-02
 
 - **発端**: PC98PLAYER 260930 版のソース (MIT) と比べ、QuuBee に無い INT 21h のうち実害の出うるものを選んだ。
