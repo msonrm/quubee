@@ -169,7 +169,7 @@
         board.replaceChildren();
         keyEls.clear();
         ledEls.clear();
-        const keys = [], leds = [];
+        const keys = [], leds = [], plates = [];
         let W = 0, H = 0;
         for (const b of layout.blocks || []) {
             let y = b.y || 0;
@@ -181,6 +181,7 @@
                     const w = it.w || 1, h = it.h || 1;
                     if (k !== undefined) keys.push({ it, k, x, y, w, h });
                     else if (Array.isArray(it.led)) leds.push({ it, x, y, w, h });
+                    else if (it.plate) plates.push({ x, y, w, h });
                     x += w;
                     W = Math.max(W, x); H = Math.max(H, y + h);
                 }
@@ -190,17 +191,18 @@
         for (const { it, k, x, y, w, h } of keys) {
             const el = document.createElement('div');
             const kind = it.c || '';
-            el.className = 'key' + (kind ? ' ' + kind : '') + (it.s ? '' : ' single') + (it.a === 'c' ? ' center' : '');
+            el.className = 'key' + (kind ? ' ' + kind : '') + (it.a === 'c' ? ' center' : '');
+            if (it.z) el.style.fontSize = it.z + 'em';
             el.dataset.k = k;
             el.dataset.x = x; el.dataset.y = y; el.dataset.w = w; el.dataset.h = h;
             if (it.notch) el.dataset.notch = it.notch;
             const add = (cls, text) => { const s = document.createElement('span'); s.className = cls; s.textContent = text; el.appendChild(s); };
-            // 刻印の位置: 記号のキーは左に 2 段 (シフト側が上)・カナは右に 2 段 (シフト側が上)。
-            // 英字のキーは英字が左上・カナが下の辺の中央
+            // 刻印の位置 (実機の写真から): 英字・数字・記号は左辺の中央、シフト側の記号は上辺の中央、
+            // シフト側のカナ (小書き・句読点・カギ括弧・ヲ) は右辺の中央、カナ・濁点・半濁点・音引きは下辺の中央
             if (it.s) add('s', it.s);
             add('l', it.l !== undefined ? it.l : it.k);
             if (it.ks) add('ks', it.ks);
-            if (it.kn) add(it.s ? 'kn r' : 'kn', it.kn);
+            if (it.kn) add('kn', it.kn);
             board.appendChild(el);
             if (!keyEls.has(k)) keyEls.set(k, []);
             keyEls.get(k).push(el);
@@ -219,6 +221,12 @@
                 if (!ledEls.has(k)) ledEls.set(k, []);
                 ledEls.get(k).push(dot);
             }
+            board.appendChild(el);
+        }
+        for (const { x, y, w, h } of plates) {
+            const el = document.createElement('div');
+            el.className = 'plate';
+            el.dataset.x = x; el.dataset.y = y; el.dataset.w = w; el.dataset.h = h;
             board.appendChild(el);
         }
         board.dataset.w = W; board.dataset.h = H;

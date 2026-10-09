@@ -11,7 +11,6 @@
     --bg: #24211d; --bar-fg: #cfc8b9; --bar-dim: #8a8377;
     --key: #ebe5d4; --key-fg: #2f2b25; --key-kana: #8a5a3c; --key-edge: #b9b19c;
     --fn: #b9b3a5; --fn-fg: #2f2b25; --fn-edge: #8f8879;
-    --mod: #9d988c; --mod-edge: #77726a;
     --down: #9db7d6; --down-edge: #6f8fb3;
     --lock: #6b8f3f; --lock-fg: #fff;
     --ok: #8fc35a; --wait: #d9b44a; --bad: #d0675b;
@@ -45,22 +44,22 @@ html, body {
     background: var(--key); color: var(--key-fg); border: 1px solid var(--key-edge); border-bottom-width: 3px;
     line-height: 1.05; overflow: hidden;
 }
-.key .s, .key .l { position: absolute; left: 12%; }
-.key .s { top: 8%; }
-.key .l { bottom: 10%; }
-.key.single .l { top: 10%; bottom: auto; }
-.key .kn { position: absolute; left: 50%; bottom: 8%; transform: translateX(-50%); color: var(--key-kana); font-size: .8em; }
-.key .kn.r { left: auto; right: 10%; transform: none; }
-.key .ks { position: absolute; right: 10%; top: 8%; color: var(--key-kana); font-size: .8em; }
+.key .l, .key .s, .key .ks, .key .kn { position: absolute; white-space: nowrap; }
+.key .l { left: 12%; top: 50%; transform: translateY(-50%); font-size: 1.05em; }
+.key .s { left: 50%; top: 5%; transform: translateX(-50%); font-size: .8em; }
+.key .ks { right: 10%; top: 50%; transform: translateY(-50%); color: var(--key-kana); font-size: .8em; }
+.key .kn { left: 50%; bottom: 5%; transform: translateX(-50%); color: var(--key-kana); font-size: .8em; }
+/* 文字・テンキー・スペース以外のキーは同じ色 (実機は ESC も TAB も CTRL も SHIFT もカーソルも同じ灰色) */
 .key.fn, .key.mod, .key.lock { background: var(--fn); color: var(--fn-fg); border-color: var(--fn-edge);
     display: flex; align-items: center; justify-content: center; text-align: center; font-size: .72em; }
-.key.mod, .key.lock { background: var(--mod); border-color: var(--mod-edge); }
-.key.fn .l, .key.mod .l, .key.lock .l { position: static; }
+.key.fn .l, .key.mod .l, .key.lock .l { position: static; transform: none; font-size: 1em; white-space: normal; }
+/* キーの無い板 (XFER の右) */
+.plate { position: absolute; box-sizing: border-box; border-radius: 5px; background: #3a3630; border: 1px solid #47423a; }
 /* テンキーまわりは刻印が中央・大きめ */
 .key.center { display: flex; align-items: center; justify-content: center; font-size: 1.15em; }
-.key.center .l { position: static; }
+.key.center .l { position: static; transform: none; }
 /* 左下のランプ (CAPS・カナ) */
-.leds { position: absolute; box-sizing: border-box; display: flex; flex-direction: column; justify-content: center;
+.leds { position: absolute; border-radius: 5px; background: #3a3630; border: 1px solid #47423a; box-sizing: border-box; display: flex; flex-direction: column; justify-content: center;
         gap: .35em; padding-left: .5em; font-size: .62em; color: var(--bar-dim); pointer-events: none; white-space: nowrap; }
 .leds span { display: flex; align-items: center; gap: .5em; }
 .leds i { display: inline-block; width: .9em; height: .9em; border-radius: 50%; background: #4a453d; }
