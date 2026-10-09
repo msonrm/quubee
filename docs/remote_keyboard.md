@@ -44,6 +44,22 @@ HELP・VF1〜5・テンキーの `=` と `,` が、対応表を足さずにそ�
 - 盤面は `web/remote/layouts/<id>.json` から描く (キー名は NP2kai の `keystat.tbl` の `s_keyname`)。
   `#r=<部屋>&l=<id>` で選べる。現在は `pc98-full` (フルキーボード・テンキー付き) だけ
 
+## FEP (日本語入力) との連携 (2026-10-10、段階 A)
+
+FEP が ON の間、受け手 (`bridge.js` の `remoteRoute`) は届いた NKEY を物理キーボードと同じ KeyTap に組み立て直して
+`fep.feed` / `feedUp` に通し、飲まれなかったキーだけを keyHub へ注ぐ。変換エンジンは受け手・キーボードは
+「理想的な PC-98 キーボード」のまま (へちま言語ラボの `/remote/` と同じ分け方)。
+
+- `code` = JIS 配列の位置 (`@` = BracketLeft・`]` = Backslash・`¥` = IntlYen・`_` = IntlRo・XFER = Convert・
+  NFER = NonConvert)。`key` = PC-98 の刻印 (SHIFT・CAPS は端末ごとに覚える)
+- **CTRL+XFER で FEP の ON/OFF** (実機の FEP の標準)。ゲストへは送らない
+- **XFER = 変換** (スペースとして渡す、WX 流)。ただし NICOLA の JIS レイアウトでは XFER は右親指なのでそのまま渡す
+  (FEP は未確定中に知らないキーを飲むので「XFER で試して駄目ならスペース」はできない)
+- カナロック中は FEP を通さない (実機で FEP を使わずにカナを倒したときと同じく半角カナが直接入る)
+- 押したときに FEP が飲んだキーは、離すときも FEP へ (ゲストに解放だけが届かないように)
+- **扱わない** (疑似 FEP なのでここまで、ユーザー判断): WX / ATOK のキーの作法の違い (ATOK の XFER 単押し等)・
+  NFER の意味・カナキーでの JIS かな入力・最下行のモード表示
+
 ## 回線
 
 WebRTC DataChannel (順序保証・再送あり・DTLS)。同じ LAN ならホスト候補で直結する。STUN (`stun.cloudflare.com`)
@@ -94,5 +110,5 @@ Shift)・接続・XFER・CAPS のロック・SHIFT のラッチ・キーボー�
   `PAD_KEYS` / `PAD_DIRS` を席ごとに広げる)。**着手前に、東方夢時空の 2P が何を読むか (キーボードの別キー
   か、サウンドボードのジョイスティック端子か) を headless で計測する**。端子なら NP2kai の `joymng`
   (今は空のマクロ) を実装する = ゲームパッドの「案 B」と同じ工事。ホストの物理パッドの席分けもここで
-- [ ] 段階 4 (任意): 送り手のスマホにつないだ物理パッドの転送 / 送り手ページの PWA 化 / CTRL+XFER で HLE FEP を
-  切り替える / 自作レイアウト JSON の読み込み / ゲスト側のランプ (CAPS・カナ) を送り手へ返す
+- [x] FEP 連携の段階 A (CTRL+XFER で ON/OFF・XFER で変換・リモートのキーを FEP に通す)
+- [ ] 段階 4 (任意): 送り手のスマホにつないだ物理パッドの転送 / 送り手ページの PWA 化 / 自作レイアウト JSON の読み込み

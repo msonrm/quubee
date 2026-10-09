@@ -2522,12 +2522,9 @@ async function makeWorkerEmu() {
     // 押されている code を追跡 (keyup の透過判定と blur/モーダル時の一括解放用)
     const pressed = new Set();
 
-    // リモートキーボード (別の端末に出す PC-98 キーボード、web/remote/)。届いたキーは keyHub へ直接注ぐ
-    // (元 = 'remote:<端末 id>')。物理キーボードの blur/モーダルでの一括解放の対象外 (keyup を取りこぼさないため)。
+    // リモートキーボード (別の端末に出す PC-98 キーボード、web/remote/)。初期化は FEP の後 (remoteRoute 参照)。
     const remoteModalEl = document.getElementById('remote-modal');
-    const remoteHost = window.QBRemoteHost
-        ? QBRemoteHost.init({ keyHub, onModalOpen: () => { releaseHeldKeys(); releasePadKeys(); } })
-        : null;
+    let remoteHost = null;
 
     // 保持中のキーを全部 keyUp してから追跡集合を空にする。モーダル (ビューア/音楽
     // ポップアップ) を開く瞬間に呼ぶ — モーダル表示中は keydown/keyup がゲームへ届かず、
@@ -2731,6 +2728,101 @@ async function makeWorkerEmu() {
     }
     fepToggleEl.addEventListener('click', () => { setFepActive(!fep.active); });
 
+    // ---- リモートキーボード → FEP (2026-10-10、段階 A) ----
+    // リモートは PC-98 のキーコード (NKEY) をそのまま送ってくる (web/remote/)。FEP が ON の間は、それを
+    // 物理キーボードと同じ KeyTap ({code, key, shiftKey…}) に組み立て直して同じ fep.feed / feedUp に通し、
+    // 飲まれなかったキーだけを keyHub (元 = 'remote:<端末 id>') へ注ぐ。変換エンジンは受け手、キーボードは
+    // 「理想的な PC-98 キーボード」のまま (へちま言語ラボの /remote/ と同じ分け方)。
+    //   - code は JIS 配列の位置 (PC-98 の配列は JIS と同じ並び: @ = BracketLeft、] = Backslash、¥ = IntlYen、
+    //     _ = IntlRo、XFER = Convert、NFER = NonConvert)。配列エンジン (NICOLA 等) の JIS レイアウトが引く
+    //   - key は PC-98 の刻印 (SHIFT・CAPS は端末ごとに覚える)。内蔵ローマ字はこれだけを読む
+    //   - CTRL+XFER で FEP の ON/OFF (実機の FEP の標準の切り替え)
+    //   - XFER: スペースとして渡す = 変換 (WX 流)。ただし NICOLA の JIS レイアウトでは XFER が右親指なので
+    //     XFER (Convert) のまま渡す (FEP は未確定中に知らないキーを飲むので「XFER で試して駄目ならスペース」はできない)
+    //   - カナロック中は FEP を通さない (実機で FEP を使わずにカナを倒したときと同じく半角カナが直接入る)
+    // 疑似 FEP なので WX/ATOK のキーの作法の違い・NFER・カナキーでのかな入力は扱わない (ユーザー判断)。
+    const REMOTE_CODE = {};   // NKEY → [code, key, shiftKey 時の key]
+    (() => {
+        const put = (nk, code, key, skey) => { REMOTE_CODE[nk] = [code, key, skey === undefined ? key : skey]; };
+        const L = 'qwertyuiopasdfghjklzxcvbnm';
+        const LN = [0x10,0x11,0x12,0x13,0x14,0x15,0x16,0x17,0x18,0x19,0x1d,0x1e,0x1f,0x20,0x21,0x22,0x23,0x24,0x25,0x29,0x2a,0x2b,0x2c,0x2d,0x2e,0x2f];
+        LN.forEach((nk, i) => put(nk, 'Key' + L[i].toUpperCase(), L[i], L[i].toUpperCase()));
+        '1234567890'.split('').forEach((d, i) => put(i + 1, 'Digit' + d, d, '!"#$%&\'()'[i] || d));
+        put(0x0b, 'Minus', '-', '='); put(0x0c, 'Equal', '^', '`'); put(0x0d, 'IntlYen', '\\', '|');
+        put(0x1a, 'BracketLeft', '@', '~'); put(0x1b, 'BracketRight', '[', '{');
+        put(0x26, 'Semicolon', ';', '+'); put(0x27, 'Quote', ':', '*'); put(0x28, 'Backslash', ']', '}');
+        put(0x30, 'Comma', ',', '<'); put(0x31, 'Period', '.', '>'); put(0x32, 'Slash', '/', '?'); put(0x33, 'IntlRo', '_', '_');
+        put(0x00, 'Escape', 'Escape'); put(0x0e, 'Backspace', 'Backspace'); put(0x0f, 'Tab', 'Tab'); put(0x1c, 'Enter', 'Enter');
+        put(0x34, 'Space', ' '); put(0x35, 'Convert', 'Convert'); put(0x51, 'NonConvert', 'NonConvert');
+        put(0x36, 'PageUp', 'PageUp'); put(0x37, 'PageDown', 'PageDown'); put(0x38, 'Insert', 'Insert'); put(0x39, 'Delete', 'Delete');
+        put(0x3a, 'ArrowUp', 'ArrowUp'); put(0x3b, 'ArrowLeft', 'ArrowLeft'); put(0x3c, 'ArrowRight', 'ArrowRight'); put(0x3d, 'ArrowDown', 'ArrowDown');
+        put(0x3e, 'Home', 'Home'); put(0x3f, 'Help', 'Help');
+        [['NumpadSubtract','-',0x40],['NumpadDivide','/',0x41],['NumpadMultiply','*',0x45],['NumpadAdd','+',0x49],
+         ['NumpadEqual','=',0x4d],['NumpadComma',',',0x4f],['NumpadDecimal','.',0x50]].forEach(([c, k, nk]) => put(nk, c, k));
+        [[0x4e,0],[0x4a,1],[0x4b,2],[0x4c,3],[0x46,4],[0x47,5],[0x48,6],[0x42,7],[0x43,8],[0x44,9]].forEach(([nk, d]) => put(nk, 'Numpad' + d, String(d)));
+        for (let i = 0; i < 10; i++) put(0x62 + i, 'F' + (i + 1), 'F' + (i + 1));
+        put(0x70, 'ShiftLeft', 'Shift'); put(0x71, 'CapsLock', 'CapsLock'); put(0x72, 'KanaMode', 'KanaMode');
+        put(0x73, 'AltLeft', 'Alt'); put(0x74, 'ControlLeft', 'Control');
+    })();
+    const remoteState = new Map();   // 端末 id → { shift, ctrl, caps, kana, eaten: Map(NKEY → FEP に渡した tap) }
+    function remoteSt(id) {
+        let st = remoteState.get(id);
+        if (!st) remoteState.set(id, (st = { shift: false, ctrl: false, caps: false, kana: false, eaten: new Map() }));
+        return st;
+    }
+    function remoteTap(k, st, repeat) {
+        const m = REMOTE_CODE[k];
+        if (!m) return null;
+        let key = st.shift ? m[2] : m[1];
+        if (st.caps && /^[a-zA-Z]$/.test(key)) key = st.shift ? key.toLowerCase() : key.toUpperCase();
+        return { code: m[0], key, repeat: !!repeat, shiftKey: st.shift, ctrlKey: st.ctrl, altKey: false, metaKey: false };
+    }
+    function remoteRoute(id, k, down, repeat) {
+        const src = 'remote:' + id, st = remoteSt(id);
+        if (k === 0x70) st.shift = down;
+        else if (k === 0x74) st.ctrl = down;
+        else if (k === 0x71) st.caps = down;   // 機械式ロック = 押し下げたまま = ロック中
+        else if (k === 0x72) st.kana = down;
+        if (fep) {
+            if (down && k === 0x35 && st.ctrl) {           // CTRL+XFER = FEP の ON/OFF (ゲストへは送らない)
+                if (!repeat) setFepActive(!fep.active);
+                st.eaten.set(k, null);
+                return;
+            }
+            if (!down && st.eaten.has(k)) {                // 押したときに FEP が飲んだキーは、離すときも FEP へ
+                const tap = st.eaten.get(k);
+                st.eaten.delete(k);
+                if (tap && fep.active) fep.feedUp(tap);
+                return;
+            }
+            if (fep.active && !st.kana) {
+                const tap = remoteTap(k, st, repeat);
+                if (tap && k === 0x35 && !(fepLayoutName === 'nicola' && fepKbLayout === 'jis')) {
+                    Object.assign(tap, { code: 'Space', key: ' ' });   // XFER = 変換 (WX 流)
+                }
+                if (tap && down) {
+                    if (fep.feed(tap)) { st.eaten.set(k, tap); return; }
+                } else if (tap && !down) {
+                    fep.feedUp(tap);                       // chord の判定用 (ゲストへの解放は下で必ず送る)
+                }
+            }
+        }
+        if (down) keyHub.down(src, k, repeat);
+        else keyHub.up(src, k);
+    }
+    function remoteRelease(id) {
+        const st = remoteState.get(id);
+        if (st && fep && fep.active) for (const tap of st.eaten.values()) if (tap) fep.feedUp(tap);
+        remoteState.delete(id);
+        keyHub.releaseWhere((s) => s === 'remote:' + id);
+    }
+    // 届いたキーは remoteRoute へ (FEP → keyHub)。物理キーボードの blur/モーダルでの一括解放の対象外
+    // (keyup を取りこぼさないため)。
+    remoteHost = window.QBRemoteHost
+        ? QBRemoteHost.init({ keyHub, route: remoteRoute, release: remoteRelease,
+                              onModalOpen: () => { releaseHeldKeys(); releasePadKeys(); } })
+        : null;
+
     // ---- 新配列 (keymap-format) エンジンの装着 ----
     // labo の KeymapEngine (web/assets/keymap-engine.js、<script> で window.KeymapEngine) を
     // fep に注入する。null / 'romaji' で内蔵ローマ字リゾルバへ戻す。エンジンは「キー→かな」だけを
@@ -2743,6 +2835,7 @@ async function makeWorkerEmu() {
     // 14 本 → 7 本)。現状 layouts を持つのは NICOLA だけで、US では親指キーが スペース/右Alt、
     // JIS では 無変換/変換 (役の既定候補) になる。渡さないと US キーボードで親指シフトが打てない。
     let fepLayoutName = 'romaji';   // 既定 = 内蔵ローマ字 (ゼロ回帰)
+    let fepKbLayout = 'us';         // 配列エンジンに渡したレイアウト (リモートの XFER の扱いが見る)
     async function setFepLayout(name, kbLayout) {
         if (!fep) return 'no-fep';
         const KE = window.KeymapEngine;
@@ -2763,7 +2856,7 @@ async function makeWorkerEmu() {
             for (const d of diags) console.debug(`[keymap] ${name}/${layout}: ${d.message}`);
             eng.onStateChange = () => { if (fep) fep.pumpEngine(); };
             fep.setEngine(eng, (tap) => KE.keyEventFromBrowser(tap));
-            fepLayoutName = name; refreshFepStatus();
+            fepLayoutName = name; fepKbLayout = layout; refreshFepStatus();
             return `layout=${name} (kb=${layout}, chord=${eng.isChord}) engine=${KE.version}` +
                 (diags.length ? ` — 診断 ${diags.length} 件 (console)` : '');
         } catch (e) {

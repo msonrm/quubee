@@ -11,6 +11,7 @@
 //   5. キーボードを読み込み直すと、押していたキーが離れ、つなぎ直す
 //   6. QuuBee を読み込み直しても、覚えた部屋でつなぎ直す (キーボード側は何もしない)
 //   7. キーボードを閉じると、押していたキーが離れる
+//   8. FEP (段階 A): CTRL+XFER で ON/OFF・ON の間は文字キーを FEP が飲む・ファンクションキーとカナロック中は素通し
 // **見えないもの**: 同じ機械の中の 2 ページなので、2 台が同じ Wi-Fi で直結できるか (mDNS・クライアント分離) と
 // 本番の中継 (relay/worker.js) は実機でしか分からない。
 //
@@ -145,6 +146,26 @@ async function until(fn, ms = 10000) {
   await tap(0x35);
   await downOn(0x51);   // NFER
   ok(await until(() => has('0x51'), 3000), '6. つなぎ直した後も届く (NFER)', await keys());
+
+  // 8. FEP (段階 A): CTRL+XFER で ON/OFF・ON の間は文字キーを FEP が飲む・ファンクションキーとカナロック中は素通し
+  await up();                                            // 6 の NFER を離す
+  await until(async () => !(await has('0x51')), 3000);
+  const fepOn = () => host.evaluate(() => document.getElementById('fep-toggle').classList.contains('on'));
+  const holdCheck = async (nkey, hex) => { await downOn(nkey); await kbd.waitForTimeout(250); const v = await has(hex); await up(); await kbd.waitForTimeout(150); return v; };
+  ok(!(await fepOn()), '8. FEP は OFF から', await fepOn());
+  await tap(0x74); await tap(0x35);                       // CTRL のラッチ + XFER = CTRL+XFER
+  ok(await until(fepOn, 3000), '8. CTRL+XFER で FEP が ON', await fepOn());
+  ok(!(await has('0x35')) && !(await has('0x74')), '8. CTRL+XFER はゲストへ送らない', await keys());
+  ok(await holdCheck(0x62, '0x62'), '8. FEP ON (未確定なし): f·1 はゲストへ届く (FEP が飲まない)');
+  ok(!(await holdCheck(0x24, '0x24')), '8. FEP ON: K はゲストへ行かない (FEP が飲む)');
+  await tap(0x1c);                                       // RETURN = 確定 (未確定を残さない)
+  await tap(0x72);                                       // カナを倒す
+  ok(await holdCheck(0x24, '0x24'), '8. カナロック中は FEP を通さず K がゲストへ (半角カナ)');
+  await tap(0x72);                                       // カナを起こす
+  await tap(0x74); await tap(0x35);
+  ok(await until(async () => !(await fepOn()), 3000), '8. もう一度 CTRL+XFER で OFF', await fepOn());
+  ok(await holdCheck(0x24, '0x24'), '8. FEP OFF: K はゲストへ届く');
+  await downOn(0x51);                                    // 7 の準備: NFER を押したまま
 
   // 7. NFER を押したままキーボードを閉じる
   await kbd.close();

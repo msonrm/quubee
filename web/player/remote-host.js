@@ -33,7 +33,9 @@
         try { localStorage.setItem(STORE_KEY, JSON.stringify(st)); } catch (_) { /* 同上 */ }
     }
 
-    function init({ keyHub, onModalOpen }) {
+    // route(id, nkey, down, repeat) = 届いたキーの行き先 (bridge.js の remoteRoute: FEP → keyHub)。
+    // release(id) = その端末が押していたキーを全部離す。省略時は keyHub へ直接。
+    function init({ keyHub, route, release, onModalOpen }) {
         const $ = (id) => document.getElementById(id);
         const btn = $('remote-toggle'), modal = $('remote-modal');
         const qrEl = $('remote-qr'), urlEl = $('remote-url'), statusEl = $('remote-status'), peersEl = $('remote-peers');
@@ -44,14 +46,14 @@
         const layouts = new Map();   // id → hello で宣言されたキーボード
 
         const src = (id) => 'remote:' + id;
-        const releasePeer = (id) => keyHub.releaseWhere((s) => s === src(id));
+        const releasePeer = release || ((id) => keyHub.releaseWhere((s) => s === src(id)));
+        const toGuest = route || ((id, k, down, repeat) => (down ? keyHub.down(src(id), k, repeat) : keyHub.up(src(id), k)));
 
         function onMessage(id, m) {
             if (m.t === 'key') {
                 const k = m.k;
                 if (!Number.isInteger(k) || k < 0 || k > 0x7f || (m.d !== 0 && m.d !== 1)) return;
-                if (m.d) keyHub.down(src(id), k, m.r === 1);
-                else keyHub.up(src(id), k);
+                toGuest(id, k, m.d === 1, m.r === 1);
             } else if (m.t === 'hello' && typeof m.layout === 'string' && m.layout.length <= 32) {
                 layouts.set(id, m.layout);
                 paint();
@@ -123,7 +125,11 @@
             link = QBRemote.connectHost(st.room, {
                 onRelay(s) {
                     relayState = s;
-                    if (s === 'replaced') { link = null; peers = []; keyHub.releaseWhere((x) => x.startsWith('remote:')); }
+                    if (s === 'replaced') {
+                        for (const p of peers) releasePeer(p.id);
+                        link = null; peers = [];
+                        keyHub.releaseWhere((x) => x.startsWith('remote:'));
+                    }
                     paint();
                 },
                 onPeers(list) { peers = list; paint(); },
