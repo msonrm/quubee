@@ -565,7 +565,17 @@ body.panel-hidden #stage-max::before { content: "◂"; }  /* パネルが左へ�
 #remote-status { margin: 0; }
 #remote-status[data-state="live"] { color: #4f7a24; font-weight: 700; }
 #remote-status[data-state="signal"], #remote-status[data-state="replaced"] { color: #9a6a1e; }
-#remote-url { display: block; margin-top: 8px; font-size: 11px; color: #7a7366; word-break: break-all; }
+#remote-status .en, #remote-note .en { display: block; margin-top: 2px; font-size: 11px; font-weight: 400; color: #8a8377; }
+#remote-room { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 10px; font-size: 12px; }
+.rr-label { color: #5a5347; font-weight: 700; }
+.rr-label .ja { margin-left: 4px; font-weight: 400; font-size: 11px; color: #9a8f5e; }
+#remote-room-id { font-family: ui-monospace, "Migu 1M", monospace; font-size: 12px; color: #33302a; background: #f3efe3; border-radius: 3px; padding: 1px 5px; }
+#remote-renew {
+    font: inherit; font-size: 11px; padding: 2px 8px; min-height: 24px; border-radius: 4px; cursor: pointer;
+    border: 1px solid #c8c0ae; background: #fbf9f3; color: #5a5344;
+}
+#remote-renew:hover { background: #e9e3d3; color: #3a352c; }
+#remote-renew .ja { margin-left: 4px; font-size: 10px; opacity: .8; }
 #remote-peers { list-style: none; margin: 10px 0 0; padding: 0; }
 #remote-peers li { display: flex; gap: 8px; align-items: baseline; font-size: 12px; padding: 2px 0; }
 .rp-name { font-weight: 700; color: #5a5347; }
@@ -985,13 +995,16 @@ https://github.com/msonrm/quubee</pre>
             <div id="remote-qr"></div>
             <div id="remote-side">
                 <p id="remote-status"></p>
-                <a id="remote-url" target="_blank" rel="noopener"></a>
+                <div id="remote-room">
+                    <span class="rr-label">Room<span class="ja">部屋</span></span>
+                    <code id="remote-room-id"></code>
+                    <button id="remote-renew">New room<span class="ja">別の部屋にする</span></button>
+                </div>
                 <ul id="remote-peers"></ul>
             </div>
         </div>
-        <p id="remote-note">タブレットやスマホに PC-98 のキーボード (XFER・NFER・カナ・GRPH・STOP・COPY・HELP・テンキー付き) を出し、そこで押したキーをこの画面へ送ります。キーは同じ Wi-Fi の中を端末どうし直接流れ、外へは出ません (最初につなぐときだけ、接続情報を中継に通します)。</p>
+        <p id="remote-note">読み取った端末に、PC-98 同等のキーボードを表示します。キーボード側の端末とはローカルで接続するので、キー入力は外部に出ません (接続するときだけ、接続情報の受け渡しのために外部のサーバーを経由します)。<span class="en">The device that scans the code shows a PC-98-equivalent keyboard. The two devices connect locally, so your keystrokes never leave your network (only the connection setup goes through an external server).</span></p>
         <div class="remote-foot">
-            <button id="remote-renew">New room<span class="ja">別の部屋にする</span></button>
             <button id="remote-stop" hidden>Stop<span class="ja">止める</span></button>
             <button id="remote-done" class="primary">Done<span class="ja">閉じる</span></button>
         </div>

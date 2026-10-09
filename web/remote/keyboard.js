@@ -258,11 +258,11 @@
     // ---- 回線 ----
     const STATUS_TEXT = {
         none: 'QuuBee の画面の Remote に出る QR から開いてください。',
-        signal: '中継につないでいます…',
+        signal: '中継サーバーに接続中…',
         waiting: 'QuuBee 側を待っています。QuuBee のページで Remote を開いてください。',
-        connecting: 'QuuBee 側が見つかりました。直接つないでいます…',
-        open: 'つながりました。',
-        failed: '直接つながりませんでした。2 台が同じ Wi-Fi にいるか確かめてください。',
+        connecting: 'QuuBee 側が見つかりました。接続中…',
+        open: '接続済み',
+        failed: '接続できませんでした。2 台が同じ Wi-Fi にいるか確かめてください。',
         replaced: '別のタブでこのキーボードが開かれたので、こちらは切りました。読み込み直すと、こちらに戻ります。',
     };
     function showStatus(s) {

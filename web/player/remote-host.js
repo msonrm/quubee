@@ -15,12 +15,17 @@
 (function () {
     const STORE_KEY = 'quubee_remote_v1';
     const STATUS = {
-        off: ['Off', '止まっています。'],
-        signal: ['Connecting', '中継につないでいます…'],
-        open: ['Ready', 'キーボードにする端末のカメラで、この QR を読んでください。2 台は同じ Wi-Fi につないでおきます。'],
-        replaced: ['Moved', '別のタブで Remote が開かれたので、こちらは止めました。'],
+        off: ['止まっています。', 'Stopped.'],
+        signal: ['中継サーバーに接続中…', 'Connecting to the relay…'],
+        open: ['2 台を同じ Wi-Fi につないだうえで、キーボードにする端末のカメラでこの QR を読んでください。',
+            'Put both devices on the same Wi-Fi, then scan this QR code with the device you want to use as the keyboard.'],
+        replaced: ['別のタブで Remote が開かれたので、こちらは止めました。', 'Remote was opened in another tab, so this one has stopped.'],
     };
-    const PEER_TEXT = { connecting: 'つないでいます…', open: 'つながっています', failed: '直接つながりませんでした (同じ Wi-Fi か確かめてください)' };
+    const PEER_TEXT = {
+        connecting: '接続中… / Connecting…',
+        open: '接続済み / Connected',
+        failed: '接続できませんでした (同じ Wi-Fi か確かめてください) / Failed: check the Wi-Fi',
+    };
 
     function load() {
         try {
@@ -38,7 +43,7 @@
     function init({ keyHub, route, release, onModalOpen }) {
         const $ = (id) => document.getElementById(id);
         const btn = $('remote-toggle'), modal = $('remote-modal');
-        const qrEl = $('remote-qr'), urlEl = $('remote-url'), statusEl = $('remote-status'), peersEl = $('remote-peers');
+        const qrEl = $('remote-qr'), roomEl = $('remote-room-id'), statusEl = $('remote-status'), peersEl = $('remote-peers');
         if (!btn || !modal) return null;
 
         let st = load();
@@ -61,11 +66,14 @@
         }
 
         function paint() {
-            const [en, ja] = STATUS[relayState] || STATUS.off;
             const open = peers.filter((p) => p.state === 'open').length;
-            statusEl.textContent = open ? `${open} 台つながっています。` : ja;
+            const [ja, en] = open ? [`接続済み (${open} 台)`, `Connected (${open})`] : (STATUS[relayState] || STATUS.off);
+            const enEl = document.createElement('span');
+            enEl.className = 'en';
+            enEl.textContent = en;
+            statusEl.replaceChildren(ja, enEl);
             statusEl.dataset.state = open ? 'live' : relayState;
-            statusEl.title = en;
+            roomEl.textContent = st.room || '';
             peersEl.replaceChildren();
             peers.forEach((p, i) => {
                 const li = document.createElement('li');
@@ -97,8 +105,6 @@
 
         async function drawQr(room) {
             const url = QBRemote.keyboardUrl(await qrOrigin(), room);
-            urlEl.href = url;
-            urlEl.textContent = url;
             const qr = qrcode(0, 'M');
             qr.addData(url);
             qr.make();
