@@ -1,5 +1,33 @@
 # CHANGELOG
 
+## [リモートキーボード 段階 0〜1: 別の端末に PC-98 のフルキーボードを出す] — 2026-10-09
+
+- **発端** (ユーザー): ホストの物理キーボードに XFER 等を足すのではなく、へちま言語ラボの `/remote/` のように、同じ Wi-Fi の
+  別の端末のブラウザに PC-98 準拠の仮想キーボードを出して使いたい。ペアリングは QR。最初はフルキーボード (テンキー付き)、
+  いずれテンキーなし・ゲーム用の抜粋・2 台での二人プレイ。中継は案 B (QuuBee 専用の Worker) をユーザーが選んだ。
+  仕様・段階計画 = `docs/remote_keyboard.md`。
+- **段階 0 = キー押下の合流点 `keyHub`** (`bridge.js`): 元 (`kbd:<code>` / `pad` / `remote:<id>`) ごとに押下を覚え、最初の元で keyDown・
+  最後の元で keyUp。パッドとキーボードで同じキーを押すと片方を離した時点でゲスト側も離れていた (許容していた) のを断った。
+  副産物で物理キーボードの左右 Shift の片方を離しても押したままになる。FEP の編集キーは `keyHub.tap`。`qbDebug.keys()`。
+- **送るのは PC-98 のキーコード (NKEY) そのもの**。受け手は `PC98_KEYMAP` を通さず keyHub へ注ぐので、XFER・NFER・カナ・GRPH・
+  STOP・COPY・HELP・VF1〜5・テンキーの = , がそのまま届く。物理キーボードの経路とは独立。
+- **送り手** (`web/remote/`): 盤面は `layouts/pc98-full.json` (NP2kai のキー名・刻印・かな刻印)。マルチタッチ、長押しのオートリピート
+  (送り手が `r: 1` 付きの再 down)、指を滑らせると隣のキーへ、SHIFT・CTRL・GRPH の単独タップ = 次の 1 打だけラッチ、
+  **CAPS・カナは機械式ロック** (1 回目で押し下げたまま・2 回目で離す。NP2kai の既定表はメカニカル扱いでないので送り手が押し続ける)。
+  回線が開くたびに押し下げたままのキーを送り直す。画面の常時点灯 (Wake Lock)。
+- **回線** (`web/remote/link.js`): WebRTC DataChannel で端末間を直結、SDP だけ中継。ラボの接続層を、受け手 1 対 送り手 N の宛先付き
+  (`to` / `from`) に広げた。ページ読み込みごとの `sid` で「同じ端末の読み込み直し」を見分けて張り直す。
+- **中継** (`relay/`、Cloudflare Worker `quubee-relay` + Durable Object): 受け手 1 + キーボード 4 まで・何も保存しない・Origin を見る・
+  同じ id の入り直しは古い方を 4001 で閉じる。ローカルは `tools/devserver.js` に同じ規則の代役 (依存なしの最小 WebSocket) と、
+  QR に載せる LAN の住所 `/api/dev-origin`。デプロイ手順 = `docs/deploy.md`。
+- **受け手** (`web/player/remote-host.js`): 入力バーの ⌨ で QR のモーダル (状態・つながっている台数・New room・Stop)。部屋と ON/OFF を
+  localStorage に覚え、QuuBee を読み込み直しても中継へつなぎ直す。モーダル中もリモートのキーは届く。回線が切れたら
+  (DataChannel の close / ICE の failed) その端末の押下を全部離す。QR 生成 = qrcode-generator 1.4.4 (MIT、`web/assets/qrcode.js`、CREDITS 追記)。
+- **検査で見つけて直したもの**: キーボードを閉じても受け手は ICE の時間切れまで「つながっている」と思っていた → 送り手が `pagehide` で
+  回線を明示的に閉じる + 受け手は ICE の failed でも押下を離す。
+- **検証**: `tools/browser/remote_check.js` (ヘッドレス Chromium 2 ページ) 26 項目 PASS (2 回連続)・全回帰 92 本 PASS。
+  **未確認**: 中継の本番デプロイと、実機 2 台 (同じ Wi-Fi) での直結。
+
 ## [fmgen SSG-EG patch 13 を保留 + 更新予告ダイアログ (ステートセーブ失効の 2026-10-10 告知)] — 2026-10-06
 
 - **経緯**: New Horizons 体験版 (Deadline 2026) が途中で止まる真因は fmgen `Operator::KeyOn` の `ssg_phase_ = -1` (SSG-EG 無効でも残り、

@@ -48,6 +48,23 @@ deploy は git とは独立 (wrangler の直アップロード)。**git push し
   `CHANGELOG.md`・`tools/` は dist に入らない → **ドキュメント/メモリだけの変更は deploy しても本番バンドルに
   影響しない** (commit + push だけで足りる。無駄なアップロードを避ける)。
 
+## リモートキーボードの中継 (quubee-relay) — Pages とは別の Worker
+
+リモートキーボード (`web/remote/`、仕様 = [remote_keyboard.md](remote_keyboard.md)) は、最初の接続情報 (SDP)
+の受け渡しだけ中継を通す。中継は **Pages の外**にある Worker + Durable Object (`relay/`)。ページは
+`wss://quubee-relay.msonrm.workers.dev` へ直接つなぐ (`web/remote/link.js` の `relayBase`。本番とプレビュー
+`*.quubee.pages.dev` だけがこちらを使い、ローカルは devserver の代役)。
+
+- **デプロイするのは `relay/worker.js` を変えたときだけ** (Pages のデプロイとは独立。毎回は要らない):
+  ```bash
+  cd relay && npx wrangler deploy        # 要ネットワーク (サンドボックス解除)
+  ```
+- 検証: `curl -i https://quubee-relay.msonrm.workers.dev/api/pair/AAAAAAAAAAAAAAAA` が **426** (WebSocket で
+  ないので断られる = Worker が生きている)。つながるかは実機で (QuuBee の Remote → 別の端末で QR)。
+- 中継は Origin を見る (`quubee.pages.dev`・`*.quubee.pages.dev`・`localhost`)。**ドメインを変えたら `allowedOrigin` も直す**。
+- `wrangler dev` はこの開発機 (aarch64 / 39 ビット) では起動しない (へちま言語ラボと同じ)。ローカル検証は
+  `tools/devserver.js` の代役 + `tools/browser/remote_check.js`。
+
 ## 認証 (wrangler)
 
 - 初回のみ `npx wrangler login` (ブラウザ認証・対話)。アカウントは `.wrangler/cache/wrangler-account.json` に

@@ -1,0 +1,15 @@
+// QuuBee のリモートキーボードのシグナリング中継 (Cloudflare Workers + Durable Object)。
+// QuuBee 本体 (Cloudflare Pages の quubee) とは別の Worker。ページは wss://quubee-relay.msonrm.workers.dev へ
+// 直接つなぐ (web/remote/link.js の relayBase)。
+// デプロイ: cd relay && npx wrangler deploy   (手順は docs/deploy.md)
+{
+  "name": "quubee-relay",
+  "main": "worker.js",
+  "compatibility_date": "2026-07-01",
+  "workers_dev": true,
+  "durable_objects": {
+    "bindings": [{ "name": "PAIR_ROOM", "class_name": "PairRoom" }]
+  },
+  // 無料プランの Durable Object は SQLite 版でしか作れない (storage は使っていない)
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["PairRoom"] }]
+}

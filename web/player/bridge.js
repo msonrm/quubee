@@ -2482,8 +2482,52 @@ async function makeWorkerEmu() {
     const keyDown = M.cwrap('np2kai_key_down', null, ['number', 'number']);
     const keyUp   = M.cwrap('np2kai_key_up',   null, ['number', 'number']);
 
+    // ---- キー押下の合流点 (2026-10-09) ----
+    // ゲストの 1 つのキーを押す元は複数ありうる (物理キーボードの左右 Shift・ゲームパッド・リモート
+    // キーボード)。元ごとに押下を覚え、最初の元が押したときだけ keyDown、最後の元が離したときだけ
+    // keyUp を送る。旧来は「パッドとキーボードで同じキーを押すと、片方を離した時点でゲスト側も離れる」
+    // のを許容していたが、リモートキーボード (CAPS/カナを機械式ロックとして押し続ける) が加わると
+    // 許容できないのでここで断つ。元の名前 = 'kbd:<KeyboardEvent.code>' / 'pad' / 'remote:<peer id>'。
+    const keyHolders = new Map();   // NKEY → Set(元)
+    const keyHub = {
+        // repeat = その元のオートリピート。NP2kai は押下中のキーへの再 down を break+make
+        // (新しいキーストローク) として扱う (keystat_down)。同じ元が押していないときは通常の押下。
+        down(src, nkey, repeat) {
+            let s = keyHolders.get(nkey);
+            if (!s) keyHolders.set(nkey, (s = new Set()));
+            if (s.has(src)) { if (repeat) emu.keyDown(nkey); return; }
+            s.add(src);
+            if (s.size === 1) emu.keyDown(nkey);
+        },
+        up(src, nkey) {
+            const s = keyHolders.get(nkey);
+            if (!s || !s.delete(src)) return;
+            if (s.size === 0) emu.keyUp(nkey);
+        },
+        // 1 打だけ (FEP の編集キー)。他の元が押しているキーを離すわけにはいかないので、
+        // そのときは再 down (= break+make) で 1 打を作る。
+        tap(nkey) {
+            const s = keyHolders.get(nkey);
+            if (s && s.size) { emu.keyDown(nkey); return; }
+            emu.keyDown(nkey); emu.keyUp(nkey);
+        },
+        // ある元が押しているキーを全部離す (切断・blur など)。match(src) が真の元が対象。
+        releaseWhere(match) {
+            for (const [nkey, s] of keyHolders) {
+                for (const src of [...s]) if (match(src)) this.up(src, nkey);
+            }
+        },
+    };
+
     // 押されている code を追跡 (keyup の透過判定と blur/モーダル時の一括解放用)
     const pressed = new Set();
+
+    // リモートキーボード (別の端末に出す PC-98 キーボード、web/remote/)。届いたキーは keyHub へ直接注ぐ
+    // (元 = 'remote:<端末 id>')。物理キーボードの blur/モーダルでの一括解放の対象外 (keyup を取りこぼさないため)。
+    const remoteModalEl = document.getElementById('remote-modal');
+    const remoteHost = window.QBRemoteHost
+        ? QBRemoteHost.init({ keyHub, onModalOpen: () => { releaseHeldKeys(); releasePadKeys(); } })
+        : null;
 
     // 保持中のキーを全部 keyUp してから追跡集合を空にする。モーダル (ビューア/音楽
     // ポップアップ) を開く瞬間に呼ぶ — モーダル表示中は keydown/keyup がゲームへ届かず、
@@ -2494,7 +2538,7 @@ async function makeWorkerEmu() {
     function releaseHeldKeys() {
         for (const codeName of pressed) {
             const code = PC98_KEYMAP[codeName];
-            if (code !== undefined) emu.keyUp(code);
+            if (code !== undefined) keyHub.up('kbd:' + codeName, code);
         }
         pressed.clear();
     }
@@ -2662,7 +2706,7 @@ async function makeWorkerEmu() {
         resize(segIdx, offset) { return mozcResize(segIdx, offset); },
         hostKey(name) {                                   // 薙刀式編集キー: ゲストへ実キー 1 打 (BS/カーソル)
             const code = PC98_KEYMAP[name];
-            if (code !== undefined) { emu.keyDown(code); emu.keyUp(code); }
+            if (code !== undefined) keyHub.tap(code);
         },
     }) : null;
 
@@ -2749,6 +2793,8 @@ async function makeWorkerEmu() {
         if (!settingsModalEl.hidden) { if (e.key === 'Escape') { e.preventDefault(); settingsModalEl.hidden = true; } return; }
         // ステートセーブの一覧を開いている間も同様 (Esc で閉じる。ゲームは止めてある)
         if (!stateModalEl.hidden) { if (e.key === 'Escape') { e.preventDefault(); closeStateModal(); } return; }
+        // リモートキーボードの QR も同様 (Esc で閉じる。リモートのキーはこの間もゲームへ届く)
+        if (remoteModalEl && !remoteModalEl.hidden) { if (e.key === 'Escape') { e.preventDefault(); remoteHost.close(); } return; }
         // HLE FEP: Ctrl+Space または Ctrl+J でトグル (実機の CTRL+XFER 相当)。Ctrl+Space は
         // ChromeOS が入力メソッド切替として OS レベルで食いページに届かないため、Ctrl+J を
         // 併設 (ブラウザのダウンロード表示ショートカットだがページで横取り可能)。画面の
@@ -2788,7 +2834,7 @@ async function makeWorkerEmu() {
         // リピートでない二重 down (合成イベント等の防御) は従来どおり落とす。
         if (pressed.has(tap.code) && !tap.repeat) return;
         pressed.add(tap.code);
-        emu.keyDown(code);
+        keyHub.down('kbd:' + tap.code, code, tap.repeat);
     });
 
     window.addEventListener('keyup', (e) => {
@@ -2800,6 +2846,7 @@ async function makeWorkerEmu() {
         if (!playerModalEl.hidden) return;   // 音楽ポップアップ表示中も同様
         if (!settingsModalEl.hidden) return; // 設定パネル表示中も同様
         if (!stateModalEl.hidden) return;    // ステートセーブの一覧を表示中も同様
+        if (remoteModalEl && !remoteModalEl.hidden) return;   // リモートキーボードの QR を表示中も同様
         const tap = normTap(e, false);
         // FEP/chord へ keyup を供給する (chord のシフトホールド/ロールオーバー判定の前提)。
         // 現行の逐次かな入力は keyup を使わないので feedUp は false を返し、ゲスト処理へ素通しする。
@@ -2810,7 +2857,7 @@ async function makeWorkerEmu() {
         if (KEY_PREVENT_DEFAULT.has(tap.code)) e.preventDefault();
         if (!pressed.has(tap.code)) return;
         pressed.delete(tap.code);
-        emu.keyUp(code);
+        keyHub.up('kbd:' + tap.code, code);
     });
 
     // ---- ゲームパッド入力 (Gamepad API → キー変換) ----
@@ -2852,7 +2899,7 @@ async function makeWorkerEmu() {
     // パッド由来の押下を全解放。blur/タブ非表示中は rAF が止まりエッジ検出が走らないため、
     // 押しっぱなしのままタブを離れるとゲスト側でキーが押されたまま自走する — 明示解放で断つ。
     function releasePadKeys() {
-        for (const k of padPressed) emu.keyUp(k);
+        for (const k of padPressed) keyHub.up('pad', k);
         padPressed.clear();
     }
 
@@ -2861,7 +2908,8 @@ async function makeWorkerEmu() {
         let live = -1;
         // ビューア/音楽ポップアップ中は完全停止。設定パネル中は「押下ボタンの検出 (live)」だけ行い、
         // ゲームへは送らない (toGame=false → want 空 → 下のエッジ検出で padPressed が全解放される)。
-        if (viewerModalEl.hidden && playerModalEl.hidden && stateModalEl.hidden && noticeModalEl.hidden && navigator.getGamepads) {
+        if (viewerModalEl.hidden && playerModalEl.hidden && stateModalEl.hidden && noticeModalEl.hidden &&
+            (!remoteModalEl || remoteModalEl.hidden) && navigator.getGamepads) {
             const toGame = settingsModalEl.hidden;
             const dir = PAD_DIRS[padDir] || PAD_DIRS.arrow;
             for (const gp of navigator.getGamepads()) {
@@ -2883,17 +2931,17 @@ async function makeWorkerEmu() {
             }
         }
         padLive = live;
-        // エッジ検出して keyDown/keyUp (同 NKEY をキーボードと同時押ししていた場合、
-        // 片方の解放で keyUp が先行するが、実害は「押し直せば済む」程度なので許容)
+        // エッジ検出して keyDown/keyUp (同 NKEY をキーボードと同時押ししていても keyHub が
+        // 元ごとに数えるので、片方を離しただけではゲスト側は離れない)
         for (const k of want) {
-            if (!padPressed.has(k)) { padPressed.add(k); emu.keyDown(k); }
+            if (!padPressed.has(k)) { padPressed.add(k); keyHub.down('pad', k); }
         }
         for (const k of [...padPressed]) {
-            if (!want.has(k)) { padPressed.delete(k); emu.keyUp(k); }
+            if (!want.has(k)) { padPressed.delete(k); keyHub.up('pad', k); }
         }
     }
     // ゲームパッドはメインスレッドの rAF で毎フレームポーリング (両モード共通)。pollGamepads は
-    // emu.keyDown/keyUp 経由なので local/worker どちらにも届く (旧: local の駆動ループ内で呼んでいた)。
+    // keyHub → emu.keyDown/keyUp 経由なので local/worker どちらにも届く (旧: local の駆動ループ内で呼んでいた)。
     (function padLoop() { pollGamepads(); requestAnimationFrame(padLoop); })();
 
     window.addEventListener('gamepadconnected', (e) => {
@@ -2994,6 +3042,13 @@ async function makeWorkerEmu() {
     emu.setClockMultiple(DEFAULT_MULTIPLE);
 
     window.qbDebug = {
+        // キー押下の合流点の中身 (NKEY → 押している元)。リモートキーボードの検査 (tools/browser/remote_check.js) 用
+        keys: () => {
+            const o = {};
+            for (const [k, srcs] of keyHolders) if (srcs.size) o['0x' + k.toString(16).padStart(2, '0')] = [...srcs];
+            return o;
+        },
+        remote: () => (remoteHost ? remoteHost.state() : null),
         cs:     () => '0x' + (getCs(handle)       >>> 0).toString(16),
         linear: () => '0x' + (getLinearPc(handle) >>> 0).toString(16),
         pc:     () => `${window.qbDebug.cs()}:${window.qbDebug.linear()}`,

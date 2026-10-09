@@ -324,10 +324,24 @@ vendoring** する (keymap-engine と同じ差し替えモデル)。QuuBee 固�
 
 ---
 
+## QR コード生成 — `web/assets/qrcode.js` (qrcode-generator)
+
+リモートキーボード (別の端末に出す PC-98 キーボード) をつなぐための QR を、QuuBee の画面に描く。
+
+- **出所**: qrcode-generator 1.4.4 (Copyright © 2009 Kazuhiko Arase、**MIT**)。
+  https://github.com/kazuhikoarase/qrcode-generator 。npm の `qrcode-generator` 1.4.4 の `qrcode.js` を
+  改変せずそのまま同梱 (SHA-256 `18ae399f81182bc9de916e9c77b195df20cc58d6f2d55a62b085a299f1bf1780`)。
+  へちま言語ラボの `/remote/` と同じ版。ライセンス文はファイル冒頭に入っている。
+- "QR Code" は株式会社デンソーウェーブの登録商標。
+
+---
+
 ## QuuBee 自身
 
 QuuBee のブリッジ層・フロントエンド・ツール群（`native/` の `qb_*`/`bridge`/`dos_*`、`web/player/`、
-`web/index.html`、`tools/`、`emscripten/`、`docs/` 等、msonrm 著作の部分）は **MIT**（`LICENSE-MIT`）。
+`web/index.html`、`web/remote/`、`relay/`、`tools/`、`emscripten/`、`docs/` 等、msonrm 著作の部分）は **MIT**（`LICENSE-MIT`）。
+リモートキーボードの接続層 (`web/remote/link.js`) と中継 (`relay/worker.js`) は、へちま言語ラボの `/remote/`
+(`msonrm/hechima`、同じ著者・MIT) を元に、受け手 1 台に送り手を複数つなぐ形へ広げたもの。
 配布バイナリ全体は GPL 部品を含まない寛容ライセンスの集合体で（上記＊で整合化済み・全体像は冒頭の表）、
 QuuBee 独自部分は MIT 単独で再利用できる（fmgen の「フリーソフト配布」条件のみバイナリ全体に及ぶ）。
 BIOS は NEC の ROM を使用せず NP2kai の合成 BIOS を用い、DOS は MS-DOS を使用せず INT 21h を独自に
