@@ -80,6 +80,6 @@ int qb_dos_int18_hook(void);
  * put_kanji_sjis は SJIS のまま受けて内部で JIS へ変換し、隣接 2 セルへ書く。 */
 void qb_tty_put_ank(int row, int col, uint8_t ch, uint8_t attr);
 void qb_tty_put_kanji_sjis(int row, int col, uint8_t sjis_hi, uint8_t sjis_lo, uint8_t attr);
-int  qb_tty_text_rows(void);   /* 現在のテキスト行数 (25 or 30) */
+int  qb_tty_text_rows(void);   /* tty が使える行数 (25 or 30、ファンクションキー行の表示中は 1 少ない) */
 
 #endif /* QB_DOS_INT21_H */

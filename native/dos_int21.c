@@ -138,9 +138,13 @@ static uint8_t g_tty_attr = DEF_ATTR;
  * 未初期化 (=0) だと text_fillca が「1 行ぶん」しか塗らず、TH02/TH05 等の
  * text_wipe (全画面を黒反転セルで覆い、VRAM のタイルキャッシュ領域を隠す) が
  * row 0 で切れてゴミが見える (2026-06-11 根治)。
- * 我々の tty はファンクションキー行を描画しないので既定は「非表示・25 行」。 */
+ * ファンクションキー行 (画面最下行) は 2026-10-10 から描く。既定は実機の MS-DOS と同じ「表示・24 行」
+ * (NEC MS-DOS 3.1 ユーザーズマニュアル: 既定で最下行にファンクションキーのガイドが出る)。
+ * 表示中は tty の行数 (TEXT_ROWS) を 1 行減らし、カーソル・スクロール・消去・行挿入/削除が
+ * 最下行に触れないようにする。描画は sysline_refresh (キー定義表 g_keytbl のラベルを使う)。 */
 static int g_tty_lines20 = 0;   /* ESC[>3h: 20 行モード (l で 25 行) */
-static int g_tty_sysline = 0;   /* ESC[>1l: fkey 行表示 (h で非表示) */
+static int g_tty_sysline = 1;   /* ESC[>1l: fkey 行表示 (h で非表示)。既定 = 表示 */
+static void sysline_refresh(void);   /* 下で定義 (キー定義表 g_keytbl を読むため) */
 
 /* 仮想 30行BIOS (qbDebug.lines30 / np2kai_set_lines30)。ON のとき loader-start が 640×480・30 行へ
  * 切替え、tty を 30 行・DOS ワーク 0x712=29 にし、INT 18h で 30BIOS-API を提供する。既定 OFF=ゼロ回帰。
@@ -152,8 +156,8 @@ static void tty_sync_conarea(void) {
     int base = qb_lines30_enabled ? 30 : (g_tty_lines20 ? 20 : 25);
     int rows = base - (g_tty_sysline ? 1 : 0);
     /* VRAM の実行 row 数 (カーソル/スクロール境界)。20 行モードでも VRAM は 25 行のまま
-     * (従来挙動)、30 行モードのみ 30 行に拡張。 */
-    g_text_rows = qb_lines30_enabled ? 30 : 25;
+     * (従来挙動)、30 行モードのみ 30 行に拡張。ファンクションキー行の表示中は最下行を除く。 */
+    g_text_rows = (qb_lines30_enabled ? 30 : 25) - (g_tty_sysline ? 1 : 0);
     mem[0x711] = (uint8_t)(g_tty_sysline ? 1 : 0);
     mem[0x712] = (uint8_t)(rows - 1);
     /* 0:0713h = dosscrn_25 (20/25 行判定フラグ)。非ゼロ=25 行・ゼロ=20 行。
@@ -399,8 +403,15 @@ static void csi_dispatch(uint8_t final) {
         int set = (final == 'h');
         int n = csi_param(0, 0);
         if (g_csi_priv == '>' && n == 1) {
-            g_tty_sysline = !set;            /* h = 非表示 */
-            tty_sync_conarea();
+            /* h = 非表示。描く・消すのは状態が変わったときだけ (非表示のまま >1h を何度送られても、
+             * プログラムが最下行に描いたものを消さない) */
+            int on = !set;
+            if (on != g_tty_sysline) {
+                g_tty_sysline = on;
+                tty_sync_conarea();
+                csi_clamp_cursor();          /* 表示にしたとき、最下行に居たカーソルを 1 行上へ */
+                sysline_refresh();
+            }
         } else if (g_csi_priv == '>' && n == 3) {
             g_tty_lines20 = set;             /* h = 20 行 */
             tty_sync_conarea();
@@ -865,6 +876,78 @@ static uint8_t  g_keytbl[386];     /* C 側正準テーブル (KTBLSZ レイア�
 static int      g_keytbl_set;      /* 0 = 未 install (softkey 翻訳しない=非エディタはゼロ回帰) */
 static uint8_t  g_softkey_buf[24]; /* 直近ソフトキーの発行文字列 (NUL 終端まで)。len/pos は上で宣言済 */
 
+/* ===== ファンクションキー行 (画面最下行) の描画 (2026-10-10) =====================================
+ * 実機の MS-DOS (NEC の CON ドライバ) が描くもの。VZ Editor は表示を要求せず (計測 =
+ * tools/vz_fkey_probe.js)、最下行を空けてラベルだけをキー定義表に入れる = DOS が描く前提。
+ * 配置は VZ Editor のリポジトリ (vcraftjp/VZEditor) の PC-98 の画面写真から: 10 個の反転表示の枠、
+ * 幅 6 桁 (1 桁空けて 5 バイトのラベル)、開始桁 4,11,18,25,32 / 42,49,56,63,70。
+ * ラベル: キー定義表のスロット (16 バイト) の先頭が FEh なら続く 5 バイト (VZ はこの形)。それ以外は
+ * 発行文字列 (+6) の先頭 5 バイトの表示できる文字。キー定義表が未設定なら MS-DOS の既定のラベル
+ * (C1 CU CA S1 SU VOID NWL INS REP ^Z。NEC MS-DOS 3.1 ユーザーズマニュアルの一覧。DOS のコマンド
+ * ライン編集のキーで、QuuBee では表示だけ)。ラベル内の位置 (前後の空白) は推測。
+ * 未対応: SHIFT 中のシフト側ラベル (実機は CTRL+f7 で 通常 → SHIFT → 非表示)。 */
+static const char k_fkey_default_label[10][6] = {
+    " C1  ", " CU  ", " CA  ", " S1  ", " SU  ", "VOID ", "NWL  ", "INS  ", "REP  ", " ^Z  ",
+};
+#define SYSLINE_ATTR_REV  (DEF_ATTR | 0x04)   /* 白・反転 */
+
+static int sysline_row(void) { return (qb_lines30_enabled ? 30 : 25) - 1; }
+
+static void sysline_cell(int row, int col, uint8_t ch, uint8_t attr) {
+    uint32_t code_off = VRAM_CODE + ((row * TEXT_COLS + col) * 2);
+    uint32_t attr_off = VRAM_ATTR + ((row * TEXT_COLS + col) * 2);
+    mem[code_off] = ch; mem[code_off + 1] = 0;
+    mem[attr_off] = attr; mem[attr_off + 1] = 0;
+}
+
+static int sysline_sjis_lead(uint8_t b) { return (b >= 0x81 && b <= 0x9F) || (b >= 0xE0 && b <= 0xFC); }
+
+static void sysline_draw(void) {
+    int row = sysline_row();
+    for (int c = 0; c < TEXT_COLS; c++) sysline_cell(row, c, 0x20, DEF_ATTR);
+    for (int i = 0; i < 10; i++) {
+        int col = (i < 5) ? 4 + 7 * i : 42 + 7 * (i - 5);
+        uint8_t label[5];
+        if (!g_keytbl_set) {
+            memcpy(label, k_fkey_default_label[i], 5);
+        } else {
+            const uint8_t *slot = &g_keytbl[i * 16];   /* f·1〜f·10 の通常側 (1 スロット 16 バイト) */
+            const uint8_t *src = (slot[0] == 0xFE) ? slot + 1 : slot + 6;
+            int end = 0;
+            for (int j = 0; j < 5; j++) {
+                uint8_t b = src[j];
+                if (slot[0] != 0xFE && (b == 0 || end)) { end = 1; b = 0x20; }
+                label[j] = b;
+            }
+        }
+        for (int c = 0; c < 6; c++) sysline_cell(row, col + c, 0x20, SYSLINE_ATTR_REV);
+        for (int j = 0; j < 5; j++) {
+            uint8_t b = label[j];
+            if (sysline_sjis_lead(b) && j + 1 < 5) {
+                uint8_t jh, jl, save = g_tty_attr;
+                sjis_to_jis(b, label[j + 1], &jh, &jl);
+                g_tty_attr = SYSLINE_ATTR_REV;
+                vram_put_kanji(row, col + 1 + j, jh, jl);
+                g_tty_attr = save;
+                j++;
+            } else {
+                int shown = (b >= 0x20 && b < 0x7F) || (b >= 0xA1 && b <= 0xDF);
+                sysline_cell(row, col + 1 + j, shown ? b : 0x20, SYSLINE_ATTR_REV);
+            }
+        }
+    }
+    gdcs.textdisp |= GDCSCRN_ALLDRAW2;
+}
+
+/* 表示中なら描き、非表示なら最下行を消す (クリア文字・クリア属性)。状態が変わったとき・起動時・
+ * キー定義表が変わったときに呼ぶ。 */
+static void sysline_refresh(void) {
+    if (g_tty_sysline) { sysline_draw(); return; }
+    int row = sysline_row();
+    for (int c = 0; c < TEXT_COLS; c++) vram_put_clear(row, c);
+    gdcs.textdisp |= GDCSCRN_ALLDRAW2;
+}
+
 /* 編集/ファンクションキーのテーブル先頭オフセット。標準レイアウト (KTBLSZ) は
  * ファンクションキー 20本 (f1-f10 ×2: 通常/SHIFT) × 16byte の後ろに編集キー。 */
 #define QB_FKEY_SLOT_BYTES   16
@@ -1109,6 +1192,7 @@ int qb_dos_intdc_hook(void) {
             }
         }
         g_softkey_len = g_softkey_pos = 0;  /* 切替時に古い発行文字列を破棄 */
+        if (g_tty_sysline) sysline_refresh();   /* ラベルが変わる (VZ はここでラベルを入れる) */
     } else if (cl == 0x0C) {                /* get key table → DS:DX へ (未 install は 0) */
         if (ax == 0) {
             for (int i = 0; i < QB_KTBL_STD_SIZE; i++)
@@ -3927,11 +4011,12 @@ void qb_dos_tty_reset(void) {
     g_csi_nparam = 0;
     g_csi_has_digit = 0;
     g_csi_priv = 0;
-    /* DOS CON ワークエリア (0:0711h/0712h/0713h/071Dh) を既定 (fkey 非表示・25 行・
+    /* DOS CON ワークエリア (0:0711h/0712h/0713h/071Dh) を既定 (fkey 表示・24 行・
      * 白属性) に。master.lib text_fillca/TEXT_HEIGHT は 0712h を、VZ の check_20 は
-     * 0713h を直読みする (未初期化=0 だと全画面 fill が 1 行で切れたり 20 行と誤認)。 */
+     * 0713h を直読みする (未初期化=0 だと全画面 fill が 1 行で切れたり 20 行と誤認)。
+     * ファンクションキー行は実機の MS-DOS と同じく表示から始める (描画は関数の末尾)。 */
     g_tty_lines20 = 0;
-    g_tty_sysline = 0;
+    g_tty_sysline = 1;
     g_tty_attr = DEF_ATTR;
     /* GDC mode1 bit0 (DEGB = 簡易グラフィックモード) を OFF にする。np2kai POST は既定で
      * これを 1 にする (gdc.mode1=0x99) が、実 PC-98 + 実 MS-DOS はブート時にテキストモードを
@@ -3981,6 +4066,7 @@ void qb_dos_tty_reset(void) {
     g_softkey_pos = 0;
     g_inject_head = g_inject_tail = 0;   /* ホスト IME 注入 FIFO も Run 毎にクリア (前 Run を持ち越さない) */
     g_int23_pending = 0;                 /* INT 23h 発火中フラグも破棄 (前 Run の復帰判定を持ち越さない) */
+    sysline_refresh();                   /* ファンクションキー行を既定のラベルで描く (キー定義表のクリア後) */
 }
 
 /* オリジナル PC-98 CRT/キーボード BIOS (NP2kai 合成 BIOS)。30 行モード時のパススルー先。 */

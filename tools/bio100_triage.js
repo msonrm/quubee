@@ -66,6 +66,9 @@ const BIO    = path.join(ROOT, 'games', 'bio_100');
 const WORK   = '/tmp/qb_bio100';
 const CACHE  = path.join(WORK, 'results.json');
 const SENTINEL = '__BIO_RESULT__';   // 子プロセス stdout の結果行マーカ
+// 最後の画面を PNG で残す先 (任意)。設定すると早期確定をやめ、全本を同じフレーム数まで回す。
+// キャッシュ (results.json) と混ざらないよう --fresh と併用する。
+const SHOT_DIR = process.env.QB_SHOT_DIR || '';
 
 function skip(m) { console.log('SKIP — ' + m); process.exit(0); }
 
@@ -207,9 +210,23 @@ async function runGame([archive, fallbackExe, fallbackArgs]) {
             // 早期確定: 多色 + アニメ済 (異なる非ゼロ hash 2 種以上) なら ALIVE は確定なので、残り
             // フレームを回す意味がない (グラフィカルなゲームは 1 フレーム ~10-30ms と重く、20 本の
             // ALIVE がここで半減すると全体が大きく速くなる)。tier は変わらない (ALIVE のまま)。
-            if (maxColors > 6 && new Set(hashes.filter((x) => x !== 0)).size >= 2) { early = 1; break; }
+            // QB_SHOT_DIR (最後の画面を残す比較用) のときは打ち切らない (ビルド間で同じフレーム数にそろえる)
+            if (!SHOT_DIR && maxColors > 6 && new Set(hashes.filter((x) => x !== 0)).size >= 2) { early = 1; break; }
         }
         if (getExit(0)) { exited = 1; break; }
+    }
+    if (SHOT_DIR) {
+        // 最後の画面を PNG で残す (ビルドの前後で見比べる用。例: ファンクションキー行の影響、2026-10-10)
+        const { encodePng } = require(path.join(__dirname, 'lib', 'machine.js'));
+        const ptr = getFB(handle, wP, hP, bP);
+        const w = M.HEAP32[wP >> 2], h = M.HEAP32[hP >> 2];
+        const rgb = Buffer.alloc(w * h * 3);
+        for (let i = 0; i < w * h; i++) {
+            const v = M.HEAPU16[(ptr >> 1) + i];
+            rgb[i * 3] = ((v >> 11) & 31) * 255 / 31; rgb[i * 3 + 1] = ((v >> 5) & 63) * 255 / 63; rgb[i * 3 + 2] = (v & 31) * 255 / 31;
+        }
+        fs.mkdirSync(SHOT_DIR, { recursive: true });
+        fs.writeFileSync(path.join(SHOT_DIR, name + '.png'), encodePng(w, h, rgb));
     }
     const pc = linPc(handle) >>> 0;
     const animated = new Set(hashes.filter((x) => x !== 0)).size >= 2;

@@ -94,7 +94,8 @@ const NP2KaiModule = require(path.join(WEB, 'np2kai_core.js'));
     const w711 = peek8(handle, 0x711) & 0xff, w712 = peek8(handle, 0x712) & 0xff;
     const w71d = peek8(handle, 0x71D) & 0xff;
     const tdisp = textdisp(handle) & 0x80;
-    if (!(w711 === 0 && w712 === 24 && w71d === 0xE1 && tdisp === 0x80)) pass = false;
+    /* 0711h=1・0712h=23: ファンクションキー行は既定で表示・24 行 (2026-10-10〜、実機の MS-DOS と同じ) */
+    if (!(w711 === 1 && w712 === 23 && w71d === 0xE1 && tdisp === 0x80)) pass = false;
     /* DEGB (gdc.mode1 bit0 = 簡易グラフィックモード) は OFF であること。ON だと属性 0x10 が
      * 縦線でなく 2x4 ブロックに化け、SGR 2 (vertical-line) が np21w と食い違う (2026-06-29 根治)。
      * qb_dos_tty_reset が POST 既定 (0x99) から bit0 を落とすことのガード。 */

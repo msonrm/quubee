@@ -75,3 +75,4 @@ Thumbs.db
 
 # ステートセーブの互換識別子 (emscripten/build.sh が生成)
 native/qb_build_id.h
+relay/.wrangler/

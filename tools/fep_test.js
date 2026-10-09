@@ -208,7 +208,7 @@ function sjisKu(sh, sl) {
         const huge = [];
         for (let i = 0; i < 1200; i++) huge.push(0x82, 0xA0);   // あ ×1199 + 最後に か
         huge[huge.length - 2] = 0x82; huge[huge.length - 1] = 0xA9;
-        const rows = 25;
+        const rows = 24;   // 最下行はファンクションキー行 (既定で表示、2026-10-10〜) = FEP は 24 行目まで
         const n = fepShow(Uint8Array.from(huge), 0xE9);
         const sT = snapshot();
         const dT = diffCells(base, sT);

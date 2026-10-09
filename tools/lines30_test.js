@@ -132,7 +132,8 @@ const NP2KaiModule = require(path.join(WEB, 'np2kai_core.js'));
     need(on.exited, 'ON: COM が終了しない (ハング)');
     need((on.al0b & 0x40) !== 0, `ON: AH=0Bh の AL bit6 (30BIOS 常駐) が立っていない (AL=0x${on.al0b.toString(16)})`);
     need((on.al0b & 0x10) !== 0, `ON: AH=0Bh の AL bit4 (拡張モード) が立っていない (AL=0x${on.al0b.toString(16)})`);
-    need(on.work === 29, `ON: 0:0712 (行数-1) が 29 でない (=${on.work})`);
+    // 0:0712 = 行数 - 1。ファンクションキー行は既定で表示 (2026-10-10〜) なので 30 行 - 1 = 29 行 → 28
+    need(on.work === 28, `ON: 0:0712 (行数-1) が 28 (=29 行 + ファンクションキー行) でない (=${on.work})`);
     need(on.ff03 === 29, `ON: AX=FF03h の AL (行数-1) が 29 でない (=${on.ff03})`);
     need(on.flip === 0x31, `ON: ES:DI の '30BIOS_EXIST=' フラグが '1' にフリップされていない (=0x${on.flip.toString(16)})`);
 
@@ -141,7 +142,7 @@ const NP2KaiModule = require(path.join(WEB, 'np2kai_core.js'));
     console.log(`[OFF] exited=${off.exited} AH0Bh.AL=0x${off.al0b.toString(16)} work(0712)=${off.work}`);
     need(off.exited, 'OFF: COM が終了しない (ハング)');
     need((off.al0b & 0x40) === 0, `OFF: 非常駐なのに AL bit6 が立っている (フック誤作動? AL=0x${off.al0b.toString(16)})`);
-    need(off.work === 24, `OFF: 0:0712 (行数-1) が 24 (=25 行) でない (=${off.work})`);
+    need(off.work === 23, `OFF: 0:0712 (行数-1) が 23 (=24 行 + ファンクションキー行) でない (=${off.work})`);
 
     // --- 画面表示検査 (黒画面バグの恒久ガード) ---
     const dON  = displayOnce(true);
@@ -154,6 +155,6 @@ const NP2KaiModule = require(path.join(WEB, 'np2kai_core.js'));
     need(dOFF.nonblack > 0, 'OFF: テキストが表示されない (原 BIOS 経路の回帰)');
 
     if (fail) process.exit(1);
-    console.log('PASS — lines30 ON で 30BIOS-API 応答 + 0:0712=29 + 640x480 にテキスト表示、OFF で原 BIOS 挙動 (ゼロ回帰)');
+    console.log('PASS — lines30 ON で 30BIOS-API 応答 + 0:0712=28 (ファンクションキー行込み) + 640x480 にテキスト表示、OFF で原 BIOS 挙動 (ゼロ回帰)');
     process.exit(0);
 })().catch(e => { console.error(e); process.exit(1); });
