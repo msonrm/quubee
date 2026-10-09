@@ -25,6 +25,11 @@
   (DataChannel の close / ICE の failed) その端末の押下を全部離す。QR 生成 = qrcode-generator 1.4.4 (MIT、`web/assets/qrcode.js`、CREDITS 追記)。
 - **検査で見つけて直したもの**: キーボードを閉じても受け手は ICE の時間切れまで「つながっている」と思っていた → 送り手が `pagehide` で
   回線を明示的に閉じる + 受け手は ICE の failed でも押下を離す。
+- **実機確認 (ユーザー、プレビュー `remote-preview.quubee.pages.dev`)**: 機能する。盤面を実機に合わせて 9 点直した = テンキー右下の小さな
+  RETURN (刻印 ↵) / テンキーの刻印は中央 / INS・DEL が上で ROLL UP・ROLL DOWN が下 / CTRL と CAPS は A の段に正方形で並ぶ
+  (A の段が Q の段より 1/4 右へずれる) / STOP と COPY の間を空ける / 左下に CAPS・カナのランプ (機械式ロックなので送り手の状態そのもの) /
+  テンキーの - / * + = ↵ は HELP と同じ色 / カナ刻印をカタカナに・シフト側 (ァィゥェォャュョッヲ、。・「」) を追加、英字のキーは
+  下の辺の中央・記号のキーは右に 2 段。RETURN は逆 L 字 (clip-path、当たり判定も従う)。
 - **検証**: `tools/browser/remote_check.js` (ヘッドレス Chromium 2 ページ) 26 項目 PASS (2 回連続)・全回帰 92 本 PASS。
   **未確認**: 中継の本番デプロイと、実機 2 台 (同じ Wi-Fi) での直結。
 

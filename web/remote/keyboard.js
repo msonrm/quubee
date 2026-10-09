@@ -40,6 +40,7 @@
     // ---- 押下の状態 (NKEY ごとに「押している理由」の集合。空になったら離す) ----
     const holders = new Map();      // nkey → Set(token)。token = 'p<pointerId>' | 'latch' | 'lock'
     const keyEls = new Map();       // nkey → [要素]
+    const ledEls = new Map();       // nkey → [ランプ] (CAPS・カナのロックの表示)
     let link = null;
 
     const held = (k) => { const s = holders.get(k); return !!s && s.size > 0; };
@@ -65,6 +66,8 @@
             el.classList.toggle('locked', s.has('lock'));
             el.classList.toggle('latched', s.has('latch'));
         }
+        // 実機の左下のランプ。ロックは機械式なので、ランプも送り手のロックの状態そのもの
+        for (const el of ledEls.get(k) || []) el.classList.toggle('on', s.has('lock'));
     }
 
     // ---- 指 (pointer) ----
@@ -165,7 +168,8 @@
     function render(layout) {
         board.replaceChildren();
         keyEls.clear();
-        const keys = [];
+        ledEls.clear();
+        const keys = [], leds = [];
         let W = 0, H = 0;
         for (const b of layout.blocks || []) {
             let y = b.y || 0;
@@ -176,6 +180,7 @@
                     const k = NKEY[it.k];
                     const w = it.w || 1, h = it.h || 1;
                     if (k !== undefined) keys.push({ it, k, x, y, w, h });
+                    else if (Array.isArray(it.led)) leds.push({ it, x, y, w, h });
                     x += w;
                     W = Math.max(W, x); H = Math.max(H, y + h);
                 }
@@ -185,20 +190,40 @@
         for (const { it, k, x, y, w, h } of keys) {
             const el = document.createElement('div');
             const kind = it.c || '';
-            el.className = 'key' + (kind ? ' ' + kind : '') + (it.s ? '' : ' single');
+            el.className = 'key' + (kind ? ' ' + kind : '') + (it.s ? '' : ' single') + (it.a === 'c' ? ' center' : '');
             el.dataset.k = k;
             el.dataset.x = x; el.dataset.y = y; el.dataset.w = w; el.dataset.h = h;
+            if (it.notch) el.dataset.notch = it.notch;
             const add = (cls, text) => { const s = document.createElement('span'); s.className = cls; s.textContent = text; el.appendChild(s); };
+            // 刻印の位置: 記号のキーは左に 2 段 (シフト側が上)・カナは右に 2 段 (シフト側が上)。
+            // 英字のキーは英字が左上・カナが下の辺の中央
             if (it.s) add('s', it.s);
             add('l', it.l !== undefined ? it.l : it.k);
-            if (it.kn) add('kn', it.kn);
+            if (it.ks) add('ks', it.ks);
+            if (it.kn) add(it.s ? 'kn r' : 'kn', it.kn);
             board.appendChild(el);
             if (!keyEls.has(k)) keyEls.set(k, []);
             keyEls.get(k).push(el);
         }
+        for (const { it, x, y, w, h } of leds) {
+            const el = document.createElement('div');
+            el.className = 'leds';
+            el.dataset.x = x; el.dataset.y = y; el.dataset.w = w; el.dataset.h = h;
+            for (const name of it.led) {
+                const k = NKEY[name];
+                if (k === undefined) continue;
+                const row = document.createElement('span');
+                const dot = document.createElement('i');
+                row.append(dot, name === 'KANA' ? 'カナ' : name);
+                el.appendChild(row);
+                if (!ledEls.has(k)) ledEls.set(k, []);
+                ledEls.get(k).push(dot);
+            }
+            board.appendChild(el);
+        }
         board.dataset.w = W; board.dataset.h = H;
         fit();
-        for (const k of keyEls.keys()) paint(k);
+        for (const k of new Set([...keyEls.keys(), ...ledEls.keys()])) paint(k);
     }
 
     function fit() {
@@ -218,6 +243,11 @@
             el.style.top = (el.dataset.y * u + gap / 2) + 'px';
             el.style.width = (el.dataset.w * u - gap) + 'px';
             el.style.height = (el.dataset.h * u - gap) + 'px';
+            // 左下の切り欠き (RETURN の逆 L 字)。指の当たり判定も clip-path に従う
+            if (el.dataset.notch) {
+                const nx = el.dataset.notch * u, ny = u - gap;
+                el.style.clipPath = `polygon(0 0, 100% 0, 100% 100%, ${nx}px 100%, ${nx}px ${ny}px, 0 ${ny}px)`;
+            }
         }
         hintEl.hidden = !(innerHeight > innerWidth && u < 36);
     }

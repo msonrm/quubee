@@ -49,11 +49,22 @@ html, body {
 .key .s { top: 8%; }
 .key .l { bottom: 10%; }
 .key.single .l { top: 10%; bottom: auto; }
-.key .kn { position: absolute; right: 10%; bottom: 10%; color: var(--key-kana); font-size: .8em; }
+.key .kn { position: absolute; left: 50%; bottom: 8%; transform: translateX(-50%); color: var(--key-kana); font-size: .8em; }
+.key .kn.r { left: auto; right: 10%; transform: none; }
+.key .ks { position: absolute; right: 10%; top: 8%; color: var(--key-kana); font-size: .8em; }
 .key.fn, .key.mod, .key.lock { background: var(--fn); color: var(--fn-fg); border-color: var(--fn-edge);
     display: flex; align-items: center; justify-content: center; text-align: center; font-size: .72em; }
 .key.mod, .key.lock { background: var(--mod); border-color: var(--mod-edge); }
 .key.fn .l, .key.mod .l, .key.lock .l { position: static; }
+/* テンキーまわりは刻印が中央・大きめ */
+.key.center { display: flex; align-items: center; justify-content: center; font-size: 1.15em; }
+.key.center .l { position: static; }
+/* 左下のランプ (CAPS・カナ) */
+.leds { position: absolute; box-sizing: border-box; display: flex; flex-direction: column; justify-content: center;
+        gap: .35em; padding-left: .5em; font-size: .62em; color: var(--bar-dim); pointer-events: none; white-space: nowrap; }
+.leds span { display: flex; align-items: center; gap: .5em; }
+.leds i { display: inline-block; width: .9em; height: .9em; border-radius: 50%; background: #4a453d; }
+.leds i.on { background: #ffb347; box-shadow: 0 0 .6em #ffb347; }
 .key.down { background: var(--down); border-color: var(--down-edge); border-bottom-width: 1px; }
 .key.locked, .key.latched { background: var(--lock); border-color: var(--lock); color: var(--lock-fg); }
 .key.latched { box-shadow: inset 0 0 0 2px rgba(255,255,255,.55); }
