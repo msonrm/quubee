@@ -22,10 +22,21 @@
         replaced: ['別のタブでRemoteが開かれたので、こちらは止めました。', 'Remote was opened in another tab, so this one has stopped.'],
     };
     const PEER_TEXT = {
-        connecting: '接続中… / Connecting…',
-        open: '接続済み / Connected',
-        failed: '接続できませんでした (同じWi-Fiか確かめてください) / Failed: check the Wi-Fi',
+        connecting: ['接続中…', 'Connecting…'],
+        open: ['接続済み', 'Connected'],
+        failed: ['接続できませんでした (同じWi-Fiか確かめてください)', 'Failed: check the Wi-Fi'],
     };
+
+    // 日本語が先・英語が後の組 (英語は <span class="en"> の副表示)
+    function bilingual(cls, ja, en) {
+        const el = document.createElement('span');
+        el.className = cls;
+        const sub = document.createElement('span');
+        sub.className = 'en';
+        sub.textContent = en;
+        el.append(ja, sub);
+        return el;
+    }
 
     function load() {
         try {
@@ -48,7 +59,19 @@
 
         let st = load();
         let link = null, relayState = 'off', peers = [];
-        const layouts = new Map();   // id → hello で宣言されたキーボード
+        const layouts = new Map();   // 端末 id → hello で宣言されたキーボードの id
+        const layoutNames = new Map();   // キーボードの id → [日本語名, 英語名] (web/remote/layouts/<id>.json)
+
+        function layoutName(lay) {
+            if (layoutNames.has(lay)) return layoutNames.get(lay);
+            layoutNames.set(lay, null);
+            if (/^[a-z0-9-]{1,32}$/.test(lay)) {
+                fetch(`remote/layouts/${lay}.json`).then((r) => (r.ok ? r.json() : null)).then((j) => {
+                    if (j && typeof j.name_ja === 'string' && typeof j.name === 'string') { layoutNames.set(lay, [j.name_ja, j.name]); paint(); }
+                }).catch(() => { /* 名前が引けなければ出さない */ });
+            }
+            return null;
+        }
 
         const src = (id) => 'remote:' + id;
         const releasePeer = release || ((id) => keyHub.releaseWhere((s) => s === src(id)));
@@ -68,23 +91,18 @@
         function paint() {
             const open = peers.filter((p) => p.state === 'open').length;
             const [ja, en] = open ? [`接続済み (${open}台)`, `Connected (${open})`] : (STATUS[relayState] || STATUS.off);
-            const enEl = document.createElement('span');
-            enEl.className = 'en';
-            enEl.textContent = en;
-            statusEl.replaceChildren(ja, enEl);
+            statusEl.replaceChildren(...bilingual('', ja, en).childNodes);
             statusEl.dataset.state = open ? 'live' : relayState;
             roomEl.textContent = st.room || '';
             peersEl.replaceChildren();
             peers.forEach((p, i) => {
                 const li = document.createElement('li');
-                const name = document.createElement('span');
-                name.className = 'rp-name';
-                name.textContent = `キーボード${i + 1}`;
-                const sub = document.createElement('span');
-                sub.className = 'rp-state ' + p.state;
+                li.appendChild(bilingual('rp-name', `キーボード${i + 1}`, `Keyboard ${i + 1}`));
+                const [sja, sen] = PEER_TEXT[p.state] || [p.state, p.state];
+                li.appendChild(bilingual('rp-state ' + p.state, sja, sen));
                 const lay = layouts.get(p.id);
-                sub.textContent = (PEER_TEXT[p.state] || p.state) + (lay && p.state === 'open' ? ` (${lay})` : '');
-                li.append(name, sub);
+                const ln = lay && p.state === 'open' ? layoutName(lay) : null;
+                if (ln) li.appendChild(bilingual('rp-layout', ln[0], ln[1]));
                 peersEl.appendChild(li);
             });
             btn.classList.toggle('on', open > 0);

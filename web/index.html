@@ -566,6 +566,7 @@ body.panel-hidden #stage-max::before { content: "◂"; }  /* パネルが左へ�
 #remote-status[data-state="live"] { color: #4f7a24; font-weight: 700; }
 #remote-status[data-state="signal"], #remote-status[data-state="replaced"] { color: #9a6a1e; }
 #remote-status .en, #remote-note .en { display: block; margin-top: 2px; font-size: 11px; font-weight: 400; color: #8a8377; }
+#remote-status[data-state="live"] .en { display: inline; margin: 0 0 0 6px; color: #7f9a62; }
 #remote-room { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 10px; font-size: 12px; }
 .rr-label { color: #5a5347; font-weight: 700; }
 .rr-label .en { margin-left: 4px; font-weight: 400; font-size: 11px; color: #9a8f5e; }
@@ -577,11 +578,19 @@ body.panel-hidden #stage-max::before { content: "◂"; }  /* パネルが左へ�
 #remote-renew:hover { background: #e9e3d3; color: #3a352c; }
 #remote-renew .en { margin-left: 4px; font-size: 10px; opacity: .8; }
 #remote-peers { list-style: none; margin: 10px 0 0; padding: 0; }
-#remote-peers li { display: flex; gap: 8px; align-items: baseline; font-size: 12px; padding: 2px 0; }
+#remote-peers li { display: flex; flex-wrap: wrap; gap: 2px 10px; align-items: baseline; font-size: 12px; padding: 2px 0; }
+/* 「部屋 Room」と同じ組み方: 日本語が本体、英語は細く小さく同系の淡い色 */
+#remote-peers .en { margin-left: 4px; font-weight: 400; font-size: 11px; white-space: nowrap; }
 .rp-name { font-weight: 700; color: #5a5347; }
+.rp-name .en { color: #9a8f5e; }
 .rp-state { color: #8a8377; }
+.rp-state .en { color: #b0a897; }
 .rp-state.open { color: #4f7a24; }
+.rp-state.open .en { color: #7f9a62; }
 .rp-state.failed { color: #b3261e; }
+.rp-state.failed .en { color: #c97a70; }
+.rp-layout { color: #8a8377; }
+.rp-layout .en { color: #b0a897; }
 #remote-note { margin: 12px 0 0; font-size: 11px; line-height: 1.6; color: #8a8377; }
 .remote-foot { display: flex; gap: 8px; justify-content: flex-end; margin-top: 14px; flex-wrap: wrap; }
 .remote-foot button {

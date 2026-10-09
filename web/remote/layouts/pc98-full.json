@@ -1,7 +1,7 @@
 {
   "format": "quubee-remote-layout/1",
   "id": "pc98-full",
-  "name": "PC-9801 Full",
+  "name": "Full with numpad",
   "name_ja": "フルキーボード (テンキー付き)",
   "note": "寸法は PC-9800 シリーズの標準キーボードの写真から (キー 1 個 = 1)。k = NP2kai のキー名 (core/np2kai/keystat.tbl の s_keyname)。刻印 l = 左辺の中央、s = 上辺の中央、ks = 右辺の中央 (シフト側のカナ)、kn = 下辺の中央 (カナ・濁点・半濁点・音引き)。a = c で刻印を中央に、z = 刻印の大きさ (倍率)、c = 種類 (fn = 文字・テンキー・スペース以外のキー / mod / lock)、w/h = 幅・高さ、notch = 左下の切り欠きの幅 (RETURN の逆 L 字)、b = 太字、gap = 空き、led = ロックのランプ",
   "blocks": [
