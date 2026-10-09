@@ -1,5 +1,12 @@
 # CHANGELOG
 
+## [fmgen SSG-EG patch 13 を有効化 (ステートセーブの互換識別子が変わる)] — 2026-10-10
+
+- 予告どおり `tools/np2kai_patches/pending/13_fmgen_ssgeg_phase.patch` を本線へ (README の表も移動)。互換識別子
+  `np2kai-5939e0c6d598+pfa31fa97a82e15ad` → **`+p450ca5ada335dc9a`** = それより前のステートセーブは読めない (告知ダイアログで 10/6 から予告済み)。
+- 検証: 全回帰 93 本 PASS。New Horizons 体験版 (Deadline 2026) を headless で 60000 フレーム = デモが最後まで走って DOS に戻る
+  (wasm の Abort なし。終了後の画面にはファンクションキー行が出る)。
+
 ## [リモートキーボードで FEP (日本語入力) — 段階 A] — 2026-10-10
 
 - **発端** (ユーザー): リモートキーボードでも疑似 FEP で日本語を打ちたい。当時の作法は CTRL+XFER で切り替え、WX なら XFER で変換。

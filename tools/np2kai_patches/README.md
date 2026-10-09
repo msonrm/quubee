@@ -23,8 +23,9 @@
 | `10_sound_pending.patch` | **ステートセーブ (フェーズ 2) 用** (2026-09-27)。`sound/sound.c` に `sound_pending_get` / `sound_pending_set` を追加 (`sound.h` に宣言)。sndstream の「合成済みで未再生」のサンプル (buffer..ptr) を取り出す / 差し戻す。statsave のロードは `sound_reset` でこれを捨て `soundcfg.lastclock` を現在のクロックに付け替えるため、ロード後の先頭 ~16000 サンプル (約 0.37 秒) が保存しなかった場合と食い違っていた (セーブの瞬間に鳴りかけていた音と、合成が CPU を追いかけていた遅れの分が欠ける)。QuuBee 区画 SND_ (`native/qb_soundmng.c`) がこれと lastclock/writecount を保存し、ロード後に差し戻す = 音声が全区間 1 サンプルも違わず続く。回帰 `tools/statesave_test.js` |
 | `11_statsave_sound_restore.patch` | **ステートセーブで音源の状態を正しく戻す** (2026-09-27、東方 4 作の一致テストで判明した本家の不具合 3 件)。① fmgen の SSG のエンベロープの形 (ポインタ) が DataLoad で戻らない → レジスタ 0x0D から作り直す / ② statsave のロード後の bind が控えのレジスタを fmgen へ書き直し、キーオン (0x28) で鳴っている音のエンベロープがやり直し・SSG のカウンタが戻る → 読み込み直後だけ書き直さない (`opna->qb_fmgen_loaded`) / ③ 86 ボード + CS4231 (0x64 等) で拡張ポートの有効状態を CS4231 の旗で上書きし、ロード後にドライバの動きがずれる → CS4231 だけのボードのときだけ。回帰 `tools/statesave_touhou_test.js` |
 | `12_port5f_realtime_wait.patch` | **ポート 5Fh のウェイトを実時間に** (2026-09-27)。`io/artic.c` の 5Fh 書き込みが固定 20 クロックで、倍率を上げるほど実時間で短くなっていた。実機は約 0.6us のウェイトに I/O サイクルが加わり倍率によらず一定なので、実時間 約 1.3us 分 (`pccore.realclock / 770000`) のクロックに。実害: 東方封魔録の MMD 2.2f が MPU の INT 自動判定で Clock to Host (5ms 周期) の割り込みを 5Fh x 4000 回だけ待ち、倍率 22 前後から INT2 の判定に失敗 → Mate-X 構成で MIDI が鳴らなかった (ちびおと構成は INT5 = IRQ 12 = 86 ボードの FM タイマに偶然便乗)。値は実機の実測ではなく MMD の要求 (1.25us 以上) を満たす妥当な値。修正後は倍率 20〜38 で MMD が本来の INT2 で常駐。副作用: 5Fh で待つソフトのタイミングが実機寄りに変わる (Suika3 のベンチの 600 フレーム目の画面が変わった。速度差はばらつきの範囲)。回帰 `tools/th02_midi_test.js` |
+| `13_fmgen_ssgeg_phase.patch` | **fmgen の SSG-EG 位相 assert で wasm が Abort する本家の不具合** (2026-10-04、New Horizons 体験版 Deadline 2026 で判明)。`Operator::KeyOn` が SSG-EG 無効でも `ssg_phase_ = -1` を残し、キーオン後に SSG-EG (type=8) を有効化すると `Prepare` の `assert(0 <= ssg_phase_)` が落ちる (-O2 でも assert 有効のため wasm 全体が停止。本家は -DNDEBUG で気づかれにくい)。SSG-EG 無効時は 0 を入れる。有効時の挙動は不変。ブラウザ実機で最後まで動作確認済み。**2026-10-10 に有効化** (起動時の告知ダイアログを 10/6 から出していた。bridge.js の `STATE_NOTICE_UNTIL`)。互換識別子が変わり、それより前のステートセーブは読めない。回帰 `tools/run_tests.js` 全体 (New Horizons はローカルの書庫で確認) |
 
-対象の本家版: **AZO234/NP2kai `wx_alpha` 5939e0c6 (2026-09-05)**。サブモジュールを上げたら全パッチ (01〜03・06〜12) が当たるか (`build.sh` は当たらないと hard fail) と全回帰・両ベンチを確認する。
+対象の本家版: **AZO234/NP2kai `wx_alpha` 5939e0c6 (2026-09-05)**。サブモジュールを上げたら全パッチ (01〜03・06〜13) が当たるか (`build.sh` は当たらないと hard fail) と全回帰・両ベンチを確認する。
 
 ### 保留中のパッチ (`pending/`)
 
@@ -34,7 +35,7 @@
 
 | ファイル | 目的 |
 |---|---|
-| `pending/13_fmgen_ssgeg_phase.patch` | **fmgen の SSG-EG 位相 assert で wasm が Abort する本家の不具合** (2026-10-04、New Horizons 体験版 Deadline 2026 で判明)。`Operator::KeyOn` が SSG-EG 無効でも `ssg_phase_ = -1` を残し、キーオン後に SSG-EG (type=8) を有効化すると `Prepare` の `assert(0 <= ssg_phase_)` が落ちる (-O2 でも assert 有効のため wasm 全体が停止。本家は -DNDEBUG で気づかれにくい)。SSG-EG 無効時は 0 を入れる。有効時の挙動は不変。ブラウザ実機で最後まで動作確認済み。**2026-10-10 に有効化予定** (起動時の告知ダイアログを先に出す。bridge.js の `STATE_NOTICE_UNTIL`) |
+| (なし) | 保留中のパッチは無い (13 は 2026-10-10 に有効化) |
 
 有効化の手順 (2026-10-10):
 
