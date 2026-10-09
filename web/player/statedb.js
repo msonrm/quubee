@@ -2,6 +2,7 @@
 //
 // DB "quubee-state" / ストア "slots" (キー = "<gameId>:<slot>")。1 件 =
 //   { key, gameId, slot, gameName, created (ISO), settings ({ soundBoard, midi }), thumb (160x100 RGB Uint8Array),
+//     compat (保存したビルドの互換識別子。2026-10-10 から。無い記録は bridge.js が保存ファイルのヘッダから補う),
 //     bytes (保存ファイル) }
 // slot は 'quick' (クイックセーブ) / 'quick-prev' (上書き前の 1 つ前 = 上書きの「元に戻す」) / '1'〜'8'。
 // 一覧は gameId の索引で引く。IndexedDB が使えない環境 (プライベートブラウズの一部等) では例外を投げるので、
@@ -57,8 +58,13 @@ function list(gameId) {
         (all || []).map(({ bytes, ...rest }) => Object.assign(rest, { size: bytes ? bytes.length : 0 }))
             .sort((a, b) => String(b.created).localeCompare(String(a.created))));
 }
-// 全ゲーム合計の保存件数 (更新の告知を、セーブを持つ人にだけ出す判定用)
+// 全ゲーム合計の保存件数
 function count() { return tx('readonly', (st) => req2p(st.count())); }
+// 全ゲームの全枠 (bytes は省く。更新の告知を、古いセーブを持つ人にだけ出す判定用)
+function listAll() {
+    return tx('readonly', (st) => req2p(st.getAll())).then((all) =>
+        (all || []).map(({ bytes, ...rest }) => Object.assign(rest, { size: bytes ? bytes.length : 0 })));
+}
 // クイックセーブ: 既存のクイックを quick-prev へずらしてから書く (上書きの「元に戻す」用)
 async function putQuick(rec) {
     const cur = await get(rec.gameId, 'quick');
@@ -74,5 +80,5 @@ async function undoQuick(gameId) {
     return true;
 }
 
-root.QBStateDB = { put, get, del, list, count, putQuick, undoQuick };
+root.QBStateDB = { put, get, del, list, listAll, count, putQuick, undoQuick };
 })(typeof self !== 'undefined' ? self : globalThis);

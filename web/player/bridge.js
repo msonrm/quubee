@@ -285,6 +285,7 @@ async function makeWorkerEmu() {
         async stateLoad(bytes)       { const b = bytes.slice(); return await call({ type: 'stateLoad', bytes: b.buffer }, [b.buffer]); },
         async stateUndo()            { return await call({ type: 'stateUndo' }); },
         stateForgetUndo()            { worker.postMessage({ type: 'stateForgetUndo' }); },
+        async stateCompat()          { return (await call({ type: 'call', fn: 'np2kai_state_compat_id', ret: 'string', argTypes: [], args: [] })).r; },
         keyDown(code)        { worker.postMessage({ type: 'key', down: 1, code }); },
         keyUp(code)          { worker.postMessage({ type: 'key', down: 0, code }); },
         injectText(bytes)    { worker.postMessage({ type: 'injectText', bytes }); },   // SJIS バイト列 (ホスト IME)
@@ -1415,6 +1416,7 @@ async function makeWorkerEmu() {
             return { ok: r.ok, detail: r.detail };
         },
         stateForgetUndo() { localStateUndo = null; },
+        async stateCompat() { return localStateAdapter().ccall('np2kai_state_compat_id', 'string', [], []); },
         // 入力 (fire-and-forget。戻り値を使わないので await 不要)。handle はここで前置。
         keyDown(code)         { keyDown(handle, code); },
         keyUp(code)           { keyUp(handle, code); },
@@ -1729,7 +1731,7 @@ async function makeWorkerEmu() {
         idle: ['ゲームを実行していません', 'No game is running'],
         fep: ['FEP で変換中はセーブできません', 'Cannot save while the FEP is converting'],
         empty: ['セーブがありません', 'No save in this slot'],
-        version: ['このセーブは以前の版の QuuBee のものなので読み込めません', 'This save is from an older QuuBee and cannot be loaded'],
+        version: ['このセーブは以前の版のQuuBeeのものなので読み込めません', 'This save is from an older version of QuuBee and cannot be loaded'],
         corrupt: ['セーブが壊れています', 'The save is corrupted'],
         failed: ['読み込みに失敗したので元の状態に戻しました', 'Loading failed; the previous state was restored'],
         error: ['セーブに失敗しました', 'Save failed'],
@@ -1744,7 +1746,7 @@ async function makeWorkerEmu() {
         const r = await emu.stateSave({ gameId: g.gameId, gameName: g.gameName, settings });
         if (!r.ok) return { ok: false, reason: r.reason, detail: r.detail };
         const rec = { gameId: g.gameId, slot: String(slot), gameName: g.gameName, created: r.header.created,
-                      settings, thumb: r.thumb, bytes: r.bytes };
+                      settings, thumb: r.thumb, compat: r.header.compat, bytes: r.bytes };
         if (rec.slot === 'quick') await QBStateDB.putQuick(rec); else await QBStateDB.put(rec);
         return { ok: true, size: r.bytes.length, created: r.header.created };
     }
@@ -1766,12 +1768,38 @@ async function makeWorkerEmu() {
         return r;
     }
     const stateList = () => (stateSession ? QBStateDB.list(stateSession.gameId) : Promise.resolve([]));
-    // 失敗の理由を { ja, en } で (en に技術的な detail を付ける)。qbDebug 向けは 1 行の文字列 (stateMessage)
+    // 古いセーブの見分け (2026-10-10)。記録の compat (保存したビルドの互換識別子) を今のビルドと比べる。
+    // compat の無い記録 (それより前の保存) は、保存ファイルのヘッダから補って書き戻す (記録ごとに 1 回だけ)。
+    // ヘッダが読めない記録は古いとは言わない (ロードすると「壊れています」が出る)
+    let stateCurCompat = null;
+    async function stateCompatNow() {
+        if (!stateCurCompat) stateCurCompat = await emu.stateCompat();
+        return stateCurCompat;
+    }
+    async function stateRecCompat(meta) {
+        if (meta.compat) return meta.compat;
+        try {
+            const full = await QBStateDB.get(meta.gameId, meta.slot);
+            if (!full || !full.bytes) return null;
+            const h = await QBStateFmt.readHeader(full.bytes);
+            if (typeof h.compat !== 'string') return null;
+            full.compat = h.compat;
+            await QBStateDB.put(full);
+            return h.compat;
+        } catch (e) { return null; }
+    }
+    async function stateIsOld(meta) {
+        const c = await stateRecCompat(meta);
+        return !!c && c !== await stateCompatNow();
+    }
+    // 失敗の理由を { ja, en } で (利用者向けの文だけ)。技術的な detail (互換識別子など) は qbDebug 向けの
+    // 1 行の文字列 (stateMessage) とコンソールにだけ出す
     const stateReason = (r) => {
         const t = STATE_REASON[r.reason] || [r.reason || '失敗', r.reason || 'Failed'];
-        return { ja: t[0], en: t[1] + (r.detail ? ` (${r.detail})` : '') };
+        if (r.detail) console.debug('state:', r.reason, r.detail);
+        return { ja: t[0], en: t[1] };
     };
-    const stateMessage = (r) => { if (r.ok) return 'OK'; const m = stateReason(r); return `${m.ja} / ${m.en}`; };
+    const stateMessage = (r) => { if (r.ok) return 'OK'; const m = stateReason(r); return `${m.ja} / ${m.en}` + (r.detail ? ` (${r.detail})` : ''); };
 
     // ---- ステートセーブの UI (段階 G) ----
     // 入力バーの 3 ボタン (クイックセーブ / クイックロード / 一覧) はセーブできるゲームの実行中だけ出す。
@@ -1909,17 +1937,24 @@ async function makeWorkerEmu() {
         grid.textContent = '';
         for (const slot of STATE_SLOTS) {
             const rec = recs.get(slot);
-            const card = document.createElement('div'); card.className = 'st-card';
+            const old = rec ? await stateIsOld(rec) : false;   // 以前の版のセーブ = 読めないのでロードを出さない
+            const card = document.createElement('div'); card.className = 'st-card' + (old ? ' old' : '');
             const thumb = document.createElement('div'); thumb.className = 'st-thumb' + (rec ? '' : ' empty');
             if (rec && rec.thumb) { const c = document.createElement('canvas'); drawStateThumb(c, rec.thumb); thumb.appendChild(c); }
-            else { thumb.innerHTML = '空き<span class="en">Empty</span>'; }
+            else if (!rec) { thumb.innerHTML = '空き<span class="en">Empty</span>'; }
+            if (old) {
+                const badge = document.createElement('span'); badge.className = 'st-old';
+                badge.innerHTML = '以前の版<span class="en">Old version</span>';
+                badge.title = 'このセーブは以前の版のQuuBeeのものなので読み込めません / This save is from an older version of QuuBee and cannot be loaded';
+                thumb.appendChild(badge);
+            }
             const head = document.createElement('div'); head.className = 'st-head';
             const name = document.createElement('span'); name.className = 'st-name';
             name.innerHTML = slot === 'quick' ? 'クイック<span class="en">Quick</span>' : `スロット ${slot}<span class="en">Slot ${slot}</span>`;
             const time = document.createElement('span'); time.className = 'st-time'; time.textContent = rec ? stateTimeLabel(rec.created) : '';
             head.append(name, time);
             const acts = document.createElement('div'); acts.className = 'st-acts';
-            if (rec) {
+            if (rec && !old) {
                 const ld = document.createElement('button'); ld.className = 'primary icon'; ld.textContent = '\u2912';
                 ld.title = 'ロード / Load'; ld.setAttribute('aria-label', ld.title);
                 ld.addEventListener('click', async () => { const r = await stateUiLoad(slot); if (r && r.ok) closeStateModal(); });
@@ -2433,13 +2468,15 @@ async function makeWorkerEmu() {
     });
     try { if (!localStorage.getItem(ABOUT_SEEN_KEY)) openAbout(); } catch (e) { /* storage 不可時は出さない */ }
 
-    // ---- 更新の告知 (ステートセーブが読めなくなる日付の予告) ----
+    // ---- 更新の告知 (ステートセーブが読めなくなったことのお知らせ) ----
     // NP2kai のパッチを足すと互換識別子が変わり、既存のステートセーブは読めなくなる (patch 13 の有効化 =
-    // 2026-10-10)。それまでの間、セーブを 1 件でも持つ人にだけ起動時に 1 回出す。閉じた時点で既読にする。
-    // 日付を過ぎたら出さない (更新後は古いセーブに「版が違う」トーストが出る)。文言は index.html の #notice-modal。
-    // 更新を実施したら、次の告知のために NOTICE_SEEN_KEY の版数をバンプし、STATE_NOTICE_UNTIL を差し替える。
-    const NOTICE_SEEN_KEY = 'quubee_notice_seen_20261010';
-    const STATE_NOTICE_UNTIL = Date.parse('2026-10-11T00:00:00+09:00');
+    // 2026-10-10)。更新の前は予告を出していた (既読キー quubee_notice_seen_20261010)。更新の後は、以前の版の
+    // セーブ (stateIsOld) を 1 件でも持つ人にだけ、起動時に 1 回、事後の文面を出す (予告を閉じた人にも出す
+    // ために既読キーを変えた)。閉じた時点で既読にする。期限を過ぎたら出さない (以後は一覧の「以前の版」の札と
+    // 読み込み時のトーストで分かる)。文言は index.html の #notice-modal。
+    // 次に互換識別子が変わるときは、NOTICE_SEEN_KEY の版数をバンプし、STATE_NOTICE_UNTIL と文言を差し替える。
+    const NOTICE_SEEN_KEY = 'quubee_notice_seen_20261010_after';
+    const STATE_NOTICE_UNTIL = Date.parse('2026-10-25T00:00:00+09:00');
     const noticeModalEl = document.getElementById('notice-modal');
     const closeNotice = () => {
         noticeModalEl.hidden = true;
@@ -2450,7 +2487,12 @@ async function makeWorkerEmu() {
     (async () => {
         try {
             if (Date.now() >= STATE_NOTICE_UNTIL || localStorage.getItem(NOTICE_SEEN_KEY)) return;
-            if (!window.QBStateDB || !(await QBStateDB.count())) return;
+            if (!window.QBStateDB || !QBStateFmt.available()) return;
+            let hasOld = false;
+            for (const meta of await QBStateDB.listAll()) {
+                if (meta.slot !== 'quick-prev' && await stateIsOld(meta)) { hasOld = true; break; }
+            }
+            if (!hasOld) return;
         } catch (e) { return; /* storage / IndexedDB 不可 = セーブ機能も無いので出さない */ }
         releaseHeldKeys();
         noticeModalEl.hidden = false;

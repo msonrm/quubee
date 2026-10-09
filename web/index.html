@@ -499,6 +499,15 @@ body.panel-hidden #stage-max::before { content: "◂"; }  /* パネルが左へ�
 .st-thumb.empty { background: #f3efe3; color: #b0a897; font-size: 12px; flex-direction: column; }
 .st-thumb.empty .en { font-size: 10px; color: #c8c0ae; }
 .st-name .en { font-weight: 400; font-size: 10px; color: #b0a897; margin-left: 5px; }
+/* 以前の版のセーブ (互換識別子が違う = 読めない)。サムネイルを薄くして札を付け、ロードは出さない */
+.st-thumb { position: relative; }
+.st-card.old .st-thumb canvas { opacity: .35; filter: grayscale(1); }
+.st-old {
+    position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); white-space: nowrap;
+    background: rgba(255, 253, 246, .92); color: #8a5a1e; border: 1px solid #d9c49a; border-radius: 4px;
+    font-size: 12px; font-weight: 700; padding: 2px 8px;
+}
+.st-old .en { font-weight: 400; font-size: 10px; color: #a88a5a; margin-left: 5px; }
 .st-head { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; font-size: 13px; }
 .st-name { font-weight: 700; color: #5a5347; }
 .st-time { font-size: 11px; color: #9a948a; font-variant-numeric: tabular-nums; white-space: nowrap; }
@@ -990,8 +999,8 @@ https://github.com/msonrm/quubee</pre>
 <div id="notice-modal" hidden>
     <div id="notice-box" role="dialog" aria-labelledby="notice-title">
         <div id="notice-title">更新のお知らせ<span class="en">Update Notice</span></div>
-        <p id="notice-ja">2026年10月10日 (土) に QuuBee を更新します。FM 音源の再現の不具合修正を含むため、更新後は、これまでに保存したステートセーブ (⤓ で保存したもの) を読み込めなくなります。更新後は、新しく保存し直してください。</p>
-        <p id="notice-en">QuuBee will be updated on 10 October 2026 (Sat). The update fixes a bug in the FM sound emulation, so state saves made before it can no longer be loaded. Please save again after the update.</p>
+        <p id="notice-ja">2026年10月10日 (土) にQuuBeeを更新しました。FM音源の再現の不具合修正を含むため、それより前に保存したステートセーブは読み込めません。お手数ですが、新しく保存し直してください。ステートセーブの一覧では、読み込めないセーブに「以前の版」と表示されます。</p>
+        <p id="notice-en">QuuBee was updated on 10 October 2026 (Sat). The update fixes a bug in the FM sound emulation, so state saves made before it can no longer be loaded. Please save again. In the save list, saves that cannot be loaded are marked "Old version".</p>
         <button id="notice-ok">OK</button>
     </div>
 </div>

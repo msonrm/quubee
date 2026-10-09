@@ -274,7 +274,28 @@ async function load(ad, bytes) {
 // 取っておいた状態 (load の undo) に戻す
 function restore(ad, snap) { return apply(ad, snap); }
 
-root.QBStateFmt = { available, save, load, restore, decode, encode, capture, apply, thumbnail, gameId,
+// ヘッダだけを読む (先頭だけ展開する。全体は数 MB あるので、一覧で古いセーブを見分けるのに全部は解かない)
+async function readHeader(bytes) {
+    const rd = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip')).getReader();
+    let buf = new Uint8Array(0);
+    try {
+        for (;;) {
+            if (buf.length >= 12) {
+                const dv = new DataView(buf.buffer, buf.byteOffset, buf.length);
+                if (unlatin1(buf.subarray(0, 4)) !== MAGIC) throw new Error('state: QuuBee の保存ファイルではありません');
+                const n = dv.getUint32(8, true);
+                if (buf.length >= 12 + n) return JSON.parse(utf8dec.decode(buf.subarray(12, 12 + n)));
+            }
+            const { value, done } = await rd.read();
+            if (done) throw new Error('state: ヘッダが途中で切れています');
+            const nb = new Uint8Array(buf.length + value.length);
+            nb.set(buf); nb.set(value, buf.length);
+            buf = nb;
+        }
+    } finally { rd.cancel().catch(() => {}); }
+}
+
+root.QBStateFmt = { available, save, load, restore, decode, encode, readHeader, capture, apply, thumbnail, gameId,
     THUMB_W, THUMB_H };
 if (typeof module !== 'undefined' && module.exports) module.exports = root.QBStateFmt;
 })(typeof self !== 'undefined' ? self : globalThis);
