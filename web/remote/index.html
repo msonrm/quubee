@@ -9,7 +9,7 @@
 <style>
 :root {
     --bg: #24211d; --bar-fg: #cfc8b9; --bar-dim: #8a8377;
-    --key: #ebe5d4; --key-fg: #2f2b25; --key-kana: #8a5a3c; --key-edge: #b9b19c;
+    --key: #ebe5d4; --key-fg: #2f2b25; --key-edge: #b9b19c;
     --fn: #b9b3a5; --fn-fg: #2f2b25; --fn-edge: #8f8879;
     --down: #9db7d6; --down-edge: #6f8fb3;
     --lock: #6b8f3f; --lock-fg: #fff;
@@ -47,23 +47,21 @@ html, body {
 .key .l, .key .s, .key .ks, .key .kn { position: absolute; white-space: nowrap; }
 .key .l { left: 12%; top: 50%; transform: translateY(-50%); font-size: 1.05em; }
 .key .s { left: 50%; top: 5%; transform: translateX(-50%); font-size: .8em; }
-.key .ks { right: 10%; top: 50%; transform: translateY(-50%); color: var(--key-kana); font-size: .8em; }
-.key .kn { left: 50%; bottom: 5%; transform: translateX(-50%); color: var(--key-kana); font-size: .8em; }
+.key .ks { right: 10%; top: 50%; transform: translateY(-50%); font-size: .8em; }
+.key .kn { left: 50%; bottom: 5%; transform: translateX(-50%); font-size: .8em; }
 /* 文字・テンキー・スペース以外のキーは同じ色 (実機は ESC も TAB も CTRL も SHIFT もカーソルも同じ灰色) */
 .key.fn, .key.mod, .key.lock { background: var(--fn); color: var(--fn-fg); border-color: var(--fn-edge);
     display: flex; align-items: center; justify-content: center; text-align: center; font-size: .72em; }
 .key.fn .l, .key.mod .l, .key.lock .l { position: static; transform: none; font-size: 1em; white-space: normal; }
-/* キーの無い板 (XFER の右) */
-.plate { position: absolute; box-sizing: border-box; border-radius: 5px; background: #3a3630; border: 1px solid #47423a; }
 /* テンキーまわりは刻印が中央・大きめ */
 .key.center { display: flex; align-items: center; justify-content: center; font-size: 1.15em; }
 .key.center .l { position: static; transform: none; }
-/* 左下のランプ (CAPS・カナ) */
+/* 左下のランプ (CAPS・カナ。実機は四角い緑の発光) */
 .leds { position: absolute; border-radius: 5px; background: #3a3630; border: 1px solid #47423a; box-sizing: border-box; display: flex; flex-direction: column; justify-content: center;
-        gap: .35em; padding-left: .5em; font-size: .62em; color: var(--bar-dim); pointer-events: none; white-space: nowrap; }
+        gap: .35em; padding-left: 1.6em; font-size: .62em; color: var(--bar-dim); pointer-events: none; white-space: nowrap; }
 .leds span { display: flex; align-items: center; gap: .5em; }
-.leds i { display: inline-block; width: .9em; height: .9em; border-radius: 50%; background: #4a453d; }
-.leds i.on { background: #ffb347; box-shadow: 0 0 .6em #ffb347; }
+.leds i { display: inline-block; width: .75em; height: .75em; border-radius: 1px; background: #2f3a2c; }
+.leds i.on { background: #5dff5a; box-shadow: 0 0 .6em #5dff5a; }
 .key.down { background: var(--down); border-color: var(--down-edge); border-bottom-width: 1px; }
 .key.locked, .key.latched { background: var(--lock); border-color: var(--lock); color: var(--lock-fg); }
 .key.latched { box-shadow: inset 0 0 0 2px rgba(255,255,255,.55); }

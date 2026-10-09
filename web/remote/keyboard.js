@@ -169,7 +169,7 @@
         board.replaceChildren();
         keyEls.clear();
         ledEls.clear();
-        const keys = [], leds = [], plates = [];
+        const keys = [], leds = [];
         let W = 0, H = 0;
         for (const b of layout.blocks || []) {
             let y = b.y || 0;
@@ -181,7 +181,6 @@
                     const w = it.w || 1, h = it.h || 1;
                     if (k !== undefined) keys.push({ it, k, x, y, w, h });
                     else if (Array.isArray(it.led)) leds.push({ it, x, y, w, h });
-                    else if (it.plate) plates.push({ x, y, w, h });
                     x += w;
                     W = Math.max(W, x); H = Math.max(H, y + h);
                 }
@@ -193,6 +192,7 @@
             const kind = it.c || '';
             el.className = 'key' + (kind ? ' ' + kind : '') + (it.a === 'c' ? ' center' : '');
             if (it.z) el.style.fontSize = it.z + 'em';
+            if (it.b) el.style.fontWeight = '700';
             el.dataset.k = k;
             el.dataset.x = x; el.dataset.y = y; el.dataset.w = w; el.dataset.h = h;
             if (it.notch) el.dataset.notch = it.notch;
@@ -221,12 +221,6 @@
                 if (!ledEls.has(k)) ledEls.set(k, []);
                 ledEls.get(k).push(dot);
             }
-            board.appendChild(el);
-        }
-        for (const { x, y, w, h } of plates) {
-            const el = document.createElement('div');
-            el.className = 'plate';
-            el.dataset.x = x; el.dataset.y = y; el.dataset.w = w; el.dataset.h = h;
             board.appendChild(el);
         }
         board.dataset.w = W; board.dataset.h = H;
