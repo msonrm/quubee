@@ -17,14 +17,14 @@
     const STATUS = {
         off: ['止まっています。', 'Stopped.'],
         signal: ['中継サーバーに接続中…', 'Connecting to the relay…'],
-        open: ['2 台を同じ Wi-Fi につないだうえで、キーボードにする端末のカメラでこの QR を読んでください。',
+        open: ['2台を同じWi-Fiにつないだうえで、キーボードにする端末のカメラでこのQRコードを読んでください。',
             'Put both devices on the same Wi-Fi, then scan this QR code with the device you want to use as the keyboard.'],
-        replaced: ['別のタブで Remote が開かれたので、こちらは止めました。', 'Remote was opened in another tab, so this one has stopped.'],
+        replaced: ['別のタブでRemoteが開かれたので、こちらは止めました。', 'Remote was opened in another tab, so this one has stopped.'],
     };
     const PEER_TEXT = {
         connecting: '接続中… / Connecting…',
         open: '接続済み / Connected',
-        failed: '接続できませんでした (同じ Wi-Fi か確かめてください) / Failed: check the Wi-Fi',
+        failed: '接続できませんでした (同じWi-Fiか確かめてください) / Failed: check the Wi-Fi',
     };
 
     function load() {
@@ -67,7 +67,7 @@
 
         function paint() {
             const open = peers.filter((p) => p.state === 'open').length;
-            const [ja, en] = open ? [`接続済み (${open} 台)`, `Connected (${open})`] : (STATUS[relayState] || STATUS.off);
+            const [ja, en] = open ? [`接続済み (${open}台)`, `Connected (${open})`] : (STATUS[relayState] || STATUS.off);
             const enEl = document.createElement('span');
             enEl.className = 'en';
             enEl.textContent = en;
@@ -79,7 +79,7 @@
                 const li = document.createElement('li');
                 const name = document.createElement('span');
                 name.className = 'rp-name';
-                name.textContent = `キーボード ${i + 1}`;
+                name.textContent = `キーボード${i + 1}`;
                 const sub = document.createElement('span');
                 sub.className = 'rp-state ' + p.state;
                 const lay = layouts.get(p.id);

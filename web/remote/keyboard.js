@@ -257,12 +257,12 @@
 
     // ---- 回線 ----
     const STATUS_TEXT = {
-        none: ['QuuBee の画面の Remote に出る QR から開いてください。', 'Open this page from the QR code in QuuBee\'s Remote dialog.'],
+        none: ['QuuBeeのRemoteに表示されるQRコードから開いてください。', 'Open this page from the QR code in QuuBee\'s Remote dialog.'],
         signal: ['中継サーバーに接続中…', 'Connecting to the relay…'],
-        waiting: ['QuuBee 側を待っています。QuuBee のページで Remote を開いてください。', 'Waiting for QuuBee. Open Remote on the QuuBee page.'],
-        connecting: ['QuuBee 側が見つかりました。接続中…', 'Found QuuBee. Connecting…'],
+        waiting: ['QuuBee側を待っています。QuuBeeのページでRemoteを開いてください。', 'Waiting for QuuBee. Open Remote on the QuuBee page.'],
+        connecting: ['QuuBee側が見つかりました。接続中…', 'Found QuuBee. Connecting…'],
         open: ['接続済み', 'Connected'],
-        failed: ['接続できませんでした。2 台が同じ Wi-Fi にいるか確かめてください。', 'Could not connect. Check that both devices are on the same Wi-Fi.'],
+        failed: ['接続できませんでした。2台が同じWi-Fiにいるか確かめてください。', 'Could not connect. Check that both devices are on the same Wi-Fi.'],
         replaced: ['別のタブでこのキーボードが開かれたので、こちらは切りました。読み込み直すと、こちらに戻ります。',
             'This keyboard was opened in another tab. Reload to switch back here.'],
     };
