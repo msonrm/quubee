@@ -383,18 +383,18 @@ body.panel-hidden #stage-max::before { content: "◂"; }  /* パネルが左へ�
 }
 #settings-close:hover { color: #b3261e; }
 #settings-title { font-size: 15px; font-weight: 700; color: #5a5347; margin-bottom: 2px; }
-#settings-title .ja { color: #9a8f5e; font-weight: 400; font-size: 13px; margin-left: 6px; }
+#settings-title .en { color: #9a8f5e; font-weight: 400; font-size: 13px; margin-left: 6px; }
 .settings-group { margin-top: 15px; }
 .settings-group > h3 {
-    font-size: 11px; color: #9a948a; text-transform: uppercase; letter-spacing: .06em;
+    font-size: 11px; color: #9a948a;
     border-bottom: 1px solid #efe9da; padding-bottom: 3px; margin-bottom: 4px; font-weight: 700;
 }
-.settings-group > h3 .ja { text-transform: none; letter-spacing: normal; color: #b0a897; margin-left: 6px; font-weight: 400; }
+.settings-group > h3 .en { text-transform: uppercase; letter-spacing: .06em; color: #b0a897; margin-left: 6px; font-weight: 400; }
 .set-row { display: flex; align-items: flex-start; gap: 12px; padding: 7px 0; border-top: 1px solid #f2ecdd; }
 .set-row:first-of-type { border-top: none; }
 .set-main { flex: 1 1 auto; min-width: 0; }
 .set-label { font-size: 14px; color: #33302a; }
-.set-label .ja { color: #6b6354; font-size: 12px; margin-left: 6px; }
+.set-label .en { color: #6b6354; font-size: 12px; margin-left: 6px; }
 .set-desc { font-size: 11px; color: #9a948a; margin-top: 1px; line-height: 1.4; }
 .set-desc .en { color: #bdb5a4; }        /* JP→EN の順・英語は淡く (歓迎文/About と同じ日英併記) */
 .set-ctl { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; padding-top: 1px; }
@@ -420,7 +420,7 @@ body.panel-hidden #stage-max::before { content: "◂"; }  /* パネルが左へ�
     border: 1px solid #c8c0ae; background: #fbf9f3; color: #5a5344; cursor: pointer;
 }
 .set-foot button:hover { background: #e9e3d3; color: #3a352c; }
-.set-foot button .ja { color: #9a8f5e; font-size: 11px; margin-left: 4px; }
+.set-foot button .en { color: #9a8f5e; font-size: 11px; margin-left: 4px; }
 /* Gamepad グループ — 押下ボタンの live 表示 + ボタン行。設定モーダルは常に紙トーンなのでテーマ非依存。 */
 .pad-live { font-size: 12px; color: #9a948a; padding: 5px 0 3px; }
 .pad-live.on { color: #2f7d1f; font-weight: 700; }
@@ -465,7 +465,7 @@ body.panel-hidden #stage-max::before { content: "◂"; }  /* パネルが左へ�
     background: #f0ead8; color: #2a261f; border: none;
 }
 #st-undo:hover { background: #fff; }
-#st-undo .ja { color: #7a7060; font-size: 11px; margin-left: 4px; }
+#st-undo .en { color: #7a7060; font-size: 11px; margin-left: 4px; }
 .st-text { display: flex; flex-direction: column; line-height: 1.35; }
 #st-msg-en { font-size: 11px; color: rgba(240, 234, 216, .6); }
 /* 一覧のモーダル — 設定と同じ紙トーン。枠はクイック + 手動 3 (幅が足りなければ 2 列) */
@@ -488,7 +488,7 @@ body.panel-hidden #stage-max::before { content: "◂"; }  /* パネルが左へ�
 }
 #state-close:hover { color: #b3261e; }
 #state-title { font-size: 15px; font-weight: 700; color: #5a5347; margin-bottom: 2px; }
-#state-title .ja { color: #9a8f5e; font-weight: 400; font-size: 13px; margin-left: 6px; }
+#state-title .en { color: #9a8f5e; font-weight: 400; font-size: 13px; margin-left: 6px; }
 #state-grid { margin-top: 12px; display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
 .st-card { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .st-thumb {
@@ -529,7 +529,7 @@ body.panel-hidden #stage-max::before { content: "◂"; }  /* パネルが左へ�
     font-family: "Noto Sans CJK JP", "Migu 1M", system-ui, sans-serif;
 }
 #notice-title { font-size: 15px; font-weight: 700; color: #5a5347; }
-#notice-title .ja { color: #9a8f5e; font-weight: 400; font-size: 13px; margin-left: 6px; }
+#notice-title .en { color: #9a8f5e; font-weight: 400; font-size: 13px; margin-left: 6px; }
 #notice-ja { margin: 14px 0 0; font-size: 14px; line-height: 1.75; }
 #notice-en { margin: 12px 0 0; font-size: 12px; line-height: 1.6; color: #8a8377; }
 #notice-ok {
@@ -557,7 +557,7 @@ body.panel-hidden #stage-max::before { content: "◂"; }  /* パネルが左へ�
 }
 #remote-close:hover { color: #b3261e; }
 #remote-title { font-size: 15px; font-weight: 700; color: #5a5347; }
-#remote-title .ja { color: #9a8f5e; font-weight: 400; font-size: 13px; margin-left: 6px; }
+#remote-title .en { color: #9a8f5e; font-weight: 400; font-size: 13px; margin-left: 6px; }
 #remote-pair { display: flex; gap: 16px; align-items: flex-start; margin-top: 12px; flex-wrap: wrap; }
 #remote-qr { flex: 0 0 auto; width: 184px; height: 184px; background: #fff; border: 1px solid #d8d0bd; border-radius: 4px; }
 #remote-qr svg { width: 100%; height: 100%; display: block; }
@@ -568,14 +568,14 @@ body.panel-hidden #stage-max::before { content: "◂"; }  /* パネルが左へ�
 #remote-status .en, #remote-note .en { display: block; margin-top: 2px; font-size: 11px; font-weight: 400; color: #8a8377; }
 #remote-room { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 10px; font-size: 12px; }
 .rr-label { color: #5a5347; font-weight: 700; }
-.rr-label .ja { margin-left: 4px; font-weight: 400; font-size: 11px; color: #9a8f5e; }
+.rr-label .en { margin-left: 4px; font-weight: 400; font-size: 11px; color: #9a8f5e; }
 #remote-room-id { font-family: ui-monospace, "Migu 1M", monospace; font-size: 12px; color: #33302a; background: #f3efe3; border-radius: 3px; padding: 1px 5px; }
 #remote-renew {
     font: inherit; font-size: 11px; padding: 2px 8px; min-height: 24px; border-radius: 4px; cursor: pointer;
     border: 1px solid #c8c0ae; background: #fbf9f3; color: #5a5344;
 }
 #remote-renew:hover { background: #e9e3d3; color: #3a352c; }
-#remote-renew .ja { margin-left: 4px; font-size: 10px; opacity: .8; }
+#remote-renew .en { margin-left: 4px; font-size: 10px; opacity: .8; }
 #remote-peers { list-style: none; margin: 10px 0 0; padding: 0; }
 #remote-peers li { display: flex; gap: 8px; align-items: baseline; font-size: 12px; padding: 2px 0; }
 .rp-name { font-weight: 700; color: #5a5347; }
@@ -592,7 +592,7 @@ body.panel-hidden #stage-max::before { content: "◂"; }  /* パネルが左へ�
 .remote-foot button.primary { background: #6b8f3f; border-color: #5b7b33; color: #fff; }
 .remote-foot button.primary:hover { background: #5b7b33; }
 .remote-foot button[hidden] { display: none; }
-.remote-foot .ja { margin-left: 5px; font-size: 11px; opacity: .8; }
+.remote-foot .en { margin-left: 5px; font-size: 11px; opacity: .8; }
 </style>
 <script>
 /* ライトモード先読み (FOUC 防止)。localStorage の theme だけを bridge.js ロード前に <html> へ反映する。
@@ -799,14 +799,14 @@ https://github.com/msonrm/quubee</pre>
 <div id="settings-modal" hidden>
     <div id="settings-box">
         <button id="settings-close" title="閉じる / Close (Esc)">×</button>
-        <div id="settings-title">Settings<span class="ja">設定</span></div>
+        <div id="settings-title">設定<span class="en">Settings</span></div>
 
         <div id="settings-body">
         <div class="settings-group">
-            <h3>Sound<span class="ja">音</span></h3>
+            <h3>音<span class="en">Sound</span></h3>
             <div class="set-row">
                 <div class="set-main">
-                    <div class="set-label">Volume<span class="ja">音量</span></div>
+                    <div class="set-label">音量<span class="en">Volume</span></div>
                     <div class="set-desc">パート別の音量バランス<span class="en"> / Per-part volume balance</span></div>
                 </div>
                 <div class="set-ctl vol-grid">
@@ -818,21 +818,21 @@ https://github.com/msonrm/quubee</pre>
             </div>
             <div class="set-row">
                 <div class="set-main">
-                    <div class="set-label">FM Engine<span class="ja">FM 音源</span><span class="next-run-badge">次の Run から / Next Run</span></div>
+                    <div class="set-label">FM 音源<span class="en">FM Engine</span><span class="next-run-badge">次の Run から / Next Run</span></div>
                     <div class="set-desc">fmgen は実機 A/B で高音質<span class="en"> / fmgen sounds better; opngen is the classic</span></div>
                 </div>
                 <div class="set-ctl"><select id="set-fmgen"><option value="1">fmgen</option><option value="0">opngen</option></select></div>
             </div>
             <div class="set-row">
                 <div class="set-main">
-                    <div class="set-label">BEEP Boost<span class="ja">BEEP ブースト</span></div>
+                    <div class="set-label">BEEP ブースト<span class="en">BEEP Boost</span></div>
                     <div class="set-desc">内蔵ブザーの効果音を増幅 (楽曲下で埋もれないように)<span class="en"> / Boost the built-in buzzer SE</span></div>
                 </div>
                 <div class="set-ctl"><input id="set-beepgain" type="range" min="100" max="383" step="1"><span class="val" id="val-beepgain"></span></div>
             </div>
             <div class="set-row">
                 <div class="set-main">
-                    <div class="set-label">Sound Board<span class="ja">音源ボード</span><span class="next-run-badge">次の Run から / Next Run</span></div>
+                    <div class="set-label">音源ボード<span class="en">Sound Board</span><span class="next-run-badge">次の Run から / Next Run</span></div>
                     <div class="set-desc">上ほど機能が乗る (上位は下位を含む)。Mate-X PCM は近代エンジンの PCM 再生に必要<span class="en"> / higher tiers include lower ones; Mate-X PCM needed for modern engines</span></div>
                 </div>
                 <div class="set-ctl"><select id="set-soundboard">
@@ -843,7 +843,7 @@ https://github.com/msonrm/quubee</pre>
             </div>
             <div class="set-row">
                 <div class="set-main">
-                    <div class="set-label">MIDI Reverb<span class="ja">MIDI リバーブ</span></div>
+                    <div class="set-label">MIDI リバーブ<span class="en">MIDI Reverb</span></div>
                     <div class="set-desc">MIDI 音源の GS リバーブ<span class="en"> / GS reverb for MIDI playback</span></div>
                 </div>
                 <div class="set-ctl"><input id="set-midifx" type="checkbox"></div>
@@ -851,10 +851,10 @@ https://github.com/msonrm/quubee</pre>
         </div>
 
         <div class="settings-group">
-            <h3>Speed<span class="ja">速度</span></h3>
+            <h3>速度<span class="en">Speed</span></h3>
             <div class="set-row">
                 <div class="set-main">
-                    <div class="set-label">CPU Multiple<span class="ja">CPU 倍率</span></div>
+                    <div class="set-label">CPU 倍率<span class="en">CPU Multiple</span></div>
                     <div class="set-desc">上げると速いが、高すぎると音が詰まることがある<span class="en"> / Higher is faster; too high may stutter audio</span></div>
                 </div>
                 <div class="set-ctl"><input id="set-multiple" type="range" min="4" max="42" step="1"><span class="val" id="val-multiple"></span></div>
@@ -862,46 +862,46 @@ https://github.com/msonrm/quubee</pre>
         </div>
 
         <div class="settings-group">
-            <h3>Display<span class="ja">表示</span></h3>
+            <h3>表示<span class="en">Display</span></h3>
             <div class="set-row">
                 <div class="set-main">
-                    <div class="set-label">30 Lines<span class="ja">30 行表示</span><span class="next-run-badge">次の Run から / Next Run</span></div>
+                    <div class="set-label">30 行表示<span class="en">30 Lines</span><span class="next-run-badge">次の Run から / Next Run</span></div>
                     <div class="set-desc">仮想 30 行 BIOS (対応ツールのみ)<span class="en"> / Virtual 30-line BIOS (for aware tools)</span></div>
                 </div>
                 <div class="set-ctl"><input id="set-lines30" type="checkbox"></div>
             </div>
             <div class="set-row">
                 <div class="set-main">
-                    <div class="set-label">POST Screen<span class="ja">起動 POST</span><span class="next-run-badge">次の Run から / Next Run</span></div>
+                    <div class="set-label">起動 POST<span class="en">POST Screen</span><span class="next-run-badge">次の Run から / Next Run</span></div>
                     <div class="set-desc">起動時のメモリカウント + ピポ音を表示<span class="en"> / Show boot memory count and beep</span></div>
                 </div>
                 <div class="set-ctl"><input id="set-itfpost" type="checkbox"></div>
             </div>
             <div class="set-row">
                 <div class="set-main">
-                    <div class="set-label">FEP Style<span class="ja">FEP 表示</span></div>
+                    <div class="set-label">FEP 表示<span class="en">FEP Style</span></div>
                     <div class="set-desc">日本語入力の未確定表示。WX 風=下線 / ATOK 風=反転<span class="en"> / Composition look: WX = underline, ATOK = reverse</span></div>
                 </div>
                 <div class="set-ctl"><select id="set-fepstyle"><option value="wx">WX</option><option value="atok">ATOK</option></select></div>
             </div>
             <div class="set-row">
                 <div class="set-main">
-                    <div class="set-label">Kana Layout<span class="ja">かな配列</span></div>
+                    <div class="set-label">かな配列<span class="en">Kana Layout</span></div>
                     <div class="set-desc">日本語入力のかな配列。Romaji=内蔵。他は薙刀式/NICOLA/親指ぴゅん/月/AZIK/Colemak<span class="en"> / Kana input layout for FEP</span></div>
                 </div>
                 <div class="set-ctl"><select id="set-kanalayout">
-                    <option value="builtin">Romaji</option>
-                    <option value="naginata">Naginata 薙刀式</option>
-                    <option value="nicola">NICOLA 親指</option>
-                    <option value="oyayubi_pyun_1key">Oyayubi Pyun 親指ぴゅん</option>
-                    <option value="tsuki2-263">Tsuki 月2-263</option>
+                    <option value="builtin">ローマ字 Romaji</option>
+                    <option value="naginata">薙刀式 Naginata</option>
+                    <option value="nicola">親指シフト NICOLA</option>
+                    <option value="oyayubi_pyun_1key">親指ぴゅん Oyayubi Pyun</option>
+                    <option value="tsuki2-263">月2-263 Tsuki</option>
                     <option value="azik">AZIK</option>
-                    <option value="romaji_colemak">Romaji (Colemak)</option>
+                    <option value="romaji_colemak">ローマ字 Romaji (Colemak)</option>
                 </select></div>
             </div>
             <div class="set-row">
                 <div class="set-main">
-                    <div class="set-label">Keyboard<span class="ja">キーボード</span></div>
+                    <div class="set-label">キーボード<span class="en">Keyboard</span></div>
                     <div class="set-desc">手元の物理キーボード。親指キー等の割当が変わる (Romaji 内蔵には非適用)<span class="en"> / Physical keyboard for kana layouts</span></div>
                 </div>
                 <div class="set-ctl"><select id="set-kanaregion"><option value="us">US</option><option value="jis">JIS</option></select></div>
@@ -909,24 +909,24 @@ https://github.com/msonrm/quubee</pre>
         </div>
 
         <div class="settings-group">
-            <h3>Compatibility<span class="ja">互換</span></h3>
+            <h3>互換<span class="en">Compatibility</span></h3>
             <div class="set-row">
                 <div class="set-main">
-                    <div class="set-label">Y2K Clamp<span class="ja">Y2K クランプ</span><span class="next-run-badge">次の Run から / Next Run</span></div>
+                    <div class="set-label">Y2K クランプ<span class="en">Y2K Clamp</span><span class="next-run-badge">次の Run から / Next Run</span></div>
                     <div class="set-desc">年を 1999 に丸め旧作のセーブ破壊を防ぐ。OFF で本当の日付<span class="en"> / Clamp year to 1999; OFF shows the real date</span></div>
                 </div>
                 <div class="set-ctl"><input id="set-y2k" type="checkbox"></div>
             </div>
             <div class="set-row">
                 <div class="set-main">
-                    <div class="set-label">Mouse Dialect<span class="ja">マウス流派</span></div>
+                    <div class="set-label">マウス流派<span class="en">Mouse Dialect</span></div>
                     <div class="set-desc">INT 33h ドライバの流儀。None は内蔵ドライバを無効化<span class="en"> / driver dialect; None disables the built-in driver</span></div>
                 </div>
                 <div class="set-ctl"><select id="set-mouse33"><option value="ms">MS</option><option value="nec">NEC</option><option value="off">None</option></select></div>
             </div>
             <div class="set-row">
                 <div class="set-main">
-                    <div class="set-label">Verbose Log<span class="ja">診断ログ</span></div>
+                    <div class="set-label">診断ログ<span class="en">Verbose Log</span></div>
                     <div class="set-desc">DevTools コンソールに診断ログを前面表示<span class="en"> / Show diagnostic logs in the console</span></div>
                 </div>
                 <div class="set-ctl"><input id="set-verbose" type="checkbox"></div>
@@ -934,10 +934,10 @@ https://github.com/msonrm/quubee</pre>
         </div>
 
         <div class="settings-group">
-            <h3>Appearance<span class="ja">外観</span></h3>
+            <h3>外観<span class="en">Appearance</span></h3>
             <div class="set-row">
                 <div class="set-main">
-                    <div class="set-label">Light Mode<span class="ja">ライトモード</span></div>
+                    <div class="set-label">ライトモード<span class="en">Light Mode</span></div>
                     <div class="set-desc">画面まわりを白系に (ゲーム画面は不変)<span class="en"> / Light surroundings; game screen unchanged</span></div>
                 </div>
                 <div class="set-ctl"><input id="set-theme" type="checkbox"></div>
@@ -945,13 +945,13 @@ https://github.com/msonrm/quubee</pre>
         </div>
 
         <div class="settings-group">
-            <h3>Gamepad<span class="ja">ゲームパッド</span></h3>
+            <h3>ゲームパッド<span class="en">Gamepad</span></h3>
             <div class="set-row">
                 <div class="set-main">
-                    <div class="set-label">Direction<span class="ja">方向（左手）</span></div>
+                    <div class="set-label">方向（左手）<span class="en">Direction</span></div>
                     <div class="set-desc">十字キー / 左スティックの割当。斜めは同時押し<span class="en"> / D-pad and left stick</span></div>
                 </div>
-                <div class="set-ctl"><select id="set-pad-dir"><option value="arrow">Arrow / カーソル</option><option value="tenkey">Numpad 2468 / テンキー</option></select></div>
+                <div class="set-ctl"><select id="set-pad-dir"><option value="arrow">カーソル / Arrow</option><option value="tenkey">テンキー 2468 / Numpad</option></select></div>
             </div>
             <div id="pad-live" class="pad-live">パッド未接続 / no gamepad</div>
             <div id="pad-rows"></div>
@@ -960,27 +960,27 @@ https://github.com/msonrm/quubee</pre>
         </div><!-- /settings-body -->
 
         <div class="set-foot">
-            <button id="settings-reset">Reset defaults<span class="ja">既定に戻す</span></button>
-            <button id="settings-done">Done<span class="ja">閉じる</span></button>
+            <button id="settings-reset">既定に戻す<span class="en">Reset defaults</span></button>
+            <button id="settings-done">閉じる<span class="en">Done</span></button>
         </div>
     </div>
 </div>
 
 <!-- ステートセーブの結果と「元に戻す」。一覧のモーダル (backdrop-filter) より手前に出すため body 直下の
      fixed 配置にし、表示のたびにゲーム画面 (#canvas-wrap) の下寄りへ位置を合わせる (bridge.js) -->
-<div id="state-toast" hidden><span class="st-text"><span id="st-msg"></span><span id="st-msg-en"></span></span><button id="st-undo" hidden>Undo<span class="ja">元に戻す</span></button></div>
+<div id="state-toast" hidden><span class="st-text"><span id="st-msg"></span><span id="st-msg-en"></span></span><button id="st-undo" hidden>元に戻す<span class="en">Undo</span></button></div>
 
 <div id="state-modal" hidden>
     <div id="state-box">
         <button id="state-close" title="閉じる / Close (Esc)">×</button>
-        <div id="state-title">State Save / Load<span class="ja">ステートセーブ / ロード</span></div>
+        <div id="state-title">ステートセーブ / ロード<span class="en">State Save / Load</span></div>
         <div id="state-grid"></div>
     </div>
 </div>
 
 <div id="notice-modal" hidden>
     <div id="notice-box" role="dialog" aria-labelledby="notice-title">
-        <div id="notice-title">Update Notice<span class="ja">更新のお知らせ</span></div>
+        <div id="notice-title">更新のお知らせ<span class="en">Update Notice</span></div>
         <p id="notice-ja">2026年10月10日 (土) に QuuBee を更新します。FM 音源の再現の不具合修正を含むため、更新後は、これまでに保存したステートセーブ (⤓ で保存したもの) を読み込めなくなります。更新後は、新しく保存し直してください。</p>
         <p id="notice-en">QuuBee will be updated on 10 October 2026 (Sat). The update fixes a bug in the FM sound emulation, so state saves made before it can no longer be loaded. Please save again after the update.</p>
         <button id="notice-ok">OK</button>
@@ -990,23 +990,23 @@ https://github.com/msonrm/quubee</pre>
 <div id="remote-modal" hidden>
     <div id="remote-box" role="dialog" aria-labelledby="remote-title">
         <button id="remote-close" title="閉じる / Close (Esc)">×</button>
-        <div id="remote-title">Remote Keyboard<span class="ja">リモートキーボード</span></div>
+        <div id="remote-title">リモートキーボード<span class="en">Remote Keyboard</span></div>
         <div id="remote-pair">
             <div id="remote-qr"></div>
             <div id="remote-side">
                 <p id="remote-status"></p>
                 <div id="remote-room">
-                    <span class="rr-label">Room<span class="ja">部屋</span></span>
+                    <span class="rr-label">部屋<span class="en">Room</span></span>
                     <code id="remote-room-id"></code>
-                    <button id="remote-renew">New room<span class="ja">別の部屋にする</span></button>
+                    <button id="remote-renew">別の部屋にする<span class="en">New room</span></button>
                 </div>
                 <ul id="remote-peers"></ul>
             </div>
         </div>
         <p id="remote-note">読み取った端末に、PC-98 同等のキーボードを表示します。キーボード側の端末とはローカルで接続するので、キー入力は外部に出ません (接続するときだけ、接続情報の受け渡しのために外部のサーバーを経由します)。<span class="en">The device that scans the code shows a PC-98-equivalent keyboard. The two devices connect locally, so your keystrokes never leave your network (only the connection setup goes through an external server).</span></p>
         <div class="remote-foot">
-            <button id="remote-stop" hidden>Stop<span class="ja">止める</span></button>
-            <button id="remote-done" class="primary">Done<span class="ja">閉じる</span></button>
+            <button id="remote-stop" hidden>止める<span class="en">Stop</span></button>
+            <button id="remote-done" class="primary">閉じる<span class="en">Done</span></button>
         </div>
     </div>
 </div>

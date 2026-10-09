@@ -79,7 +79,7 @@
                 const li = document.createElement('li');
                 const name = document.createElement('span');
                 name.className = 'rp-name';
-                name.textContent = `Keyboard ${i + 1}`;
+                name.textContent = `キーボード ${i + 1}`;
                 const sub = document.createElement('span');
                 sub.className = 'rp-state ' + p.state;
                 const lay = layouts.get(p.id);

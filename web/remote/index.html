@@ -28,7 +28,7 @@ html, body {
 #dot.open { background: var(--ok); }
 #dot.connecting, #dot.signal, #dot.waiting { background: var(--wait); }
 #dot.failed, #dot.replaced, #dot.none { background: var(--bad); }
-#status { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#status { flex: 1 1 auto; min-width: 0; line-height: 1.35; }
 #brand { flex: 0 0 auto; color: var(--bar-dim); font-size: 12px; letter-spacing: .04em; }
 #bar button {
     flex: 0 0 auto; font: inherit; font-size: 12px; padding: 3px 10px; border-radius: 4px; cursor: pointer;
@@ -72,10 +72,10 @@ html, body {
     <div id="bar">
         <span id="dot"></span>
         <span id="status"></span>
-        <button id="fullscreen" hidden>Full screen</button>
+        <button id="fullscreen" hidden>全画面 / Full screen</button>
         <span id="brand">QuuBee Remote</span>
     </div>
-    <div id="hint" hidden>横向きにすると、キーが大きくなります。</div>
+    <div id="hint" hidden>横向きにすると、キーが大きくなります。 / Turn the device sideways for bigger keys.</div>
     <div id="stage"><div id="board"></div></div>
 </div>
 <script src="link.js"></script>
